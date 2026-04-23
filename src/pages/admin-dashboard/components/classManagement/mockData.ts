@@ -1,0 +1,128 @@
+import { Class, Student, Teacher } from './types';
+
+export const mockClasses: Class[] = [
+  {
+    id: 'class-001',
+    name: '创新创业实践班（2024春）',
+    department: '计算机学院',
+    academicYear: '2023-2024',
+    semester: '春季学期',
+    teacher: {
+      id: 'teacher-001',
+      name: '张教授',
+      email: 'zhang@university.edu'
+    },
+    studentCount: 45,
+    status: 'active',
+    createdAt: '2024-02-15'
+  },
+  {
+    id: 'class-002',
+    name: '商业模式创新班（2024春）',
+    department: '经济管理学院',
+    academicYear: '2023-2024',
+    semester: '春季学期',
+    teacher: {
+      id: 'teacher-002',
+      name: '李老师',
+      email: 'li@university.edu'
+    },
+    studentCount: 38,
+    status: 'active',
+    createdAt: '2024-02-20'
+  },
+  {
+    id: 'class-003',
+    name: '产品设计与开发班（2024春）',
+    department: '设计学院',
+    academicYear: '2023-2024',
+    semester: '春季学期',
+    teacher: {
+      id: 'teacher-003',
+      name: '王副教授',
+      email: 'wang@university.edu'
+    },
+    studentCount: 32,
+    status: 'active',
+    createdAt: '2024-02-18'
+  },
+  {
+    id: 'class-004',
+    name: '创新创业实践班（2023秋）',
+    department: '计算机学院',
+    academicYear: '2023-2024',
+    semester: '秋季学期',
+    teacher: {
+      id: 'teacher-001',
+      name: '张教授',
+      email: 'zhang@university.edu'
+    },
+    studentCount: 42,
+    status: 'ended',
+    createdAt: '2023-09-10'
+  },
+  {
+    id: 'class-005',
+    name: '市场营销创新班（2024春）',
+    department: '经济管理学院',
+    academicYear: '2023-2024',
+    semester: '春季学期',
+    teacher: {
+      id: 'teacher-004',
+      name: '赵老师',
+      email: 'zhao@university.edu'
+    },
+    studentCount: 40,
+    status: 'active',
+    createdAt: '2024-02-22'
+  },
+  {
+    id: 'class-006',
+    name: '技术创新与实践班（2024春）',
+    department: '软件学院',
+    academicYear: '2023-2024',
+    semester: '春季学期',
+    teacher: {
+      id: 'teacher-005',
+      name: '刘教授',
+      email: 'liu@university.edu'
+    },
+    studentCount: 35,
+    status: 'active',
+    createdAt: '2024-02-25'
+  }
+];
+
+export const mockStudents: Student[] = [
+  { id: 'stu-001', name: '陈思远', studentId: '2021001', email: 'chen@student.edu', status: 'active', classId: 'class-001' },
+  { id: 'stu-002', name: '李明华', studentId: '2021002', email: 'li@student.edu', status: 'active', classId: 'class-001' },
+  { id: 'stu-003', name: '王晓婷', studentId: '2021003', email: 'wang@student.edu', status: 'active', classId: 'class-001' },
+  { id: 'stu-004', name: '张伟强', studentId: '2021004', email: 'zhang@student.edu', status: 'active', classId: 'class-002' },
+  { id: 'stu-005', name: '刘芳', studentId: '2021005', email: 'liuf@student.edu', status: 'active', classId: 'class-002' },
+  { id: 'stu-006', name: '赵建国', studentId: '2021006', email: 'zhao@student.edu', status: 'active', classId: 'class-003' },
+  { id: 'stu-007', name: '孙丽娜', studentId: '2021007', email: 'sun@student.edu', status: 'active', classId: 'class-003' },
+  { id: 'stu-008', name: '周杰', studentId: '2021008', email: 'zhou@student.edu', status: 'active', classId: 'class-005' },
+  { id: 'stu-009', name: '吴倩', studentId: '2021009', email: 'wu@student.edu', status: 'active', classId: 'class-005' },
+  { id: 'stu-010', name: '郑浩', studentId: '2021010', email: 'zheng@student.edu', status: 'active', classId: 'class-006' },
+  { id: 'stu-011', name: '钱小雨', studentId: '2021011', email: 'qian@student.edu', status: 'active' },
+  { id: 'stu-012', name: '冯大伟', studentId: '2021012', email: 'feng@student.edu', status: 'active' },
+  { id: 'stu-013', name: '陈佳怡', studentId: '2021013', email: 'chenj@student.edu', status: 'active' },
+  { id: 'stu-014', name: '林志远', studentId: '2021014', email: 'lin@student.edu', status: 'active' },
+  { id: 'stu-015', name: '黄思琪', studentId: '2021015', email: 'huang@student.edu', status: 'active' },
+  { id: 'stu-016', name: '徐明', studentId: '2021016', email: 'xu@student.edu', status: 'active' },
+  { id: 'stu-017', name: '朱雅婷', studentId: '2021017', email: 'zhu@student.edu', status: 'active' },
+  { id: 'stu-018', name: '马俊杰', studentId: '2021018', email: 'ma@student.edu', status: 'active' },
+  { id: 'stu-019', name: '胡晓敏', studentId: '2021019', email: 'hu@student.edu', status: 'active' },
+  { id: 'stu-020', name: '郭强', studentId: '2021020', email: 'guo@student.edu', status: 'active' }
+];
+
+export const mockTeachers: Teacher[] = [
+  { id: 'teacher-001', name: '张教授', email: 'zhang@university.edu', department: '计算机学院' },
+  { id: 'teacher-002', name: '李老师', email: 'li@university.edu', department: '经济管理学院' },
+  { id: 'teacher-003', name: '王副教授', email: 'wang@university.edu', department: '设计学院' },
+  { id: 'teacher-004', name: '赵老师', email: 'zhao@university.edu', department: '经济管理学院' },
+  { id: 'teacher-005', name: '刘教授', email: 'liu@university.edu', department: '软件学院' },
+  { id: 'teacher-006', name: '陈老师', email: 'chent@university.edu', department: '计算机学院' },
+  { id: 'teacher-007', name: '杨副教授', email: 'yang@university.edu', department: '经济管理学院' },
+  { id: 'teacher-008', name: '周老师', email: 'zhout@university.edu', department: '设计学院' }
+];
