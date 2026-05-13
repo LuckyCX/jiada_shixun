@@ -1,0 +1,8 @@
+node_modules
+web/node_modules
+web/out
+.git
+**/.DS_Store
+docs/otherProject
+**/out
+**/*.map

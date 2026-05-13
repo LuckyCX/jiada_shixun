@@ -1,5 +1,6 @@
 import { Link, useNavigate } from 'react-router-dom';
 import { useState, useEffect } from 'react';
+import { ADMIN_TOKEN_KEY, loginWithApi } from '../../lib/authApi';
 
 export default function Home() {
   const navigate = useNavigate();
@@ -10,6 +11,8 @@ export default function Home() {
   const [userInfo, setUserInfo] = useState<{ name: string; role: 'student' | 'teacher' | 'admin' } | null>(null);
   // 记录点击模块时的目标路径，登录后跳转
   const [pendingNavTarget, setPendingNavTarget] = useState<string>('');
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [loginError, setLoginError] = useState('');
 
   useEffect(() => {
     const handleScroll = () => setScrolled(window.scrollY > 50);
@@ -17,15 +20,44 @@ export default function Home() {
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     const form = e.target as HTMLFormElement;
     const username = (form.elements.namedItem('username') as HTMLInputElement).value;
+    const password = (form.elements.namedItem('password') as HTMLInputElement).value;
+    setLoginError('');
+
+    if (loginRole === 'admin') {
+      setLoginLoading(true);
+      try {
+        const { token, user } = await loginWithApi(username, password);
+        if (user.role !== 'admin') {
+          throw new Error('该账号不是管理员，请使用管理员账号登录');
+        }
+        localStorage.setItem(ADMIN_TOKEN_KEY, token);
+        setUserInfo({ name: user.username, role: 'admin' });
+        setIsLoggedIn(true);
+        setShowLoginModal(false);
+
+        if (pendingNavTarget) {
+          navigate(pendingNavTarget);
+          setPendingNavTarget('');
+          return;
+        }
+        navigate('/admin-dashboard');
+      } catch (err) {
+        setLoginError((err as Error).message || '登录失败');
+      } finally {
+        setLoginLoading(false);
+      }
+      return;
+    }
+
+    // 学生 / 教师：演示环境暂无统一账号接口，仍走本地状态（后续可接真实登录）
     setUserInfo({ name: username, role: loginRole });
     setIsLoggedIn(true);
     setShowLoginModal(false);
 
-    // 如果有待跳转的目标路径，优先跳转
     if (pendingNavTarget) {
       navigate(pendingNavTarget);
       setPendingNavTarget('');
@@ -33,11 +65,13 @@ export default function Home() {
     }
 
     if (loginRole === 'teacher') navigate('/teacher-dashboard');
-    else if (loginRole === 'admin') navigate('/admin-dashboard');
     else navigate('/student-center');
   };
 
   const handleLogout = () => {
+    if (userInfo?.role === 'admin') {
+      localStorage.removeItem(ADMIN_TOKEN_KEY);
+    }
     setIsLoggedIn(false);
     setUserInfo(null);
   };
@@ -392,7 +426,7 @@ export default function Home() {
             <div className="bg-gradient-to-r from-teal-500 to-cyan-600 p-6 text-white">
               <div className="flex items-center justify-between mb-2">
                 <h2 className="text-2xl font-bold">登录</h2>
-                <button onClick={() => { setShowLoginModal(false); setPendingNavTarget(''); }} className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/20 transition-colors cursor-pointer">
+                <button onClick={() => { setShowLoginModal(false); setPendingNavTarget(''); setLoginError(''); }} className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/20 transition-colors cursor-pointer">
                   <i className="ri-close-line text-xl"></i>
                 </button>
               </div>
@@ -403,7 +437,7 @@ export default function Home() {
             <div className="p-6">
               <div className="flex gap-3 mb-6">
                 {(['student', 'teacher', 'admin'] as const).map((role) => (
-                  <button key={role} onClick={() => setLoginRole(role)}
+                  <button key={role} onClick={() => { setLoginRole(role); setLoginError(''); }}
                     className={`flex-1 py-3 px-4 rounded-xl font-medium transition-all cursor-pointer ${loginRole === role ? 'bg-gradient-to-r from-teal-500 to-cyan-600 text-white shadow-lg' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
                   >
                     <i className={`${role === 'student' ? 'ri-user-line' : role === 'teacher' ? 'ri-user-star-line' : 'ri-shield-star-line'} mr-2`}></i>
@@ -428,6 +462,9 @@ export default function Home() {
                     placeholder="请输入密码"
                   />
                 </div>
+                {loginError && (
+                  <p className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2">{loginError}</p>
+                )}
                 <div className="flex items-center justify-between text-sm">
                   <label className="flex items-center gap-2 cursor-pointer">
                     <input type="checkbox" className="w-4 h-4 text-teal-500 rounded focus:ring-teal-500" />
@@ -435,8 +472,12 @@ export default function Home() {
                   </label>
                   <a href="#" className="text-teal-600 hover:text-teal-700 font-medium">忘记密码？</a>
                 </div>
-                <button type="submit" className="w-full py-3 bg-gradient-to-r from-teal-500 to-cyan-600 text-white font-semibold rounded-xl hover:shadow-lg transition-all cursor-pointer">
-                  {loginRole === 'admin' ? '进入管理后台' : loginRole === 'teacher' ? '进入教师看板' : '进入学生中心'}
+                <button
+                  type="submit"
+                  disabled={loginLoading}
+                  className="w-full py-3 bg-gradient-to-r from-teal-500 to-cyan-600 text-white font-semibold rounded-xl hover:shadow-lg transition-all cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {loginLoading ? '登录中…' : loginRole === 'admin' ? '进入管理后台' : loginRole === 'teacher' ? '进入教师看板' : '进入学生中心'}
                 </button>
               </form>
             </div>

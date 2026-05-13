@@ -6,7 +6,15 @@ import Overview from './components/overview';
 import ClassManagement from './components/classManagement';
 import OperationLog from './components/operationLog';
 
-type TabType = 'overview' | 'user-management' | 'class-management' | 'course-resource' | 'operation-log';
+import SystemConfig from './components/systemConfig';
+
+type TabType =
+  | 'overview'
+  | 'user-management'
+  | 'class-management'
+  | 'course-resource'
+  | 'operation-log'
+  | 'system-config';
 
 export default function AdminDashboard() {
   const [searchParams] = useSearchParams();
@@ -17,7 +25,17 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     const tab = searchParams.get('tab') as TabType;
-    if (tab && ['overview', 'user-management', 'class-management', 'course-resource', 'operation-log'].includes(tab)) {
+    if (
+      tab &&
+      [
+        'overview',
+        'user-management',
+        'class-management',
+        'course-resource',
+        'operation-log',
+        'system-config',
+      ].includes(tab)
+    ) {
       setActiveTab(tab);
     } else {
       setActiveTab('overview');
@@ -34,7 +52,8 @@ export default function AdminDashboard() {
     { id: 'user-management' as TabType, label: '用户管理', icon: 'ri-user-settings-line' },
     { id: 'class-management' as TabType, label: '班级管理', icon: 'ri-team-line' },
     { id: 'course-resource' as TabType, label: '课程资源', icon: 'ri-book-2-line' },
-    { id: 'operation-log' as TabType, label: '操作日志', icon: 'ri-history-line' }
+    { id: 'system-config' as TabType, label: '系统配置', icon: 'ri-settings-3-line' },
+    { id: 'operation-log' as TabType, label: '操作日志', icon: 'ri-history-line' },
   ];
 
   const getBreadcrumb = () => {
@@ -165,6 +184,7 @@ export default function AdminDashboard() {
           {activeTab === 'class-management' && <ClassManagement />}
           {activeTab === 'course-resource' && <CourseResource />}
           {activeTab === 'operation-log' && <OperationLog />}
+          {activeTab === 'system-config' && <SystemConfig />}
         </main>
       </div>
     </div>
