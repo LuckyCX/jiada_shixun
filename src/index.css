@@ -1,3 +1,7 @@
+/*
+ * 样式入口：Tailwind 为主（现有页面保持 Utility Class，不强制改写成 TDesign）。
+ * TDesign 全局样式在 main.tsx 引入，供后续新增页面使用其组件。
+ */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
