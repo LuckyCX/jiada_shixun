@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useSiteBrand } from '../../lib/publicSite';
 import TeamCard, { TeamProject } from './components/TeamCard';
 import TeamDetailModal from './components/TeamDetailModal';
 import InterveneModal from './components/InterveneModal';
@@ -291,6 +292,8 @@ const mockTeams: TeamProject[] = [
 ];
 
 export default function TeacherDashboard() {
+  const { logoUrl, siteTitle } = useSiteBrand();
+  const brandTitle = siteTitle.trim() || '教师工作台';
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<TabKey>('monitor');
   const [selectedTeam, setSelectedTeam] = useState<TeamProject | null>(null);
@@ -438,11 +441,15 @@ export default function TeacherDashboard() {
         {/* Logo 区域 */}
         <div className="px-5 py-5 border-b border-gray-100">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 flex items-center justify-center bg-gradient-to-br from-teal-500 to-cyan-500 rounded-lg">
-              <i className="ri-graduation-cap-line text-white text-sm"></i>
-            </div>
+            {logoUrl ? (
+              <img src={logoUrl} alt="" className="w-8 h-8 object-contain rounded-lg flex-shrink-0 border border-gray-100 bg-white" />
+            ) : (
+              <div className="w-8 h-8 flex items-center justify-center bg-gradient-to-br from-teal-500 to-cyan-500 rounded-lg">
+                <i className="ri-graduation-cap-line text-white text-sm"></i>
+              </div>
+            )}
             <div>
-              <div className="text-sm font-bold text-gray-900">教师工作台</div>
+              <div className="text-sm font-bold text-gray-900">{brandTitle}</div>
               <div className="text-xs text-gray-400">创业教育平台</div>
             </div>
           </div>

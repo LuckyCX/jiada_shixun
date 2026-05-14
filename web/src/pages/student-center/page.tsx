@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Link, useSearchParams, useNavigate } from 'react-router-dom';
+import { useSiteBrand } from '../../lib/publicSite';
 import LearningDetail from '../knowledge-system/components/LearningDetail';
 import QuizModal from './components/QuizModal';
 import { quizBank } from '../../mocks/quizBank';
@@ -31,6 +32,8 @@ interface KnowledgeQuizState {
 }
 
 export default function StudentCenterPage() {
+  const { logoUrl, siteTitle } = useSiteBrand();
+  const brandTitle = siteTitle.trim() || '学生工作台';
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const initialModule = searchParams.get('module');
@@ -293,12 +296,16 @@ export default function StudentCenterPage() {
       {/* 左侧侧边栏 */}
       <aside className={`flex-shrink-0 bg-white border-r border-gray-100 shadow-sm flex flex-col transition-all duration-300 ${sidebarCollapsed ? 'w-16' : 'w-60'} min-h-screen sticky top-0 z-30`}>
         <div className={`flex items-center gap-3 px-4 py-5 border-b border-gray-100 ${sidebarCollapsed ? 'justify-center' : ''}`}>
-          <div className="w-8 h-8 bg-gradient-to-br from-teal-500 to-cyan-500 rounded-lg flex items-center justify-center flex-shrink-0">
-            <i className="ri-user-line text-white text-sm"></i>
-          </div>
+          {logoUrl ? (
+            <img src={logoUrl} alt="" className="w-8 h-8 object-contain rounded-lg flex-shrink-0 border border-gray-100 bg-white" />
+          ) : (
+            <div className="w-8 h-8 bg-gradient-to-br from-teal-500 to-cyan-500 rounded-lg flex items-center justify-center flex-shrink-0">
+              <i className="ri-user-line text-white text-sm"></i>
+            </div>
+          )}
           {!sidebarCollapsed && (
             <div className="overflow-hidden">
-              <div className="text-sm font-bold text-gray-900 whitespace-nowrap">学生工作台</div>
+              <div className="text-sm font-bold text-gray-900 whitespace-nowrap">{brandTitle}</div>
               <div className="text-xs text-gray-400 whitespace-nowrap">Student Workspace</div>
             </div>
           )}

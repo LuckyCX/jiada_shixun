@@ -34,11 +34,22 @@ SELECT u.id, r.id FROM users u CROSS JOIN roles r
 WHERE u.username = 'admin' AND r.code = 'admin';
 
 INSERT INTO system_config (config_key, config_value, description, updated_by) VALUES
-  ('site', '{"siteTitle":"大学生创业实训平台","logoUrl":"","publicBaseUrl":"http://localhost:3000"}'::jsonb, '站点与品牌、对外基址', 1),
+  ('site', '{"siteTitle":"大学生创业实训平台","logoUrl":""}'::jsonb, '站点与品牌（Logo 建议 128×128，由管理端上传）', 1),
   ('security', '{"jwt":{"accessTtlSec":900,"refreshTtlSec":604800,"issuer":"jiada-shixun","secret":"CHANGE_ME_IN_ADMIN_UI_USE_LONG_RANDOM_SECRET_DEV_ONLY"},"passwordMinLength":8}'::jsonb, 'JWT 与会话策略；secret 请在管理端修改后保存', 1),
   ('upload', '{"maxSizeMb":50,"allowedExtensions":["pdf","doc","docx","ppt","pptx","png","jpg","zip"]}'::jsonb, '上传策略', 1),
   ('smtp_config', '{"host":"","port":587,"secure":false,"user":"","pass":"","from":""}'::jsonb, 'SMTP 邮件（在后台填写后保存）', 1),
-  ('aliyun_sms_config', '{"accessKeyId":"","accessKeySecret":"","signName":"","templateCode":""}'::jsonb, '阿里云短信占位', 1),
+  (
+    'sms_biz_config',
+    '{"enabled":true,"allowLogin":true,"allowRegister":true,"allowReset":true,"expireSeconds":300,"cooldownSeconds":60,"dailyLimit":20}'::jsonb,
+    '短信业务：开关、场景、有效期与频控（发码路由接入后生效）',
+    1
+  ),
+  (
+    'aliyun_sms_config',
+    '{"accessKeyId":"","accessKeySecret":"","signName":"","templateCode":"","templateLogin":"","templateRegister":"","templateReset":"","regionId":"cn-hangzhou","endpoint":"dysmsapi.aliyuncs.com"}'::jsonb,
+    '阿里云短信通道；密钥敏感；templateCode 为旧版单模板字段，可与三模板并存',
+    1
+  ),
   ('ai_global', '{"defaultTimeoutMs":60000,"maxRetries":2,"logSampleRate":1.0,"rateLimitPerUserPerMinute":60}'::jsonb, 'AI 全局：超时、重试、采样、限流', 1),
   ('rtc_config', '{}'::jsonb, '实时音视频/RTC 扩展占位（本期可不启用）', 1);
 

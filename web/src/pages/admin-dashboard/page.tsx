@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
+import { useSiteBrand } from '../../lib/publicSite';
 import UserManagement from './components/userManagement';
 import CourseResource from './components/courseResource';
 import Overview from './components/overview';
@@ -17,6 +18,8 @@ type TabType =
   | 'system-config';
 
 export default function AdminDashboard() {
+  const { logoUrl, siteTitle } = useSiteBrand();
+  const brandTitle = siteTitle.trim() || '创业实训平台';
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<TabType>('overview');
@@ -68,11 +71,18 @@ export default function AdminDashboard() {
         {/* Logo区域 */}
         <div className="h-16 flex items-center justify-between px-4 border-b border-gray-200">
           {!sidebarCollapsed && (
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 bg-gradient-to-br from-teal-500 to-blue-500 rounded-lg flex items-center justify-center">
-                <i className="ri-admin-line text-white text-lg"></i>
+            <div className="flex items-center gap-2 min-w-0">
+              {logoUrl ? (
+                <img src={logoUrl} alt="" className="w-8 h-8 object-contain rounded-lg flex-shrink-0 border border-gray-100 bg-white" />
+              ) : (
+                <div className="w-8 h-8 bg-gradient-to-br from-teal-500 to-blue-500 rounded-lg flex items-center justify-center flex-shrink-0">
+                  <i className="ri-admin-line text-white text-lg"></i>
+                </div>
+              )}
+              <div className="min-w-0 flex flex-col">
+                <span className="font-semibold text-gray-900 truncate">{brandTitle}</span>
+                <span className="text-xs text-gray-500 truncate">管理员后台</span>
               </div>
-              <span className="font-semibold text-gray-900">管理员后台</span>
             </div>
           )}
           <button

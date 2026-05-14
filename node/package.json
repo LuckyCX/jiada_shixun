@@ -10,11 +10,13 @@
     "dev:remote": "DB_HOST=47.99.96.4 DB_PORT=15433 REDIS_HOST=47.99.96.4 REDIS_PORT=16380 node --watch src/server.js"
   },
   "dependencies": {
+    "@alicloud/dysmsapi20170525": "^4.5.1",
     "bcryptjs": "^3.0.2",
     "cors": "^2.8.5",
     "express": "^4.21.2",
     "ioredis": "^5.8.2",
     "jsonwebtoken": "^9.0.2",
+    "nodemailer": "^8.0.5",
     "pg": "^8.16.0"
   }
 }

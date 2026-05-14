@@ -1,8 +1,11 @@
 import { Link, useNavigate } from 'react-router-dom';
 import { useState, useEffect } from 'react';
 import { ADMIN_TOKEN_KEY, loginWithApi } from '../../lib/authApi';
+import { useSiteBrand } from '../../lib/publicSite';
 
 export default function Home() {
+  const { logoUrl, siteTitle } = useSiteBrand();
+  const navBrandTitle = siteTitle.trim() || '嘉兴大学创业实训平台';
   const navigate = useNavigate();
   const [scrolled, setScrolled] = useState(false);
   const [showLoginModal, setShowLoginModal] = useState(false);
@@ -118,13 +121,17 @@ export default function Home() {
         <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 flex items-center justify-center rounded-full bg-white/90 shadow overflow-hidden">
-              <img
-                src="https://readdy.ai/api/search-image?query=Jiaxing%20University%20official%20emblem%20badge%20logo%20circular%20seal%20design%20with%20Chinese%20university%20style%2C%20clean%20white%20background%2C%20deep%20teal%20and%20gold%20color%20scheme%2C%20professional%20academic%20institution%20emblem%2C%20minimalist%20modern%20university%20logo%20design%2C%20high%20quality%20vector%20style&width=80&height=80&seq=jxu-logo-nav-001&orientation=squarish"
-                alt="嘉兴大学校徽"
-                className="w-9 h-9 object-contain"
-              />
+              {logoUrl ? (
+                <img src={logoUrl} alt="" className="w-9 h-9 object-contain" />
+              ) : (
+                <img
+                  src="https://readdy.ai/api/search-image?query=Jiaxing%20University%20official%20emblem%20badge%20logo%20circular%20seal%20design%20with%20Chinese%20university%20style%2C%20clean%20white%20background%2C%20deep%20teal%20and%20gold%20color%20scheme%2C%20professional%20academic%20institution%20emblem%2C%20minimalist%20modern%20university%20logo%20design%2C%20high%20quality%20vector%20style&width=80&height=80&seq=jxu-logo-nav-001&orientation=squarish"
+                  alt="校徽"
+                  className="w-9 h-9 object-contain"
+                />
+              )}
             </div>
-            <span className={`text-xl font-bold transition-colors ${scrolled ? 'text-gray-900' : 'text-white'}`}>嘉兴大学创业实训平台</span>
+            <span className={`text-xl font-bold transition-colors ${scrolled ? 'text-gray-900' : 'text-white'}`}>{navBrandTitle}</span>
           </div>
           <div className="flex items-center gap-8">
             <a href="#modules" className={`text-sm font-medium transition-colors hover:text-teal-500 cursor-pointer ${scrolled ? 'text-gray-700' : 'text-white'}`}>实训模块</a>

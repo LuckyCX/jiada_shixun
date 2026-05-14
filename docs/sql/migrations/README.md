@@ -6,8 +6,8 @@
 
 按**执行顺序**前缀编号，便于评审与执行：
 
-- `004_add_team_audit_columns.sql`
-- `005_create_notification_preferences.sql`
+- `004_sms_biz_and_aliyun_expand.sql`：为已有库补充 `sms_biz_config`，并为 `aliyun_sms_config` 合并地域与三模板等字段（幂等 `ON CONFLICT DO NOTHING` + `jsonb ||`）。
+- `005_create_notification_preferences.sql`（示例）
 
 或使用日期前缀（多人协作时更直观）：
 
