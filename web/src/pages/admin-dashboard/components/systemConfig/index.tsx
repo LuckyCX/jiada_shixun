@@ -1,16 +1,17 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
-  Divider,
+  Button,
+  ConfigProvider,
   Form,
   Input,
   InputNumber,
-  MessagePlugin,
+  message,
   Select,
-  Space,
+  Spin,
   Switch,
   Tabs,
-  Textarea,
-} from 'tdesign-react';
+  type TabsProps,
+} from 'antd';
 import { ADMIN_TOKEN_KEY, loginWithApi } from '../../../../lib/authApi';
 import { notifySiteBrandUpdated } from '../../../../lib/publicSite';
 import { resizeImageFileTo128Png } from '../../../../lib/resizeLogoTo128';
@@ -26,7 +27,7 @@ type ConfigEntry = {
 
 type AdminConfigResponse = Record<string, ConfigEntry>;
 
-type TabValue = 'site' | 'smtp' | 'sms';
+type TabValue = 'site' | 'smtp' | 'sms' | (typeof SHOW_RTC_TAB extends true ? 'rtc' : never);
 
 /** system_config.config_key → 配置页 Tab */
 const CONFIG_TAB_MAP: Record<string, TabValue> = {
@@ -81,10 +82,7 @@ const ALIYUN_SMS_REGION_OPTIONS = [
   },
 ] as const;
 
-const primaryBtnClass =
-  'px-6 py-2.5 rounded-lg text-white font-medium bg-teal-600 hover:bg-teal-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors';
-const secondaryBtnClass =
-  'px-6 py-2.5 rounded-lg font-medium border border-gray-300 text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors';
+const formItemLayout = { labelCol: { span: 24 }, wrapperCol: { span: 24 } };
 
 function pickTabByLatestUpdate(data: AdminConfigResponse): TabValue {
   const entries = Object.entries(data)
@@ -120,16 +118,17 @@ async function apiFetch(path: string, opts: RequestInit & { token?: string } = {
 }
 
 export default function SystemConfigPanel() {
+  const [messageApi, contextHolder] = message.useMessage();
   const [token, setToken] = useState(() => localStorage.getItem(ADMIN_TOKEN_KEY) || '');
   const [loginUser, setLoginUser] = useState('');
   const [loginPass, setLoginPass] = useState('');
   const [loading, setLoading] = useState(false);
-  const [raw, setRaw] = useState<AdminConfigResponse | null>(null);
   const [activeTab, setActiveTab] = useState<TabValue>('site');
 
   const [site, setSite] = useState({ siteTitle: '', logoUrl: '' });
   const [logoUploading, setLogoUploading] = useState(false);
-  const [smtp, setSmtp] = useState({ host: '', port: 587, secure: false, user: '', pass: '', from: '' });
+  const logoFileInputRef = useRef<HTMLInputElement>(null);
+  const [smtp, setSmtp] = useState({ host: '', port: 465, secure: true, user: '', pass: '', from: '' });
   const [testSmtpTo, setTestSmtpTo] = useState('');
   const [testSmsPhone, setTestSmsPhone] = useState('');
   const [testSmsScene, setTestSmsScene] = useState<'login' | 'register' | 'reset'>('login');
@@ -174,8 +173,8 @@ export default function SystemConfigPanel() {
     const sm = (data.smtp_config?.value || {}) as Record<string, unknown>;
     setSmtp({
       host: String(sm.host ?? ''),
-      port: Number(sm.port ?? 587),
-      secure: Boolean(sm.secure ?? false),
+      port: Number(sm.port ?? 465),
+      secure: Boolean(sm.secure ?? true),
       user: String(sm.user ?? ''),
       pass: String(sm.pass ?? ''),
       from: String(sm.from ?? ''),
@@ -221,15 +220,14 @@ export default function SystemConfigPanel() {
     try {
       const j = await apiFetch('/api/admin/system-config', { token });
       const data = j.data as AdminConfigResponse;
-      setRaw(data);
       fillFromApi(data);
       setActiveTab(pickTabByLatestUpdate(data));
     } catch (e) {
-      MessagePlugin.error((e as Error).message);
+      messageApi.error((e as Error).message);
     } finally {
       setLoading(false);
     }
-  }, [token, fillFromApi]);
+  }, [token, fillFromApi, messageApi]);
 
   useEffect(() => {
     if (token) void loadConfig();
@@ -239,15 +237,15 @@ export default function SystemConfigPanel() {
     try {
       const { token: t, user } = await loginWithApi(loginUser, loginPass);
       if (user.role !== 'admin') {
-        MessagePlugin.error('该账号不是管理员');
+        messageApi.error('该账号不是管理员');
         return;
       }
       localStorage.setItem(ADMIN_TOKEN_KEY, t);
       setToken(t);
       setLoginPass('');
-      MessagePlugin.success('登录成功');
+      messageApi.success('登录成功');
     } catch (e) {
-      MessagePlugin.error((e as Error).message);
+      messageApi.error((e as Error).message);
     }
   };
 
@@ -261,10 +259,10 @@ export default function SystemConfigPanel() {
         body: JSON.stringify({ patches }),
       });
       await loadConfig();
-      MessagePlugin.success('保存成功');
+      messageApi.success('保存成功');
       return true;
     } catch (e) {
-      MessagePlugin.error((e as Error).message);
+      messageApi.error((e as Error).message);
       return false;
     } finally {
       setLoading(false);
@@ -289,9 +287,8 @@ export default function SystemConfigPanel() {
     try {
       const dataUrl = await resizeImageFileTo128Png(file);
       setSite((s) => ({ ...s, logoUrl: dataUrl }));
-      MessagePlugin.success('已生成 128×128 预览，请点击「保存站点配置」写入数据库');
     } catch (err) {
-      MessagePlugin.error((err as Error).message);
+      messageApi.error((err as Error).message);
     } finally {
       setLogoUploading(false);
     }
@@ -303,11 +300,11 @@ export default function SystemConfigPanel() {
     const from = smtp.from.trim();
     const port = Math.floor(Number(smtp.port));
     if (!host || !user || !from) {
-      MessagePlugin.warning('请填写 SMTP Host、用户名与发件人');
+      messageApi.warning('请填写 SMTP Host、用户名与发件人');
       return;
     }
     if (!Number.isFinite(port) || port <= 0 || port > 65535) {
-      MessagePlugin.warning('SMTP 端口范围应为 1～65535');
+      messageApi.warning('SMTP 端口范围应为 1～65535');
       return;
     }
     const patch: Record<string, unknown> = {
@@ -354,16 +351,15 @@ export default function SystemConfigPanel() {
       const parsed = JSON.parse(rtc);
       void savePatch({ rtc_config: parsed as Record<string, unknown> });
     } catch {
-      MessagePlugin.error('RTC 配置需为合法 JSON');
+      messageApi.error('RTC 配置需为合法 JSON');
     }
   };
-
 
   const sendTestSmtp = async () => {
     if (!token) return;
     const to = testSmtpTo.trim();
     if (!to) {
-      MessagePlugin.warning('请填写测试收件人邮箱');
+      messageApi.warning('请填写测试收件人邮箱');
       return;
     }
     setLoading(true);
@@ -373,9 +369,9 @@ export default function SystemConfigPanel() {
         token,
         body: JSON.stringify({ to }),
       });
-      MessagePlugin.success('测试邮件已发送');
+      messageApi.success('测试邮件已发送');
     } catch (e) {
-      MessagePlugin.error((e as Error).message);
+      messageApi.error((e as Error).message);
     } finally {
       setLoading(false);
     }
@@ -385,7 +381,7 @@ export default function SystemConfigPanel() {
     if (!token) return;
     const phone = testSmsPhone.trim();
     if (!/^1\d{10}$/.test(phone)) {
-      MessagePlugin.warning('请输入 11 位中国大陆手机号');
+      messageApi.warning('请输入 11 位中国大陆手机号');
       return;
     }
     setLoading(true);
@@ -395,343 +391,305 @@ export default function SystemConfigPanel() {
         token,
         body: JSON.stringify({ phone, scene: testSmsScene }),
       });
-      MessagePlugin.success('测试短信已发送（已计费）');
+      messageApi.success('测试短信已发送（已计费）');
     } catch (e) {
-      MessagePlugin.error((e as Error).message);
+      messageApi.error((e as Error).message);
     } finally {
       setLoading(false);
     }
   };
 
-  const formItemProps = { labelAlign: 'top' as const };
-
   const regionSelectOptions = ALIYUN_SMS_REGION_OPTIONS.map((o) => ({ label: o.label, value: o.key }));
 
-  if (!token) {
-    return (
-      <div className="min-h-screen bg-gray-50 p-6">
-        <div className="max-w-md mx-auto bg-white rounded-xl border border-gray-200 p-8 shadow-sm">
-          <h1 className="text-xl font-bold text-gray-900 mb-1">管理员登录</h1>
-          <p className="text-sm text-gray-500 mb-6">登录后可编辑库内系统配置（默认账号见 docs/sql/README.md）</p>
-          <Form layout="vertical" colon>
-            <Form.FormItem label="用户名" {...formItemProps}>
-              <Input value={loginUser} onChange={(v) => setLoginUser(String(v))} placeholder="admin" />
-            </Form.FormItem>
-            <Form.FormItem label="密码" {...formItemProps}>
-              <Input type="password" value={loginPass} onChange={(v) => setLoginPass(String(v))} />
-            </Form.FormItem>
-            <Form.FormItem>
-              <button type="button" className={`w-full ${primaryBtnClass}`} onClick={handleLogin}>
-                登录
-              </button>
-            </Form.FormItem>
+  const smsSwitchRows: { key: 'enabled' | 'allowLogin' | 'allowRegister' | 'allowReset'; label: string }[] = [
+    { key: 'enabled', label: '短信总开关' },
+    { key: 'allowLogin', label: '短信登录' },
+    { key: 'allowRegister', label: '短信注册' },
+    { key: 'allowReset', label: '短信找回密码' },
+  ];
+
+  const renderLogoField = (): ReactNode => (
+    <div className="flex flex-wrap items-start gap-4">
+      <div className="w-32 h-32 rounded-xl border border-gray-200 bg-gray-50 flex items-center justify-center overflow-hidden flex-shrink-0">
+        {site.logoUrl ? (
+          <img src={site.logoUrl} alt="Logo 预览" className="w-full h-full object-contain" />
+        ) : (
+          <span className="text-xs text-gray-400 px-2 text-center">无 Logo</span>
+        )}
+      </div>
+      <div className="flex flex-col gap-2">
+        <input
+          ref={logoFileInputRef}
+          type="file"
+          accept="image/jpeg,image/png,image/gif,image/webp"
+          tabIndex={-1}
+          aria-hidden
+          style={{ display: 'none' }}
+          onChange={handleLogoFile}
+          disabled={logoUploading || loading}
+        />
+        <Button disabled={loading} loading={logoUploading} onClick={() => logoFileInputRef.current?.click()}>
+          选择图片上传
+        </Button>
+        <Button disabled={loading || !site.logoUrl} onClick={() => setSite((s) => ({ ...s, logoUrl: '' }))}>
+          清除 Logo
+        </Button>
+      </div>
+    </div>
+  );
+
+  const tabItems = [
+    {
+      key: 'site',
+      label: '站点与品牌',
+      forceRender: true,
+      children: (
+        <div className="p-6 max-w-3xl">
+          <Form {...formItemLayout} layout="vertical" requiredMark={false}>
+            <Form.Item label="站点标题">
+              <Input
+                value={site.siteTitle}
+                onChange={(e) => setSite((s) => ({ ...s, siteTitle: e.target.value }))}
+              />
+            </Form.Item>
+            <Form.Item label="站点 Logo">{renderLogoField()}</Form.Item>
+            <Form.Item>
+              <Button type="primary" loading={loading} onClick={() => void saveSite()}>
+                保存站点配置
+              </Button>
+            </Form.Item>
           </Form>
         </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="min-h-screen bg-gray-50 p-6">
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">系统配置</h1>
-        <p className="text-sm text-gray-500 mt-1">
-          配置写入 PostgreSQL system_config；密钥不回显明文，留空或填 ******** 表示不变。测试短信将调用阿里云并产生费用。
-        </p>
-        {raw ? (
-          <p className="text-xs text-gray-400 mt-2">已加载 {Object.keys(raw).length} 项配置键</p>
-        ) : null}
-      </div>
-
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-        {loading ? (
-          <div className="px-6 py-3 text-sm text-gray-500 border-b border-gray-100">加载中…</div>
-        ) : null}
-        <Tabs
-          value={activeTab}
-          onChange={(v) => setActiveTab(v as TabValue)}
-          theme="card"
-          size="medium"
-          placement="top"
-        >
-          <Tabs.TabPanel value="site" label="站点与品牌" destroyOnHide={false}>
-            <div className="p-6 max-w-3xl">
-              <Divider align="left" className="mb-4">
-                站点与品牌
-              </Divider>
-              <Form layout="vertical" colon>
-                <Form.FormItem label="站点标题" {...formItemProps}>
-                  <Input value={site.siteTitle} onChange={(v) => setSite((s) => ({ ...s, siteTitle: String(v) }))} />
-                </Form.FormItem>
-                <Form.FormItem
-                  label="站点 Logo"
-                  {...formItemProps}
-                  help="上传图片将自动居中裁剪为 1:1，并缩放为 128×128 像素（PNG）；用于各端导航与浏览器标签图标"
-                >
-                  <div className="flex flex-wrap items-start gap-4">
-                    <div className="w-32 h-32 rounded-xl border border-gray-200 bg-gray-50 flex items-center justify-center overflow-hidden flex-shrink-0">
-                      {site.logoUrl ? (
-                        <img src={site.logoUrl} alt="Logo 预览" className="w-full h-full object-contain" />
-                      ) : (
-                        <span className="text-xs text-gray-400 px-2 text-center">无 Logo</span>
-                      )}
-                    </div>
-                    <div className="flex flex-col gap-2">
-                      <input
-                        type="file"
-                        accept="image/jpeg,image/png,image/gif,image/webp"
-                        id="site-logo-upload"
-                        className="hidden"
-                        onChange={handleLogoFile}
-                        disabled={logoUploading || loading}
-                      />
-                      <label htmlFor="site-logo-upload">
-                        <span
-                          className={`inline-flex items-center justify-center px-4 py-2 rounded-lg border border-gray-300 text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 cursor-pointer ${logoUploading || loading ? 'opacity-50 pointer-events-none' : ''}`}
-                        >
-                          {logoUploading ? '处理中…' : '选择图片上传'}
-                        </span>
-                      </label>
-                      <button
-                        type="button"
-                        className={secondaryBtnClass}
-                        disabled={loading || !site.logoUrl}
-                        onClick={() => setSite((s) => ({ ...s, logoUrl: '' }))}
-                      >
-                        清除 Logo
-                      </button>
-                    </div>
-                  </div>
-                </Form.FormItem>
-                <Form.FormItem>
-                  <button type="button" className={primaryBtnClass} onClick={() => void saveSite()} disabled={loading}>
-                    保存站点配置
-                  </button>
-                </Form.FormItem>
-              </Form>
-            </div>
-          </Tabs.TabPanel>
-
-          <Tabs.TabPanel value="smtp" label="SMTP 邮件" destroyOnHide={false}>
-            <div className="p-6 max-w-3xl">
-              <Divider align="left" className="mb-4">
-                SMTP 邮件配置
-              </Divider>
-              <Form layout="vertical" colon>
-                <Form.FormItem label="SMTP Host" {...formItemProps}>
+      ),
+    },
+    {
+      key: 'smtp',
+      label: 'SMTP 邮件',
+      forceRender: true,
+      children: (
+        <div className="p-6 w-full max-w-[1280px] min-w-0 min-[1200px]:px-8">
+          <div className="grid grid-cols-1 gap-8 min-[1200px]:grid-cols-2 min-[1200px]:gap-x-10 min-[1200px]:items-start">
+            <section className="min-w-0">
+              <Form {...formItemLayout} layout="vertical" requiredMark={false}>
+                <Form.Item label="SMTP Host">
                   <Input
                     value={smtp.host}
-                    onChange={(v) => setSmtp((s) => ({ ...s, host: String(v) }))}
+                    onChange={(e) => setSmtp((s) => ({ ...s, host: e.target.value }))}
                     placeholder="例如 smtp.qq.com"
                   />
-                </Form.FormItem>
-                <Form.FormItem label="SMTP Port" {...formItemProps}>
+                </Form.Item>
+                <Form.Item label="SMTP Port">
                   <InputNumber
-                    style={{ width: '100%' }}
+                    className="w-full"
                     min={1}
                     max={65535}
                     value={smtp.port}
-                    onChange={(v) => setSmtp((s) => ({ ...s, port: Number(v) || 587 }))}
+                    onChange={(v) => setSmtp((s) => ({ ...s, port: typeof v === 'number' ? v : 465 }))}
                   />
-                </Form.FormItem>
-                <Form.FormItem label="TLS/SSL" {...formItemProps} help="465 端口多为 SSL 开启；587 多为 STARTTLS，可按邮箱服务商说明调整">
-                  <Switch value={smtp.secure} onChange={(v) => setSmtp((s) => ({ ...s, secure: Boolean(v) }))} />
-                </Form.FormItem>
-                <Form.FormItem label="SMTP 用户名" {...formItemProps}>
+                </Form.Item>
+                <Form.Item label="TLS/SSL">
+                  <Switch checked={smtp.secure} onChange={(v) => setSmtp((s) => ({ ...s, secure: v }))} />
+                </Form.Item>
+                <Form.Item label="SMTP 用户名">
                   <Input
                     value={smtp.user}
-                    onChange={(v) => setSmtp((s) => ({ ...s, user: String(v) }))}
+                    onChange={(e) => setSmtp((s) => ({ ...s, user: e.target.value }))}
                     placeholder="通常为邮箱账号"
                   />
-                </Form.FormItem>
-                <Form.FormItem label="SMTP 密码" {...formItemProps}>
-                  <Input
-                    type="password"
+                </Form.Item>
+                <Form.Item label="SMTP 密码">
+                  <Input.Password
                     value={smtp.pass}
-                    onChange={(v) => setSmtp((s) => ({ ...s, pass: String(v) }))}
+                    onChange={(e) => setSmtp((s) => ({ ...s, pass: e.target.value }))}
                     placeholder="邮箱 SMTP 授权码/密码"
                   />
-                </Form.FormItem>
-                <Form.FormItem label="发件人 From" {...formItemProps}>
+                </Form.Item>
+                <Form.Item label="发件人 From">
                   <Input
                     value={smtp.from}
-                    onChange={(v) => setSmtp((s) => ({ ...s, from: String(v) }))}
+                    onChange={(e) => setSmtp((s) => ({ ...s, from: e.target.value }))}
                     placeholder="例如：大学生创业实训平台 <notice@example.com>"
                   />
-                </Form.FormItem>
-                <Form.FormItem>
-                  <Space>
-                    <button type="button" className={primaryBtnClass} onClick={saveSmtpAllowMaskedPass} disabled={loading}>
-                      保存 SMTP
-                    </button>
-                  </Space>
-                </Form.FormItem>
+                </Form.Item>
               </Form>
-
-              <Divider align="left" className="my-6">
-                连通性测试
-              </Divider>
-              <Form layout="vertical" colon>
-                <Form.FormItem label="测试收件人" {...formItemProps}>
-                  <Input value={testSmtpTo} onChange={(v) => setTestSmtpTo(String(v))} placeholder="your@email.com" />
-                </Form.FormItem>
-                <Form.FormItem>
-                  <button type="button" className={secondaryBtnClass} onClick={sendTestSmtp} disabled={loading}>
-                    发送测试邮件
-                  </button>
-                </Form.FormItem>
-              </Form>
-            </div>
-          </Tabs.TabPanel>
-
-          <Tabs.TabPanel value="sms" label="短信配置" destroyOnHide={false}>
-            <div className="p-6 max-w-3xl space-y-8">
-              <section>
-                <h3 className="text-sm font-semibold text-gray-900 mb-4">短信业务配置</h3>
-                <p className="text-xs text-gray-500 mb-4">以下开关与频控在「发送验证码」类接口接入后生效；保存后写入 sms_biz_config。</p>
-                <div className="space-y-4">
-                  {(
-                    [
-                      ['enabled', '短信总开关'],
-                      ['allowLogin', '短信登录'],
-                      ['allowRegister', '短信注册'],
-                      ['allowReset', '短信找回密码'],
-                    ] as const
-                  ).map(([key, label]) => (
-                    <div key={key} className="flex items-center justify-between py-2 border-b border-gray-100">
-                      <span className="text-sm text-gray-700">{label}</span>
-                      <Switch
-                        value={smsBiz[key]}
-                        onChange={(v) => setSmsBiz((b) => ({ ...b, [key]: Boolean(v) }))}
-                      />
-                    </div>
-                  ))}
-                  <Form layout="vertical" colon className="mt-4">
-                    <Form.FormItem label="验证码有效期（秒）" {...formItemProps} help="60～1800">
-                      <InputNumber
-                        style={{ width: '100%' }}
-                        min={60}
-                        max={1800}
-                        value={smsBiz.expireSeconds}
-                        onChange={(v) => setSmsBiz((b) => ({ ...b, expireSeconds: Number(v) || 300 }))}
-                      />
-                    </Form.FormItem>
-                    <Form.FormItem label="发送冷却（秒）" {...formItemProps} help="10～300">
-                      <InputNumber
-                        style={{ width: '100%' }}
-                        min={10}
-                        max={300}
-                        value={smsBiz.cooldownSeconds}
-                        onChange={(v) => setSmsBiz((b) => ({ ...b, cooldownSeconds: Number(v) || 60 }))}
-                      />
-                    </Form.FormItem>
-                    <Form.FormItem label="每日每号上限" {...formItemProps} help="1～100">
-                      <InputNumber
-                        style={{ width: '100%' }}
-                        min={1}
-                        max={100}
-                        value={smsBiz.dailyLimit}
-                        onChange={(v) => setSmsBiz((b) => ({ ...b, dailyLimit: Number(v) || 20 }))}
-                      />
-                    </Form.FormItem>
-                  </Form>
+            </section>
+            <section className="min-w-0">
+              <Form {...formItemLayout} layout="vertical" requiredMark={false}>
+                <div className="grid grid-cols-1 gap-6 min-[1200px]:grid-cols-2 min-[1200px]:gap-x-10">
+                  <Form.Item label="测试收件人">
+                    <Input
+                      value={testSmtpTo}
+                      onChange={(e) => setTestSmtpTo(e.target.value)}
+                      placeholder="your@email.com"
+                    />
+                  </Form.Item>
+                  <Form.Item label="操作">
+                    <Button onClick={sendTestSmtp} disabled={loading}>
+                      发送测试邮件
+                    </Button>
+                  </Form.Item>
                 </div>
-              </section>
-
-              <section>
-                <h3 className="text-sm font-semibold text-gray-900 mb-4">阿里云短信通道</h3>
-                <Form layout="vertical" colon>
-                  <Form.FormItem label="AccessKeyId" {...formItemProps}>
-                    <Input
-                      value={aliyunSms.accessKeyId}
-                      onChange={(v) => setAliyunSms((a) => ({ ...a, accessKeyId: String(v) }))}
+              </Form>
+            </section>
+          </div>
+          <div className="mt-8 pt-6 border-t border-gray-100">
+            <Button type="primary" loading={loading} onClick={saveSmtpAllowMaskedPass}>
+              保存 SMTP
+            </Button>
+          </div>
+        </div>
+      ),
+    },
+    {
+      key: 'sms',
+      label: '短信配置',
+      forceRender: true,
+      children: (
+        <div className="p-6 w-full max-w-[1280px] min-w-0 min-[1200px]:px-8">
+          <div className="grid grid-cols-1 gap-8 min-[1200px]:grid-cols-2 min-[1200px]:gap-x-10 min-[1200px]:items-start">
+            <section className="min-w-0">
+              <div className="space-y-1 mb-4">
+                {smsSwitchRows.map(({ key, label: rowLabel }) => (
+                  <div
+                    key={key}
+                    className="flex items-center justify-between py-2.5 px-1 border-b border-gray-100"
+                  >
+                    <span className="text-sm text-gray-700">{rowLabel}</span>
+                    <Switch
+                      checked={smsBiz[key]}
+                      onChange={(v) => setSmsBiz((b) => ({ ...b, [key]: v }))}
                     />
-                  </Form.FormItem>
-                  <Form.FormItem label="AccessKeySecret" {...formItemProps}>
-                    <Input
-                      type="password"
-                      value={aliyunSms.accessKeySecret}
-                      onChange={(v) => setAliyunSms((a) => ({ ...a, accessKeySecret: String(v) }))}
-                    />
-                  </Form.FormItem>
-                  <Form.FormItem label="短信签名" {...formItemProps}>
-                    <Input
-                      value={aliyunSms.signName}
-                      onChange={(v) => setAliyunSms((a) => ({ ...a, signName: String(v) }))}
-                      placeholder="与阿里云审核通过的签名一致"
-                    />
-                  </Form.FormItem>
-                  <Form.FormItem label="地域与 Endpoint 预设" {...formItemProps}>
-                    <Select
-                      clearable
-                      placeholder="选择常用地域（可再手动改下方两项）"
-                      options={regionSelectOptions}
-                      value={aliyunSmsRegionPreset}
-                      onChange={(v) => {
-                        const key = String(v || '');
-                        setAliyunSmsRegionPreset(key);
-                        const hit = ALIYUN_SMS_REGION_OPTIONS.find((o) => o.key === key);
-                        if (hit) {
-                          setAliyunSms((a) => ({ ...a, regionId: hit.regionId, endpoint: hit.endpoint }));
-                        }
-                      }}
-                    />
-                  </Form.FormItem>
-                  <Form.FormItem label="regionId" {...formItemProps}>
-                    <Input
-                      value={aliyunSms.regionId}
-                      onChange={(v) => setAliyunSms((a) => ({ ...a, regionId: String(v) }))}
-                      placeholder="如 cn-hangzhou"
-                    />
-                  </Form.FormItem>
-                  <Form.FormItem label="Endpoint" {...formItemProps}>
-                    <Input
-                      value={aliyunSms.endpoint}
-                      onChange={(v) => setAliyunSms((a) => ({ ...a, endpoint: String(v) }))}
-                      placeholder="dysmsapi.aliyuncs.com"
-                    />
-                  </Form.FormItem>
-                  <Form.FormItem label="登录模板 CODE" {...formItemProps}>
-                    <Input
-                      value={aliyunSms.templateLogin}
-                      onChange={(v) => setAliyunSms((a) => ({ ...a, templateLogin: String(v) }))}
-                    />
-                  </Form.FormItem>
-                  <Form.FormItem label="注册模板 CODE" {...formItemProps}>
-                    <Input
-                      value={aliyunSms.templateRegister}
-                      onChange={(v) => setAliyunSms((a) => ({ ...a, templateRegister: String(v) }))}
-                    />
-                  </Form.FormItem>
-                  <Form.FormItem label="找回密码模板 CODE" {...formItemProps} help="未填时发送场景 reset 会回退使用登录模板">
-                    <Input
-                      value={aliyunSms.templateReset}
-                      onChange={(v) => setAliyunSms((a) => ({ ...a, templateReset: String(v) }))}
-                    />
-                  </Form.FormItem>
-                  <Form.FormItem label="旧版单模板 templateCode（可选）" {...formItemProps} help="兼容历史数据；三模板都空时发送会回退到此字段">
-                    <Input
-                      value={aliyunSms.templateCode}
-                      onChange={(v) => setAliyunSms((a) => ({ ...a, templateCode: String(v) }))}
-                    />
-                  </Form.FormItem>
-                </Form>
-              </section>
-
-              <div className="flex flex-wrap gap-3">
-                <button type="button" className={primaryBtnClass} onClick={saveSms} disabled={loading}>
-                  保存短信配置
-                </button>
+                  </div>
+                ))}
               </div>
-
-              <Divider align="left" className="!my-6">
-                连通性测试（将计费）
-              </Divider>
-              <Form layout="vertical" colon>
-                <Form.FormItem label="测试手机号" {...formItemProps}>
-                  <Input value={testSmsPhone} onChange={(v) => setTestSmsPhone(String(v))} placeholder="11 位手机号" />
-                </Form.FormItem>
-                <Form.FormItem label="测试场景" {...formItemProps}>
+              <Form {...formItemLayout} layout="vertical" requiredMark={false}>
+                <Form.Item label="验证码有效期（秒）">
+                  <InputNumber
+                    className="w-full"
+                    min={60}
+                    max={1800}
+                    value={smsBiz.expireSeconds}
+                    onChange={(v) =>
+                      setSmsBiz((b) => ({ ...b, expireSeconds: typeof v === 'number' ? v : 300 }))
+                    }
+                  />
+                </Form.Item>
+                <Form.Item label="发送冷却（秒）">
+                  <InputNumber
+                    className="w-full"
+                    min={10}
+                    max={300}
+                    value={smsBiz.cooldownSeconds}
+                    onChange={(v) =>
+                      setSmsBiz((b) => ({ ...b, cooldownSeconds: typeof v === 'number' ? v : 60 }))
+                    }
+                  />
+                </Form.Item>
+                <Form.Item label="每日每号上限">
+                  <InputNumber
+                    className="w-full"
+                    min={1}
+                    max={100}
+                    value={smsBiz.dailyLimit}
+                    onChange={(v) => setSmsBiz((b) => ({ ...b, dailyLimit: typeof v === 'number' ? v : 20 }))}
+                  />
+                </Form.Item>
+              </Form>
+            </section>
+            <section className="min-w-0">
+              <Form {...formItemLayout} layout="vertical" requiredMark={false}>
+                <Form.Item label="AccessKeyId">
+                  <Input
+                    value={aliyunSms.accessKeyId}
+                    onChange={(e) => setAliyunSms((a) => ({ ...a, accessKeyId: e.target.value }))}
+                  />
+                </Form.Item>
+                <Form.Item label="AccessKeySecret">
+                  <Input.Password
+                    value={aliyunSms.accessKeySecret}
+                    onChange={(e) => setAliyunSms((a) => ({ ...a, accessKeySecret: e.target.value }))}
+                  />
+                </Form.Item>
+                <Form.Item label="短信签名">
+                  <Input
+                    value={aliyunSms.signName}
+                    onChange={(e) => setAliyunSms((a) => ({ ...a, signName: e.target.value }))}
+                    placeholder="与阿里云审核通过的签名一致"
+                  />
+                </Form.Item>
+                <Form.Item label="地域与 Endpoint 预设">
+                  <Select
+                    allowClear
+                    placeholder="选择常用地域（可再手动改下方两项）"
+                    options={regionSelectOptions}
+                    value={aliyunSmsRegionPreset || undefined}
+                    onChange={(v) => {
+                      const key = (v as string) || '';
+                      setAliyunSmsRegionPreset(key);
+                      const hit = ALIYUN_SMS_REGION_OPTIONS.find((o) => o.key === key);
+                      if (hit) {
+                        setAliyunSms((a) => ({ ...a, regionId: hit.regionId, endpoint: hit.endpoint }));
+                      }
+                    }}
+                  />
+                </Form.Item>
+                <Form.Item label="regionId">
+                  <Input
+                    value={aliyunSms.regionId}
+                    onChange={(e) => setAliyunSms((a) => ({ ...a, regionId: e.target.value }))}
+                    placeholder="如 cn-hangzhou"
+                  />
+                </Form.Item>
+                <Form.Item label="Endpoint">
+                  <Input
+                    value={aliyunSms.endpoint}
+                    onChange={(e) => setAliyunSms((a) => ({ ...a, endpoint: e.target.value }))}
+                    placeholder="dysmsapi.aliyuncs.com"
+                  />
+                </Form.Item>
+                <Form.Item label="登录模板 CODE">
+                  <Input
+                    value={aliyunSms.templateLogin}
+                    onChange={(e) => setAliyunSms((a) => ({ ...a, templateLogin: e.target.value }))}
+                  />
+                </Form.Item>
+                <Form.Item label="注册模板 CODE">
+                  <Input
+                    value={aliyunSms.templateRegister}
+                    onChange={(e) => setAliyunSms((a) => ({ ...a, templateRegister: e.target.value }))}
+                  />
+                </Form.Item>
+                <Form.Item label="找回密码模板 CODE">
+                  <Input
+                    value={aliyunSms.templateReset}
+                    onChange={(e) => setAliyunSms((a) => ({ ...a, templateReset: e.target.value }))}
+                  />
+                </Form.Item>
+                <Form.Item label="旧版单模板 templateCode（可选）">
+                  <Input
+                    value={aliyunSms.templateCode}
+                    onChange={(e) => setAliyunSms((a) => ({ ...a, templateCode: e.target.value }))}
+                  />
+                </Form.Item>
+              </Form>
+            </section>
+          </div>
+          <div className="mt-8 pt-6 border-t border-gray-100">
+            <Button type="primary" loading={loading} onClick={saveSms}>
+              保存短信配置
+            </Button>
+          </div>
+          <div className="mt-6 pt-6 border-t border-gray-100">
+            <Form {...formItemLayout} layout="vertical" requiredMark={false}>
+              <div className="grid grid-cols-1 gap-6 min-[1200px]:grid-cols-2 min-[1200px]:gap-x-10">
+                <Form.Item label="测试手机号">
+                  <Input
+                    value={testSmsPhone}
+                    onChange={(e) => setTestSmsPhone(e.target.value)}
+                    placeholder="11 位手机号"
+                  />
+                </Form.Item>
+                <Form.Item label="测试场景">
                   <Select
                     options={[
                       { label: '登录模板', value: 'login' },
@@ -741,39 +699,93 @@ export default function SystemConfigPanel() {
                     value={testSmsScene}
                     onChange={(v) => setTestSmsScene((v as 'login' | 'register' | 'reset') || 'login')}
                   />
-                </Form.FormItem>
-                <Form.FormItem>
-                  <button type="button" className={secondaryBtnClass} onClick={sendTestSms} disabled={loading}>
-                    发送测试短信
-                  </button>
-                </Form.FormItem>
-              </Form>
-            </div>
-          </Tabs.TabPanel>
-
-          {SHOW_RTC_TAB ? (
-            <Tabs.TabPanel value="rtc" label="RTC 扩展" destroyOnHide={false}>
+                </Form.Item>
+              </div>
+              <Form.Item>
+                <Button onClick={sendTestSms} disabled={loading}>
+                  发送测试短信
+                </Button>
+              </Form.Item>
+            </Form>
+          </div>
+        </div>
+      ),
+    },
+    ...(SHOW_RTC_TAB
+      ? [
+          {
+            key: 'rtc',
+            label: 'RTC 扩展',
+            forceRender: true,
+            children: (
               <div className="p-6 max-w-3xl">
-                <Divider align="left" className="mb-4">
-                  RTC 扩展
-                </Divider>
-                <p className="text-sm text-gray-500 mb-3">JSON 配置，预留给实时音视频等扩展能力。</p>
-                <Textarea
+                <Input.TextArea
                   value={rtc}
-                  onChange={(v) => setRtc(String(v))}
-                  autosize={{ minRows: 10, maxRows: 22 }}
+                  onChange={(e) => setRtc(e.target.value)}
+                  autoSize={{ minRows: 10, maxRows: 22 }}
                   className="font-mono text-sm"
                 />
                 <div className="mt-4">
-                  <button type="button" className={primaryBtnClass} onClick={saveRtc} disabled={loading}>
+                  <Button type="primary" loading={loading} onClick={saveRtc}>
                     保存 RTC 配置
-                  </button>
+                  </Button>
                 </div>
               </div>
-            </Tabs.TabPanel>
-          ) : null}
-        </Tabs>
+            ),
+          },
+        ]
+      : []),
+  ] satisfies NonNullable<TabsProps['items']>;
+
+  const adminTheme = {
+    token: {
+      colorPrimary: '#0d9488',
+      borderRadius: 8,
+    },
+  };
+
+  if (!token) {
+    return (
+      <ConfigProvider theme={adminTheme}>
+        {contextHolder}
+        <div className="min-h-screen bg-gray-50 p-6">
+          <div className="max-w-md mx-auto bg-white rounded-xl border border-gray-200 p-8 shadow-sm">
+            <h1 className="text-xl font-bold text-gray-900 mb-1">管理员登录</h1>
+            <p className="text-sm text-gray-500 mb-6">登录后可编辑系统配置</p>
+            <Form {...formItemLayout} layout="vertical" requiredMark={false}>
+              <Form.Item label="用户名">
+                <Input value={loginUser} onChange={(e) => setLoginUser(e.target.value)} placeholder="admin" />
+              </Form.Item>
+              <Form.Item label="密码">
+                <Input.Password value={loginPass} onChange={(e) => setLoginPass(e.target.value)} />
+              </Form.Item>
+              <Form.Item>
+                <Button type="primary" block onClick={handleLogin}>
+                  登录
+                </Button>
+              </Form.Item>
+            </Form>
+          </div>
+        </div>
+      </ConfigProvider>
+    );
+  }
+
+  return (
+    <ConfigProvider theme={adminTheme}>
+      {contextHolder}
+      <div className="min-h-screen bg-gray-50 ">
+        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+          <Spin spinning={loading} tip="加载中…">
+            <Tabs
+              type="card"
+              activeKey={activeTab}
+              onChange={(k) => setActiveTab(k as TabValue)}
+              items={tabItems}
+            />
+          </Spin>
+        </div>
       </div>
-    </div>
+    </ConfigProvider>
   );
 }

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { query } from '../lib/db.js';
+import { logError } from '../lib/logError.js';
 import { getConfigValue } from '../lib/systemConfig.js';
 import { getJwtSecret } from '../middleware/auth.js';
 
@@ -41,7 +42,7 @@ router.post('/login', async (req, res) => {
       traceId: req.traceId,
     });
   } catch (e) {
-    console.error(e);
+    logError(`POST /api/auth/login traceId=${req.traceId}`, e);
     return res.status(500).json({ code: 50000, message: e.message, data: null, traceId: req.traceId });
   }
 });

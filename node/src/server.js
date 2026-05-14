@@ -3,6 +3,7 @@ import cors from 'cors';
 import { randomUUID } from 'crypto';
 import { config } from './config.js';
 import { getPool } from './lib/db.js';
+import { logError } from './lib/logError.js';
 import authRoutes from './routes/auth.js';
 import systemConfigRoutes from './routes/systemConfig.js';
 
@@ -32,6 +33,7 @@ app.get('/api/health/ready', async (_req, res) => {
     await getRedis().ping();
     res.json({ code: 0, message: 'OK', data: { status: 'ready' } });
   } catch (e) {
+    logError('GET /api/health/ready', e);
     res.status(503).json({ code: 50301, message: e.message, data: null });
   }
 });
@@ -39,8 +41,8 @@ app.get('/api/health/ready', async (_req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api', systemConfigRoutes);
 
-app.use((err, _req, res, _next) => {
-  console.error(err);
+app.use((err, req, res, _next) => {
+  logError(`express errorHandler traceId=${req.traceId}`, err);
   res.status(500).json({ code: 50000, message: err.message || 'Internal error', data: null });
 });
 

@@ -1,3 +1,4 @@
+import { logError } from './logError.js';
 import { getConfigValue } from './systemConfig.js';
 
 function parseJsonObject(raw) {
@@ -79,7 +80,11 @@ export async function sendSmsCode(phone, code, scene) {
   }
 
   const dysms = await import('@alicloud/dysmsapi20170525');
-  const Client = dysms.default;
+  /** Node ESM 加载 CJS 包时 default 常为 { default: Client }，需取 default.default */
+  const Client = dysms.default?.default ?? dysms.default;
+  if (typeof Client !== 'function') {
+    throw new Error('阿里云 SMS SDK 加载异常：未找到 Client 构造器，请检查 @alicloud/dysmsapi20170525 版本');
+  }
   const { SendSmsRequest } = dysms;
   const client = new Client({
     accessKeyId: smsCfg.accessKeyId,
@@ -93,11 +98,16 @@ export async function sendSmsCode(phone, code, scene) {
     templateCode,
     templateParam: JSON.stringify({ code }),
   });
-  const resp = await client.sendSms(request);
-  const body = resp?.body || resp;
-  const resultCode = String(body?.code || '');
-  if (resultCode !== 'OK') {
-    const message = String(body?.message || '未知错误');
-    throw new Error(`短信发送失败：${message}`);
+  try {
+    const resp = await client.sendSms(request);
+    const body = resp?.body || resp;
+    const resultCode = String(body?.code || '');
+    if (resultCode !== 'OK') {
+      const message = String(body?.message || '未知错误');
+      throw new Error(`短信发送失败：${message}`);
+    }
+  } catch (err) {
+    logError('smsProvider.sendSmsCode', err);
+    throw err;
   }
 }

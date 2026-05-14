@@ -1,6 +1,7 @@
 import { Router } from 'express';
-import { getAllConfigRaw, maskConfigForAdmin, patchConfig } from '../lib/systemConfig.js';
-import { sendSmtpTestMail } from '../lib/mailProvider.js';
+import { getAllConfigRaw, getConfigValue, maskConfigForAdmin, patchConfig } from '../lib/systemConfig.js';
+import { logError } from '../lib/logError.js';
+import { humanizeSmtpError, sendSmtpTestMail } from '../lib/mailProvider.js';
 import { sendSmsCode } from '../lib/smsProvider.js';
 import { requireAuth, requireAdmin } from '../middleware/auth.js';
 
@@ -18,6 +19,7 @@ router.get('/public/site', async (req, res) => {
       traceId: req.traceId,
     });
   } catch (e) {
+    logError(`GET /api/public/site traceId=${req.traceId}`, e);
     return res.status(500).json({ code: 50000, message: e.message, data: null, traceId: req.traceId });
   }
 });
@@ -28,6 +30,7 @@ router.get('/admin/system-config', requireAuth(), requireAdmin(), async (req, re
     const masked = maskConfigForAdmin(all);
     return res.json({ code: 0, message: 'OK', data: masked, traceId: req.traceId });
   } catch (e) {
+    logError(`GET /api/admin/system-config traceId=${req.traceId}`, e);
     return res.status(500).json({ code: 50000, message: e.message, data: null, traceId: req.traceId });
   }
 });
@@ -44,6 +47,7 @@ router.patch('/admin/system-config', requireAuth(), requireAdmin(), async (req, 
     const masked = maskConfigForAdmin(all);
     return res.json({ code: 0, message: '已保存', data: masked, traceId: req.traceId });
   } catch (e) {
+    logError(`PATCH /api/admin/system-config traceId=${req.traceId}`, e);
     return res.status(500).json({ code: 50000, message: e.message, data: null, traceId: req.traceId });
   }
 });
@@ -60,9 +64,17 @@ router.post('/admin/system-config/test-smtp', requireAuth(), requireAdmin(), asy
       traceId: req.traceId,
     });
   } catch (e) {
+    logError(`POST /api/admin/system-config/test-smtp traceId=${req.traceId}`, e);
+    let host = '';
+    try {
+      const raw = await getConfigValue('smtp_config', false);
+      if (raw && typeof raw === 'object') host = String(raw.host || '');
+    } catch {
+      /* ignore */
+    }
     return res.status(400).json({
       code: 40002,
-      message: e.message || '发送失败',
+      message: humanizeSmtpError(e, { host }),
       data: null,
       traceId: req.traceId,
     });
@@ -94,6 +106,7 @@ router.post('/admin/system-config/test-sms', requireAuth(), requireAdmin(), asyn
       traceId: req.traceId,
     });
   } catch (e) {
+    logError(`POST /api/admin/system-config/test-sms traceId=${req.traceId}`, e);
     return res.status(400).json({
       code: 40004,
       message: e.message || '发送失败',
