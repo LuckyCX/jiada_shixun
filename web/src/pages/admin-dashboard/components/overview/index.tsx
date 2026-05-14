@@ -107,12 +107,6 @@ export default function Overview() {
             <i className="ri-book-2-line text-teal-500"></i>
             课程内容统计
           </h3>
-          <Link
-            to="/admin-dashboard?tab=course-resource"
-            className="text-xs text-teal-600 hover:text-teal-700 flex items-center gap-1 transition-colors"
-          >
-            管理课程 <i className="ri-arrow-right-s-line"></i>
-          </Link>
         </div>
         <div className="grid grid-cols-4 gap-4 mb-5">
           {[
@@ -369,15 +363,15 @@ export default function Overview() {
               <i className="ri-arrow-right-s-line text-gray-400 group-hover:text-indigo-500 transition-colors"></i>
             </Link>
             <Link
-              to="/admin-dashboard?tab=course-resource"
+              to="/admin-dashboard?tab=dictionary"
               className="flex items-center gap-3 p-3 rounded-lg bg-orange-50 hover:bg-orange-100 transition-colors group cursor-pointer"
             >
               <div className="w-10 h-10 rounded-lg bg-orange-500 flex items-center justify-center">
-                <i className="ri-book-2-line text-white text-lg"></i>
+                <i className="ri-booklet-line text-white text-lg"></i>
               </div>
               <div className="flex-1">
-                <div className="text-sm font-medium text-gray-900">课程资源</div>
-                <div className="text-xs text-gray-500">管理章节与课件</div>
+                <div className="text-sm font-medium text-gray-900">字典管理</div>
+                <div className="text-xs text-gray-500">维护数据字典与业务枚举</div>
               </div>
               <i className="ri-arrow-right-s-line text-gray-400 group-hover:text-orange-500 transition-colors"></i>
             </Link>

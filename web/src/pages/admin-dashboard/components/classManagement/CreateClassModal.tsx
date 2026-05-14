@@ -1,137 +1,101 @@
-import { useState } from 'react';
-import { Teacher } from './types';
+import { useEffect, useState } from 'react';
+import { Form, Input, Modal, Select } from 'antd';
+import { useCollegeDictOptions } from '../userManagement/useCollegeDictOptions';
+import { usePublicDictOptions } from './usePublicDictOptions';
+
+export type CreateClassFormValues = {
+  name: string;
+  collegeId: string;
+  academicYear: string;
+  semester: string;
+};
 
 interface CreateClassModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onConfirm: (data: {
-    name: string;
-    department: string;
-    academicYear: string;
-    semester: string;
-    teacherId: string;
-  }) => void;
-  teachers: Teacher[];
+  onConfirm: (data: CreateClassFormValues) => void | Promise<void>;
 }
 
-export default function CreateClassModal({ isOpen, onClose, onConfirm, teachers }: CreateClassModalProps) {
-  const [formData, setFormData] = useState({
-    name: '',
-    department: '',
-    academicYear: '',
-    semester: '',
-    teacherId: ''
-  });
+export default function CreateClassModal({ isOpen, onClose, onConfirm }: CreateClassModalProps) {
+  const [form] = Form.useForm<CreateClassFormValues>();
+  const [submitting, setSubmitting] = useState(false);
 
-  if (!isOpen) return null;
+  const { options: collegeOptions, loading: collegeLoading } = useCollegeDictOptions(isOpen);
+  const { options: semesterOptions, loading: semesterLoading } = usePublicDictOptions('semester', isOpen);
 
-  const handleSubmit = () => {
-    if (!formData.name || !formData.department || !formData.academicYear || !formData.semester || !formData.teacherId) {
-      alert('请填写完整信息');
-      return;
+  useEffect(() => {
+    if (isOpen) {
+      form.resetFields();
     }
-    onConfirm(formData);
-    setFormData({ name: '', department: '', academicYear: '', semester: '', teacherId: '' });
+  }, [isOpen, form]);
+
+  const handleSubmit = async () => {
+    try {
+      const values = await form.validateFields();
+      setSubmitting(true);
+      await Promise.resolve(onConfirm(values));
+      form.resetFields();
+    } catch (e: unknown) {
+      if (e && typeof e === 'object' && 'errorFields' in (e as object)) return;
+    } finally {
+      setSubmitting(false);
+    }
   };
 
-  const departments = ['计算机学院', '经济管理学院', '设计学院', '软件学院', '信息学院', '商学院'];
-  const semesters = ['春季学期', '秋季学期'];
-
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-xl w-full max-w-lg p-6">
-        <div className="flex items-center justify-between mb-6">
-          <h3 className="text-xl font-semibold text-gray-900">创建班级</h3>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
-            <i className="ri-close-line text-2xl"></i>
-          </button>
-        </div>
+    <Modal
+      title="创建班级"
+      open={isOpen}
+      onCancel={onClose}
+      onOk={() => void handleSubmit()}
+      okText="创建"
+      cancelText="取消"
+      confirmLoading={submitting}
+      destroyOnClose
+      width={520}
+      okButtonProps={{ className: '!bg-teal-600' }}
+    >
+      <Form form={form} layout="vertical" className="mt-2" requiredMark>
+        <Form.Item
+          name="name"
+          label="班级名称"
+          rules={[
+            { required: true, message: '请输入班级名称' },
+            { whitespace: true, message: '班级名称不能为空' },
+          ]}
+        >
+          <Input placeholder="例如：创新创业实践班（2024春）" maxLength={128} />
+        </Form.Item>
 
-        <div className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">班级名称</label>
-            <input
-              type="text"
-              value={formData.name}
-              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-              placeholder="例如：创新创业实践班（2024春）"
-              className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500"
-            />
-          </div>
+        <Form.Item name="collegeId" label="所属学院" rules={[{ required: true, message: '请选择学院' }]}>
+          <Select
+            placeholder="请选择学院"
+            loading={collegeLoading}
+            options={collegeOptions}
+            showSearch
+            optionFilterProp="label"
+            allowClear={false}
+          />
+        </Form.Item>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">所属院系</label>
-            <select
-              value={formData.department}
-              onChange={(e) => setFormData({ ...formData, department: e.target.value })}
-              className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500"
-            >
-              <option value="">请选择院系</option>
-              {departments.map(dept => (
-                <option key={dept} value={dept}>{dept}</option>
-              ))}
-            </select>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">学年</label>
-              <input
-                type="text"
-                value={formData.academicYear}
-                onChange={(e) => setFormData({ ...formData, academicYear: e.target.value })}
-                placeholder="例如：2023-2024"
-                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">学期</label>
-              <select
-                value={formData.semester}
-                onChange={(e) => setFormData({ ...formData, semester: e.target.value })}
-                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500"
-              >
-                <option value="">请选择学期</option>
-                {semesters.map(sem => (
-                  <option key={sem} value={sem}>{sem}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">指派教师</label>
-            <select
-              value={formData.teacherId}
-              onChange={(e) => setFormData({ ...formData, teacherId: e.target.value })}
-              className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500"
-            >
-              <option value="">请选择教师</option>
-              {teachers.map(teacher => (
-                <option key={teacher.id} value={teacher.id}>
-                  {teacher.name} - {teacher.department}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-
-        <div className="flex gap-3 mt-6">
-          <button
-            onClick={onClose}
-            className="flex-1 px-4 py-2.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 whitespace-nowrap"
+        <div className="grid grid-cols-2 gap-4">
+          <Form.Item
+            name="academicYear"
+            label="学年"
+            rules={[
+              { required: true, message: '请输入学年' },
+              { whitespace: true, message: '学年不能为空' },
+            ]}
           >
-            取消
-          </button>
-          <button
-            onClick={handleSubmit}
-            className="flex-1 px-4 py-2.5 bg-teal-600 text-white rounded-lg hover:bg-teal-700 whitespace-nowrap"
-          >
-            创建班级
-          </button>
+            <Input placeholder="例如：2023-2024" maxLength={32} />
+          </Form.Item>
+
+          <Form.Item name="semester" label="学期" rules={[{ required: true, message: '请选择学期' }]}>
+            <Select placeholder="请选择学期" loading={semesterLoading} options={semesterOptions} allowClear={false} />
+          </Form.Item>
         </div>
-      </div>
-    </div>
+
+      </Form>
+    </Modal>
   );
 }

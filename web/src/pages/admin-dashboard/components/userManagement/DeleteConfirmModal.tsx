@@ -1,14 +1,26 @@
+import { useState } from 'react';
 import { User } from './types';
 
 interface DeleteConfirmModalProps {
   isOpen: boolean;
   user: User | null;
   onClose: () => void;
-  onConfirm: () => void;
+  onConfirm: () => void | Promise<void>;
 }
 
 export default function DeleteConfirmModal({ isOpen, user, onClose, onConfirm }: DeleteConfirmModalProps) {
+  const [loading, setLoading] = useState(false);
+
   if (!isOpen || !user) return null;
+
+  const handleConfirm = async () => {
+    setLoading(true);
+    try {
+      await Promise.resolve(onConfirm());
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
@@ -27,16 +39,20 @@ export default function DeleteConfirmModal({ isOpen, user, onClose, onConfirm }:
 
           <div className="flex gap-3">
             <button
+              type="button"
               onClick={onClose}
-              className="flex-1 px-4 py-2.5 border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50 transition-colors whitespace-nowrap"
+              disabled={loading}
+              className="flex-1 px-4 py-2.5 border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50 transition-colors whitespace-nowrap disabled:opacity-50"
             >
               取消
             </button>
             <button
-              onClick={onConfirm}
-              className="flex-1 px-4 py-2.5 bg-red-600 text-white rounded-lg font-medium hover:bg-red-700 transition-colors whitespace-nowrap"
+              type="button"
+              disabled={loading}
+              onClick={() => void handleConfirm()}
+              className="flex-1 px-4 py-2.5 bg-red-600 text-white rounded-lg font-medium hover:bg-red-700 transition-colors whitespace-nowrap disabled:opacity-50"
             >
-              确认删除
+              {loading ? '删除中…' : '确认删除'}
             </button>
           </div>
         </div>

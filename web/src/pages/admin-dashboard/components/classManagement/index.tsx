@@ -1,194 +1,247 @@
-import { useState } from 'react';
-import { mockClasses, mockStudents, mockTeachers } from './mockData';
+import { useCallback, useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { Input, Select, Space, message } from 'antd';
 import { Class, Student, Teacher } from './types';
+import type { User } from '../userManagement/types';
+import { useCollegeDictOptions } from '../userManagement/useCollegeDictOptions';
+import { usePublicDictOptions } from './usePublicDictOptions';
+import {
+  createAdminClass,
+  deleteAdminClass,
+  fetchClassesList,
+  updateAdminClass,
+  type AdminClassListRow,
+} from './classesApi';
+import { fetchAdminUsers } from '../userManagement/adminUsersApi';
 import CreateClassModal from './CreateClassModal';
+import type { CreateClassFormValues } from './CreateClassModal';
 import EditClassModal from './EditClassModal';
 import DeleteClassModal from './DeleteClassModal';
 import ClassDetailModal from './ClassDetailModal';
+import AssignTeacherModal from './AssignTeacherModal';
+
+function mapClassRow(r: AdminClassListRow): Class {
+  const cid = r.collegeId || '';
+  const st = r.status === '0' || r.status === '1' || r.status === '2' ? r.status : '1';
+  return {
+    id: r.id,
+    name: r.name,
+    code: r.code,
+    collegeId: cid,
+    department: cid,
+    academicYear: r.academicYear,
+    semester: r.semester,
+    teacher: { id: r.teacherId, name: r.teacherName || '-', email: r.teacherEmail || '' },
+    studentCount: r.studentCount,
+    status: st,
+    createdAt: r.createdAt,
+  };
+}
+
+function userToTeacher(u: User): Teacher {
+  return { id: u.id, name: u.name, email: u.email || '', department: u.department };
+}
+
+function userToStudent(u: User): Student {
+  return {
+    id: u.id,
+    name: u.name,
+    studentId: u.studentId || u.username || '',
+    email: u.email || '',
+    status: u.status,
+    classId: u.classId,
+  };
+}
 
 export default function ClassManagement() {
-  const [classes, setClasses] = useState<Class[]>(mockClasses);
-  const [students, setStudents] = useState<Student[]>(mockStudents);
-  const [teachers] = useState<Teacher[]>(mockTeachers);
-  
+  const [searchParams] = useSearchParams();
+  const [classes, setClasses] = useState<Class[]>([]);
+  const [teachers, setTeachers] = useState<Teacher[]>([]);
+  const [detailStudents, setDetailStudents] = useState<Student[]>([]);
+  const [listLoading, setListLoading] = useState(true);
+  const [teachersLoading, setTeachersLoading] = useState(false);
+
+  const { options: collegeOptions, loading: collegeLoading, labelByValue: deptLabel } = useCollegeDictOptions(true);
+  const { options: classStatusOptions, loading: classStatusLoading, labelByValue: classStatusLabel } =
+    usePublicDictOptions('class_status', true);
+  const { labelByValue: semesterLabel } = usePublicDictOptions('semester', true);
+
   const [searchKeyword, setSearchKeyword] = useState('');
-  const [departmentFilter, setDepartmentFilter] = useState('');
+  const [collegeIdFilter, setCollegeIdFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
-  
+
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showDetailModal, setShowDetailModal] = useState(false);
   const [selectedClass, setSelectedClass] = useState<Class | null>(null);
-  
+  const [assignTeacherClass, setAssignTeacherClass] = useState<Class | null>(null);
+
   const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
-  // 筛选班级
-  const filteredClasses = classes.filter(cls => {
-    const matchSearch = cls.name.includes(searchKeyword) || cls.teacher.name.includes(searchKeyword);
-    const matchDepartment = !departmentFilter || cls.department === departmentFilter;
+  useEffect(() => {
+    const cid = searchParams.get('collegeId');
+    setCollegeIdFilter(cid && /^\d+$/.test(cid) ? cid : '');
+  }, [searchParams]);
+
+  const loadClasses = useCallback(async () => {
+    setListLoading(true);
+    try {
+      const rows = await fetchClassesList(collegeIdFilter || undefined);
+      setClasses(rows.map(mapClassRow));
+    } catch (e: unknown) {
+      message.error(e instanceof Error ? e.message : '加载班级失败');
+      setClasses([]);
+    } finally {
+      setListLoading(false);
+    }
+  }, [collegeIdFilter]);
+
+  const loadTeachers = useCallback(async () => {
+    setTeachersLoading(true);
+    try {
+      const data = await fetchAdminUsers({ page: 1, pageSize: 100, role: 'teacher', status: 'active' });
+      setTeachers(data.list.map(userToTeacher));
+    } catch {
+      setTeachers([]);
+    } finally {
+      setTeachersLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadClasses();
+  }, [loadClasses]);
+
+  useEffect(() => {
+    void loadTeachers();
+  }, [loadTeachers]);
+
+  const loadDetailStudents = useCallback(async (classId: string) => {
+    try {
+      const data = await fetchAdminUsers({
+        page: 1,
+        pageSize: 500,
+        role: 'student',
+        status: 'all',
+        classId,
+      });
+      setDetailStudents(data.list.map(userToStudent));
+    } catch {
+      setDetailStudents([]);
+    }
+  }, []);
+
+  const filteredClasses = classes.filter((cls) => {
+    const teacherName = cls.teacher.name === '-' ? '' : cls.teacher.name;
+    const matchSearch =
+      cls.name.includes(searchKeyword) ||
+      cls.code.includes(searchKeyword) ||
+      (teacherName && teacherName.includes(searchKeyword));
+    const matchCollege = !collegeIdFilter || cls.collegeId === collegeIdFilter;
     const matchStatus = !statusFilter || cls.status === statusFilter;
-    return matchSearch && matchDepartment && matchStatus;
+    return matchSearch && matchCollege && matchStatus;
   });
 
-  // 统计数据
   const totalClasses = classes.length;
-  const activeClasses = classes.filter(c => c.status === 'active').length;
-  const totalStudents = students.filter(s => s.classId).length;
-  const totalTeachers = new Set(classes.map(c => c.teacher.id)).size;
+  const activeClasses = classes.filter((c) => c.status === '1').length;
+  const totalStudents = classes.reduce((s, c) => s + c.studentCount, 0);
+  const totalTeachers = new Set(classes.map((c) => c.teacher.id).filter((id) => id && id !== '')).size;
 
-  const departments = Array.from(new Set(classes.map(c => c.department)));
-
-  const showNotification = (message: string, type: 'success' | 'error' = 'success') => {
-    setNotification({ message, type });
+  const showNotification = (msg: string, type: 'success' | 'error' = 'success') => {
+    setNotification({ message: msg, type });
     setTimeout(() => setNotification(null), 3000);
   };
 
-  const handleCreateClass = (data: {
+  const handleCreateClass = async (data: CreateClassFormValues) => {
+    try {
+      await createAdminClass({
+        collegeId: data.collegeId,
+        name: data.name,
+        academicYear: data.academicYear,
+        semester: data.semester,
+        status: '1',
+      });
+      setShowCreateModal(false);
+      showNotification('班级创建成功');
+      await loadClasses();
+    } catch (e: unknown) {
+      message.error(e instanceof Error ? e.message : '创建失败');
+      throw e;
+    }
+  };
+
+  const handleEditClass = async (data: {
     name: string;
-    department: string;
+    code: string;
+    collegeId: string;
     academicYear: string;
     semester: string;
-    teacherId: string;
-  }) => {
-    const teacher = teachers.find(t => t.id === data.teacherId);
-    if (!teacher) return;
-
-    const newClass: Class = {
-      id: `class-${Date.now()}`,
-      name: data.name,
-      department: data.department,
-      academicYear: data.academicYear,
-      semester: data.semester,
-      teacher: {
-        id: teacher.id,
-        name: teacher.name,
-        email: teacher.email
-      },
-      studentCount: 0,
-      status: 'active',
-      createdAt: new Date().toISOString().split('T')[0]
-    };
-
-    setClasses([...classes, newClass]);
-    setShowCreateModal(false);
-    showNotification('班级创建成功');
-  };
-
-  const handleEditClass = (data: {
-    name: string;
-    department: string;
-    academicYear: string;
-    semester: string;
-    teacherId: string;
   }) => {
     if (!selectedClass) return;
-
-    const teacher = teachers.find(t => t.id === data.teacherId);
-    if (!teacher) return;
-
-    setClasses(classes.map(cls => 
-      cls.id === selectedClass.id
-        ? {
-            ...cls,
-            name: data.name,
-            department: data.department,
-            academicYear: data.academicYear,
-            semester: data.semester,
-            teacher: {
-              id: teacher.id,
-              name: teacher.name,
-              email: teacher.email
-            }
-          }
-        : cls
-    ));
-
-    setShowEditModal(false);
-    setSelectedClass(null);
-    showNotification('班级信息已更新');
+    try {
+      await updateAdminClass(selectedClass.id, {
+        name: data.name,
+        code: data.code,
+        collegeId: data.collegeId,
+        academicYear: data.academicYear,
+        semester: data.semester,
+      });
+      setShowEditModal(false);
+      setSelectedClass(null);
+      showNotification('班级信息已更新');
+      await loadClasses();
+    } catch (e: unknown) {
+      message.error(e instanceof Error ? e.message : '更新失败');
+    }
   };
 
-  const handleDeleteClass = () => {
+  const handleDeleteClass = async () => {
     if (!selectedClass) return;
-
-    // 移除该班级的所有学生关联
-    setStudents(students.map(s => 
-      s.classId === selectedClass.id ? { ...s, classId: undefined } : s
-    ));
-
-    setClasses(classes.filter(cls => cls.id !== selectedClass.id));
-    setShowDeleteModal(false);
-    setSelectedClass(null);
-    showNotification('班级已删除');
+    try {
+      await deleteAdminClass(selectedClass.id);
+      setShowDeleteModal(false);
+      setSelectedClass(null);
+      showNotification('班级已删除');
+      await loadClasses();
+    } catch (e: unknown) {
+      message.error(e instanceof Error ? e.message : '删除失败');
+    }
   };
 
-  const handleAddStudent = (studentId: string) => {
+  const handleChangeTeacher = async (teacherId: string) => {
     if (!selectedClass) return;
-
-    setStudents(students.map(s => 
-      s.id === studentId ? { ...s, classId: selectedClass.id } : s
-    ));
-
-    setClasses(classes.map(cls => 
-      cls.id === selectedClass.id
-        ? { ...cls, studentCount: cls.studentCount + 1 }
-        : cls
-    ));
-
-    showNotification('学生已添加到班级');
+    try {
+      await updateAdminClass(selectedClass.id, { teacherId });
+      showNotification('教师已更换');
+      setShowDetailModal(false);
+      setSelectedClass(null);
+      await loadClasses();
+    } catch (e: unknown) {
+      message.error(e instanceof Error ? e.message : '更换失败');
+    }
   };
 
-  const handleRemoveStudent = (studentId: string) => {
-    if (!selectedClass) return;
-
-    setStudents(students.map(s => 
-      s.id === studentId ? { ...s, classId: undefined } : s
-    ));
-
-    setClasses(classes.map(cls => 
-      cls.id === selectedClass.id
-        ? { ...cls, studentCount: Math.max(0, cls.studentCount - 1) }
-        : cls
-    ));
-
-    showNotification('学生已从班级中移除');
+  const handleAssignTeacherSubmit = async (teacherId: string) => {
+    if (!assignTeacherClass) return;
+    try {
+      await updateAdminClass(assignTeacherClass.id, { teacherId });
+      message.success('已保存任课教师');
+      setAssignTeacherClass(null);
+      await loadClasses();
+    } catch (e: unknown) {
+      message.error(e instanceof Error ? e.message : '保存失败');
+      throw e;
+    }
   };
 
-  const handleChangeTeacher = (teacherId: string) => {
-    if (!selectedClass) return;
-
-    const teacher = teachers.find(t => t.id === teacherId);
-    if (!teacher) return;
-
-    setClasses(classes.map(cls => 
-      cls.id === selectedClass.id
-        ? {
-            ...cls,
-            teacher: {
-              id: teacher.id,
-              name: teacher.name,
-              email: teacher.email
-            }
-          }
-        : cls
-    ));
-
-    setSelectedClass({
-      ...selectedClass,
-      teacher: {
-        id: teacher.id,
-        name: teacher.name,
-        email: teacher.email
-      }
-    });
-
-    showNotification('教师已更换');
+  const collegeNameForClass = (cls: Class | null) => {
+    if (!cls) return '';
+    return deptLabel(cls.collegeId);
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* 顶部统计卡片 */}
+    <div className="min-h-0 bg-gray-50">
       <div className="grid grid-cols-4 gap-6 mb-6">
         <div className="bg-white rounded-xl p-6 border border-gray-200">
           <div className="flex items-center justify-between">
@@ -217,7 +270,7 @@ export default function ClassManagement() {
         <div className="bg-white rounded-xl p-6 border border-gray-200">
           <div className="flex items-center justify-between">
             <div>
-              <div className="text-sm text-gray-600 mb-1">学生总人数</div>
+              <div className="text-sm text-gray-600 mb-1">在班学生（汇总）</div>
               <div className="text-3xl font-bold text-gray-900">{totalStudents}</div>
             </div>
             <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center">
@@ -229,7 +282,7 @@ export default function ClassManagement() {
         <div className="bg-white rounded-xl p-6 border border-gray-200">
           <div className="flex items-center justify-between">
             <div>
-              <div className="text-sm text-gray-600 mb-1">教师总人数</div>
+              <div className="text-sm text-gray-600 mb-1">任课教师（去重）</div>
               <div className="text-3xl font-bold text-gray-900">{totalTeachers}</div>
             </div>
             <div className="w-12 h-12 bg-orange-100 rounded-full flex items-center justify-center">
@@ -239,44 +292,43 @@ export default function ClassManagement() {
         </div>
       </div>
 
-      {/* 搜索和筛选 */}
       <div className="bg-white rounded-xl p-6 mb-6 border border-gray-200">
-        <div className="flex items-center gap-4">
-          <div className="flex-1 relative">
-            <i className="ri-search-line absolute left-4 top-1/2 -translate-y-1/2 text-gray-400"></i>
-            <input
-              type="text"
-              value={searchKeyword}
-              onChange={(e) => setSearchKeyword(e.target.value)}
-              placeholder="搜索班级名称或教师姓名"
-              className="w-full pl-11 pr-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500"
+        <div className="flex flex-wrap items-center gap-4">
+          <Input
+            allowClear
+            className="flex-1 min-w-[200px] max-w-xl"
+            prefix={<i className="ri-search-line text-gray-400" />}
+            placeholder="搜索班级名称、编码或教师姓名"
+            value={searchKeyword}
+            onChange={(e) => setSearchKeyword(e.target.value)}
+          />
+          <Space wrap>
+            <Select
+              allowClear
+              placeholder="全部学院"
+              className="min-w-[200px]"
+              loading={collegeLoading}
+              options={collegeOptions}
+              value={collegeIdFilter || undefined}
+              onChange={(v) => setCollegeIdFilter(v ?? '')}
+              showSearch
+              optionFilterProp="label"
             />
-          </div>
-
-          <select
-            value={departmentFilter}
-            onChange={(e) => setDepartmentFilter(e.target.value)}
-            className="px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500"
-          >
-            <option value="">全部院系</option>
-            {departments.map(dept => (
-              <option key={dept} value={dept}>{dept}</option>
-            ))}
-          </select>
-
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            className="px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500"
-          >
-            <option value="">全部状态</option>
-            <option value="active">进行中</option>
-            <option value="ended">已结束</option>
-          </select>
+            <Select
+              allowClear
+              placeholder="全部状态"
+              className="min-w-[180px]"
+              loading={classStatusLoading}
+              options={classStatusOptions}
+              value={statusFilter || undefined}
+              onChange={(v) => setStatusFilter(v ?? '')}
+            />
+          </Space>
 
           <button
+            type="button"
             onClick={() => setShowCreateModal(true)}
-            className="px-6 py-2.5 bg-teal-600 text-white rounded-lg hover:bg-teal-700 whitespace-nowrap"
+            className="px-6 py-2.5 bg-teal-600 text-white rounded-lg hover:bg-teal-700 whitespace-nowrap ml-auto"
           >
             <i className="ri-add-line mr-1"></i>
             创建班级
@@ -284,13 +336,12 @@ export default function ClassManagement() {
         </div>
       </div>
 
-      {/* 班级列表 */}
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
         <table className="w-full">
           <thead className="bg-gray-50 border-b border-gray-200">
             <tr>
               <th className="px-6 py-4 text-left text-sm font-semibold text-gray-900">班级名称</th>
-              <th className="px-6 py-4 text-left text-sm font-semibold text-gray-900">所属院系</th>
+              <th className="px-6 py-4 text-left text-sm font-semibold text-gray-900">所属学院</th>
               <th className="px-6 py-4 text-left text-sm font-semibold text-gray-900">指派教师</th>
               <th className="px-6 py-4 text-left text-sm font-semibold text-gray-900">学生人数</th>
               <th className="px-6 py-4 text-left text-sm font-semibold text-gray-900">创建时间</th>
@@ -299,23 +350,37 @@ export default function ClassManagement() {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-200">
-            {filteredClasses.length === 0 ? (
+            {listLoading ? (
               <tr>
-                <td colSpan={7} className="px-6 py-12 text-center text-gray-500">
+                <td colSpan={8} className="px-6 py-12 text-center text-gray-500">
+                  加载中…
+                </td>
+              </tr>
+            ) : filteredClasses.length === 0 ? (
+              <tr>
+                <td colSpan={8} className="px-6 py-12 text-center text-gray-500">
                   暂无班级数据
                 </td>
               </tr>
             ) : (
-              filteredClasses.map(cls => (
+              filteredClasses.map((cls) => (
                 <tr key={cls.id} className="hover:bg-gray-50">
                   <td className="px-6 py-4">
                     <div className="font-medium text-gray-900">{cls.name}</div>
-                    <div className="text-sm text-gray-600">{cls.academicYear} {cls.semester}</div>
+                    <div className="text-sm text-gray-600">
+                      {cls.academicYear} {semesterLabel(cls.semester)}
+                    </div>
                   </td>
-                  <td className="px-6 py-4 text-gray-900">{cls.department}</td>
+                  <td className="px-6 py-4 text-gray-700 font-mono text-sm">{deptLabel(cls.collegeId)}</td>
                   <td className="px-6 py-4">
-                    <div className="font-medium text-gray-900">{cls.teacher.name}</div>
-                    <div className="text-sm text-gray-600">{cls.teacher.email}</div>
+                    {cls.teacher.id && cls.teacher.name !== '-' ? (
+                      <>
+                        <div className="font-medium text-gray-900">{cls.teacher.name}</div>
+                        <div className="text-sm text-gray-600">{cls.teacher.email}</div>
+                      </>
+                    ) : (
+                      <span className="text-sm text-gray-400">未指派</span>
+                    )}
                   </td>
                   <td className="px-6 py-4">
                     <span className="text-teal-600 font-semibold">{cls.studentCount}</span>
@@ -323,17 +388,25 @@ export default function ClassManagement() {
                   </td>
                   <td className="px-6 py-4 text-gray-600">{cls.createdAt}</td>
                   <td className="px-6 py-4">
-                    <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${
-                      cls.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-700'
-                    }`}>
-                      {cls.status === 'active' ? '进行中' : '已结束'}
+                    <span
+                      className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${
+                        cls.status === '0'
+                          ? 'bg-amber-100 text-amber-800'
+                          : cls.status === '1'
+                            ? 'bg-green-100 text-green-700'
+                            : 'bg-gray-100 text-gray-700'
+                      }`}
+                    >
+                      {classStatusLabel(cls.status)}
                     </span>
                   </td>
                   <td className="px-6 py-4">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1 flex-wrap">
                       <button
+                        type="button"
                         onClick={() => {
                           setSelectedClass(cls);
+                          void loadDetailStudents(cls.id);
                           setShowDetailModal(true);
                         }}
                         className="p-2 text-teal-600 hover:bg-teal-50 rounded-lg"
@@ -342,6 +415,17 @@ export default function ClassManagement() {
                         <i className="ri-eye-line text-lg"></i>
                       </button>
                       <button
+                        type="button"
+                        onClick={() => {
+                          setAssignTeacherClass(cls);
+                        }}
+                        className="p-2 text-violet-600 hover:bg-violet-50 rounded-lg"
+                        title="指派教师"
+                      >
+                        <i className="ri-user-add-line text-lg"></i>
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => {
                           setSelectedClass(cls);
                           setShowEditModal(true);
@@ -352,6 +436,7 @@ export default function ClassManagement() {
                         <i className="ri-edit-line text-lg"></i>
                       </button>
                       <button
+                        type="button"
                         onClick={() => {
                           setSelectedClass(cls);
                           setShowDeleteModal(true);
@@ -370,12 +455,10 @@ export default function ClassManagement() {
         </table>
       </div>
 
-      {/* 弹窗 */}
       <CreateClassModal
         isOpen={showCreateModal}
         onClose={() => setShowCreateModal(false)}
-        onConfirm={handleCreateClass}
-        teachers={teachers}
+        onConfirm={(d) => void handleCreateClass(d)}
       />
 
       <EditClassModal
@@ -384,9 +467,17 @@ export default function ClassManagement() {
           setShowEditModal(false);
           setSelectedClass(null);
         }}
-        onConfirm={handleEditClass}
+        onConfirm={(d) => void handleEditClass(d)}
         classData={selectedClass}
+      />
+
+      <AssignTeacherModal
+        open={!!assignTeacherClass}
+        classData={assignTeacherClass}
         teachers={teachers}
+        teachersLoading={teachersLoading}
+        onClose={() => setAssignTeacherClass(null)}
+        onSubmit={(id) => void handleAssignTeacherSubmit(id)}
       />
 
       <DeleteClassModal
@@ -395,7 +486,7 @@ export default function ClassManagement() {
           setShowDeleteModal(false);
           setSelectedClass(null);
         }}
-        onConfirm={handleDeleteClass}
+        onConfirm={() => void handleDeleteClass()}
         classData={selectedClass}
       />
 
@@ -406,21 +497,23 @@ export default function ClassManagement() {
           setSelectedClass(null);
         }}
         classData={selectedClass}
-        students={students}
-        allStudents={students}
+        collegeName={collegeNameForClass(selectedClass)}
+        enrolledStudents={detailStudents}
         teachers={teachers}
-        onAddStudent={handleAddStudent}
-        onRemoveStudent={handleRemoveStudent}
-        onChangeTeacher={handleChangeTeacher}
+        teacherDeptLabel={deptLabel}
+        onChangeTeacher={(id) => void handleChangeTeacher(id)}
       />
 
-      {/* 通知提示 */}
       {notification && (
         <div className="fixed bottom-6 right-6 z-50 animate-fade-in">
-          <div className={`px-6 py-4 rounded-lg shadow-lg flex items-center gap-3 ${
-            notification.type === 'success' ? 'bg-green-600' : 'bg-red-600'
-          } text-white`}>
-            <i className={`${notification.type === 'success' ? 'ri-check-line' : 'ri-error-warning-line'} text-xl`}></i>
+          <div
+            className={`px-6 py-4 rounded-lg shadow-lg flex items-center gap-3 ${
+              notification.type === 'success' ? 'bg-green-600' : 'bg-red-600'
+            } text-white`}
+          >
+            <i
+              className={`${notification.type === 'success' ? 'ri-check-line' : 'ri-error-warning-line'} text-xl`}
+            ></i>
             <span className="font-medium">{notification.message}</span>
           </div>
         </div>

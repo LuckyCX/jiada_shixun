@@ -46,8 +46,8 @@ export default function OperationLog() {
   // 操作类型配置
   const operationTypes = [
     { id: 'all' as OperationType, label: '全部操作', count: operationLogs.length },
-    { id: 'user' as OperationType, label: '用户管理', count: operationLogs.filter(l => l.type === 'user').length },
     { id: 'class' as OperationType, label: '班级管理', count: operationLogs.filter(l => l.type === 'class').length },
+    { id: 'user' as OperationType, label: '用户管理', count: operationLogs.filter(l => l.type === 'user').length },
     { id: 'course' as OperationType, label: '课程资源', count: operationLogs.filter(l => l.type === 'course').length },
     { id: 'system' as OperationType, label: '系统操作', count: operationLogs.filter(l => l.type === 'system').length }
   ];

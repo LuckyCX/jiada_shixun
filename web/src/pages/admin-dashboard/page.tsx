@@ -2,20 +2,36 @@ import { useState, useEffect } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useSiteBrand } from '../../lib/publicSite';
 import UserManagement from './components/userManagement';
-import CourseResource from './components/courseResource';
 import Overview from './components/overview';
 import ClassManagement from './components/classManagement';
+import CollegeManagement from './components/collegeManagement';
 import OperationLog from './components/operationLog';
 
 import SystemConfig from './components/systemConfig';
+import DictTypeManage from './components/dictionary/DictTypeManage';
+import DictItemManage from './components/dictionary/DictItemManage';
+import { ADMIN_TOKEN_KEY } from '../../lib/authApi';
 
 type TabType =
   | 'overview'
   | 'user-management'
+  | 'college-management'
   | 'class-management'
-  | 'course-resource'
   | 'operation-log'
-  | 'system-config';
+  | 'system-config'
+  | 'dictionary'
+  | 'dictionary-items';
+
+const TAB_WHITELIST: TabType[] = [
+  'overview',
+  'user-management',
+  'college-management',
+  'class-management',
+  'operation-log',
+  'system-config',
+  'dictionary',
+  'dictionary-items',
+];
 
 export default function AdminDashboard() {
   const { logoUrl, siteTitle } = useSiteBrand();
@@ -26,24 +42,57 @@ export default function AdminDashboard() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
 
+  const [dictItemTypeName, setDictItemTypeName] = useState('');
+
   useEffect(() => {
-    const tab = searchParams.get('tab') as TabType;
-    if (
-      tab &&
-      [
-        'overview',
-        'user-management',
-        'class-management',
-        'course-resource',
-        'operation-log',
-        'system-config',
-      ].includes(tab)
-    ) {
+    const raw = searchParams.get('tab');
+    if (raw === 'course-resource') {
+      navigate('/admin-dashboard?tab=overview', { replace: true });
+      return;
+    }
+    const tab = raw as TabType;
+    const typeIdRaw = searchParams.get('typeId');
+    if (tab && TAB_WHITELIST.includes(tab)) {
+      if (tab === 'dictionary-items') {
+        const tid = Number(typeIdRaw);
+        if (!typeIdRaw || !Number.isFinite(tid) || tid <= 0) {
+          setActiveTab('dictionary');
+          navigate('/admin-dashboard?tab=dictionary', { replace: true });
+          return;
+        }
+      }
       setActiveTab(tab);
     } else {
       setActiveTab('overview');
     }
-  }, [searchParams]);
+  }, [searchParams, navigate]);
+
+  useEffect(() => {
+    if (activeTab !== 'dictionary-items') {
+      setDictItemTypeName('');
+      return;
+    }
+    const tid = Number(searchParams.get('typeId'));
+    if (!Number.isFinite(tid) || tid <= 0) return;
+    const token = localStorage.getItem(ADMIN_TOKEN_KEY);
+    if (!token) {
+      setDictItemTypeName('');
+      return;
+    }
+    let cancelled = false;
+    fetch(`/api/admin/dict-types/${tid}`, { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => r.json())
+      .then((j) => {
+        if (cancelled || j.code !== 0 || !j.data?.name) return;
+        setDictItemTypeName(String(j.data.name));
+      })
+      .catch(() => {
+        if (!cancelled) setDictItemTypeName('');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, searchParams]);
 
   const handleTabChange = (tab: TabType) => {
     setActiveTab(tab);
@@ -53,23 +102,31 @@ export default function AdminDashboard() {
   const menuItems = [
     { id: 'overview' as TabType, label: '数据概览', icon: 'ri-dashboard-line' },
     { id: 'user-management' as TabType, label: '用户管理', icon: 'ri-user-settings-line' },
+    { id: 'college-management' as TabType, label: '学院管理', icon: 'ri-building-4-line' },
     { id: 'class-management' as TabType, label: '班级管理', icon: 'ri-team-line' },
-    { id: 'course-resource' as TabType, label: '课程资源', icon: 'ri-book-2-line' },
+    { id: 'dictionary' as TabType, label: '字典管理', icon: 'ri-booklet-line' },
     { id: 'system-config' as TabType, label: '系统配置', icon: 'ri-settings-3-line' },
     { id: 'operation-log' as TabType, label: '操作日志', icon: 'ri-history-line' },
   ];
 
   const getBreadcrumb = () => {
-    const item = menuItems.find(m => m.id === activeTab);
+    if (activeTab === 'dictionary-items') {
+      return dictItemTypeName ? `字典管理 / ${dictItemTypeName}` : '字典管理 / 字典数据';
+    }
+    const item = menuItems.find((m) => m.id === activeTab);
     return item ? item.label : '数据概览';
   };
 
+  const dictionaryItemsTypeId = Number(searchParams.get('typeId'));
+
   return (
-    <div className="min-h-screen bg-gray-50 flex">
+    <div className="h-dvh max-h-dvh min-h-0 flex overflow-hidden bg-gray-50">
       {/* 左侧边栏 */}
-      <div className={`bg-white border-r border-gray-200 transition-all duration-300 flex flex-col ${sidebarCollapsed ? 'w-20' : 'w-64'}`}>
+      <div
+        className={`bg-white border-r border-gray-200 transition-all duration-300 flex flex-col min-h-0 shrink-0 ${sidebarCollapsed ? 'w-20' : 'w-64'}`}
+      >
         {/* Logo区域 */}
-        <div className="h-16 flex items-center justify-between px-4 border-b border-gray-200">
+        <div className="h-16 shrink-0 flex items-center justify-between px-4 border-b border-gray-200">
           {!sidebarCollapsed && (
             <div className="flex items-center gap-2 min-w-0">
               {logoUrl ? (
@@ -93,14 +150,14 @@ export default function AdminDashboard() {
           </button>
         </div>
 
-        {/* 菜单列表 */}
-        <nav className="flex-1 p-4 space-y-1">
+        {/* 菜单列表（侧栏过高时仅此处滚动） */}
+        <nav className="flex-1 min-h-0 overflow-y-auto p-4 space-y-1">
           {menuItems.map(item => (
             <button
               key={item.id}
               onClick={() => handleTabChange(item.id)}
               className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all whitespace-nowrap ${
-                activeTab === item.id
+                activeTab === item.id || (item.id === 'dictionary' && activeTab === 'dictionary-items')
                   ? 'bg-teal-50 text-teal-600'
                   : 'text-gray-600 hover:bg-gray-50'
               }`}
@@ -112,7 +169,7 @@ export default function AdminDashboard() {
         </nav>
 
         {/* 底部用户信息 */}
-        <div className="p-4 border-t border-gray-200">
+        <div className="p-4 border-t border-gray-200 shrink-0">
           <div className={`flex items-center gap-3 ${sidebarCollapsed ? 'justify-center' : ''}`}>
             <div className="w-10 h-10 bg-gradient-to-br from-purple-500 to-pink-500 rounded-full flex items-center justify-center flex-shrink-0">
               <span className="text-white font-semibold text-sm">管</span>
@@ -127,10 +184,10 @@ export default function AdminDashboard() {
         </div>
       </div>
 
-      {/* 主内容区 */}
-      <div className="flex-1 flex flex-col min-w-0">
+      {/* 主内容区：仅下方 main 滚动，顶栏固定 */}
+      <div className="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden">
         {/* 顶部导航栏 */}
-        <header className="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-6">
+        <header className="h-16 shrink-0 bg-white border-b border-gray-200 flex items-center justify-between px-6">
           <div className="flex items-center gap-2 text-sm text-gray-600">
             <i className="ri-home-4-line"></i>
             <span>/</span>
@@ -188,13 +245,17 @@ export default function AdminDashboard() {
         </header>
 
         {/* 内容区域 */}
-        <main className="flex-1 overflow-auto p-6">
+        <main className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-6">
           {activeTab === 'overview' && <Overview />}
-          {activeTab === 'user-management' && <UserManagement />}
+          {activeTab === 'college-management' && <CollegeManagement />}
           {activeTab === 'class-management' && <ClassManagement />}
-          {activeTab === 'course-resource' && <CourseResource />}
+          {activeTab === 'user-management' && <UserManagement />}
           {activeTab === 'operation-log' && <OperationLog />}
           {activeTab === 'system-config' && <SystemConfig />}
+          {activeTab === 'dictionary' && <DictTypeManage />}
+          {activeTab === 'dictionary-items' &&
+            Number.isFinite(dictionaryItemsTypeId) &&
+            dictionaryItemsTypeId > 0 && <DictItemManage typeId={dictionaryItemsTypeId} />}
         </main>
       </div>
     </div>

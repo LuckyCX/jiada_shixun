@@ -1,16 +1,53 @@
-import { useState } from 'react';
-import { User, UserRole, UserStatus, ImportResult } from './types';
-import { mockUsers, mockUserStats, mockClasses } from './mockData';
+import { useCallback, useEffect, useState } from 'react';
+import {
+  Button,
+  Card,
+  Input,
+  message,
+  Select,
+  Space,
+  Spin,
+  Statistic,
+  Table,
+  Tag,
+  Tooltip,
+} from 'antd';
+import type { TableProps } from 'antd';
+import { User, UserRole, UserStatus } from './types';
+import { useCollegeDictOptions } from './useCollegeDictOptions';
 import AddUserModal from './AddUserModal';
 import BatchImportModal from './BatchImportModal';
 import EditUserModal from './EditUserModal';
 import DeleteConfirmModal from './DeleteConfirmModal';
 import ResetPasswordModal from './ResetPasswordModal';
+import type { AdminUserStats } from './adminUsersApi';
+import {
+  createAdminUser,
+  deleteAdminUser,
+  fetchAdminUsers,
+  patchAdminUserPassword,
+  patchAdminUserStatus,
+  postAdminUsersBatch,
+  updateAdminUser,
+} from './adminUsersApi';
+
+const emptyStats: AdminUserStats = {
+  totalUsers: 0,
+  teachers: 0,
+  students: 0,
+  activeUsers: 0,
+};
 
 export default function UserManagement() {
-  const [users, setUsers] = useState<User[]>(mockUsers);
-  const [stats, setStats] = useState(mockUserStats);
-  const [searchQuery, setSearchQuery] = useState('');
+  const { labelByValue: deptLabel } = useCollegeDictOptions(true);
+  const [users, setUsers] = useState<User[]>([]);
+  const [stats, setStats] = useState<AdminUserStats>(emptyStats);
+  const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const [total, setTotal] = useState(0);
+  const [qInput, setQInput] = useState('');
+  const [debouncedQ, setDebouncedQ] = useState('');
   const [roleFilter, setRoleFilter] = useState<UserRole | 'all'>('all');
   const [statusFilter, setStatusFilter] = useState<UserStatus | 'all'>('all');
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -19,362 +56,321 @@ export default function UserManagement() {
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isResetPasswordOpen, setIsResetPasswordOpen] = useState(false);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
-  const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
-  const showNotification = (type: 'success' | 'error', message: string) => {
-    setNotification({ type, message });
-    setTimeout(() => setNotification(null), 3000);
+  useEffect(() => {
+    const t = window.setTimeout(() => setDebouncedQ(qInput.trim()), 350);
+    return () => window.clearTimeout(t);
+  }, [qInput]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedQ, roleFilter, statusFilter]);
+
+  const loadUsers = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await fetchAdminUsers({
+        page,
+        pageSize,
+        q: debouncedQ,
+        role: roleFilter,
+        status: statusFilter,
+      });
+      setUsers(data.list);
+      setTotal(data.total);
+      setStats(data.stats);
+    } catch (e: unknown) {
+      message.error(e instanceof Error ? e.message : '加载用户列表失败');
+    } finally {
+      setLoading(false);
+    }
+  }, [page, pageSize, debouncedQ, roleFilter, statusFilter]);
+
+  useEffect(() => {
+    void loadUsers();
+  }, [loadUsers]);
+
+  const handleAddUser = async (userData: {
+    name: string;
+    role: 'student' | 'teacher';
+    idNumber: string;
+    email?: string;
+    department: string;
+    password: string;
+  }) => {
+    try {
+      await createAdminUser({
+        name: userData.name,
+        role: userData.role,
+        idNumber: userData.idNumber,
+        department: userData.department,
+        password: userData.password,
+        ...(userData.email?.trim() ? { email: userData.email.trim() } : {}),
+      });
+      message.success(`用户 ${userData.name} 已成功创建`);
+      setIsAddModalOpen(false);
+      await loadUsers();
+    } catch (e: unknown) {
+      message.error(e instanceof Error ? e.message : '创建失败');
+    }
   };
 
-  const handleResetPassword = (userId: string, newPassword: string) => {
-    setIsResetPasswordOpen(false);
-    setSelectedUser(null);
-    showNotification('success', `用户密码已重置，新密码：${newPassword}`);
+  const handleEditUser = async (userId: string, userData: Record<string, unknown>) => {
+    try {
+      await updateAdminUser(userId, {
+        name: String(userData.name ?? '').trim(),
+        email: String(userData.email ?? '').trim(),
+        department: String(userData.department ?? '').trim(),
+        role: userData.role as User['role'],
+        idNumber: String(userData.idNumber ?? '').trim(),
+        ...(userData.role === 'student' ? { classId: String(userData.classId ?? '') } : {}),
+      });
+      message.success('用户信息已更新');
+      setIsEditModalOpen(false);
+      setSelectedUser(null);
+      await loadUsers();
+    } catch (e: unknown) {
+      message.error(e instanceof Error ? e.message : '更新失败');
+    }
   };
 
-  const filteredUsers = users.filter((user) => {
-    const matchesSearch =
-      user.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      user.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (user.studentId && user.studentId.includes(searchQuery)) ||
-      (user.employeeId && user.employeeId.includes(searchQuery));
-
-    const matchesRole = roleFilter === 'all' || user.role === roleFilter;
-    const matchesStatus = statusFilter === 'all' || user.status === statusFilter;
-
-    return matchesSearch && matchesRole && matchesStatus;
-  });
-
-  const handleAddUser = (userData: any) => {
-    const newUser: User = {
-      id: `user-${Date.now()}`,
-      name: userData.name,
-      studentId: userData.role === 'student' ? userData.idNumber : undefined,
-      employeeId: userData.role !== 'student' ? userData.idNumber : undefined,
-      email: userData.email,
-      department: userData.department,
-      role: userData.role,
-      status: 'active',
-      lastLogin: '-',
-      createdAt: new Date().toISOString().split('T')[0],
-    };
-
-    setUsers([newUser, ...users]);
-    setStats({
-      ...stats,
-      totalUsers: stats.totalUsers + 1,
-      [userData.role === 'student' ? 'students' : 'teachers']: stats[userData.role === 'student' ? 'students' : 'teachers'] + 1,
-    });
-    setIsAddModalOpen(false);
-    showNotification('success', `用户 ${userData.name} 已成功创建`);
-  };
-
-  const handleBatchImport = async (file: File): Promise<ImportResult> => {
-    return new Promise((resolve) => {
-      setTimeout(() => {
-        const successCount = Math.floor(Math.random() * 20) + 30;
-        const failedCount = Math.floor(Math.random() * 5);
-
-        const errors = Array.from({ length: failedCount }, (_, i) => ({
-          row: i + 2,
-          reason: ['邮箱格式错误', '学号重复', '必填字段缺失'][Math.floor(Math.random() * 3)],
-        }));
-
-        setStats({
-          ...stats,
-          totalUsers: stats.totalUsers + successCount,
-          students: stats.students + successCount,
-        });
-
-        resolve({
-          success: successCount,
-          failed: failedCount,
-          errors,
-        });
-
-        showNotification('success', `成功导入 ${successCount} 名学生`);
-      }, 2000);
-    });
-  };
-
-  const handleEditUser = (userId: string, userData: any) => {
-    setUsers(
-      users.map((user) =>
-        user.id === userId
-          ? {
-              ...user,
-              name: userData.name,
-              studentId: userData.role === 'student' ? userData.idNumber : undefined,
-              employeeId: userData.role !== 'student' ? userData.idNumber : undefined,
-              email: userData.email,
-              department: userData.department,
-              role: userData.role,
-              classId: userData.classId,
-              className: mockClasses.find((c) => c.id === userData.classId)?.name,
-            }
-          : user
-      )
-    );
-    setIsEditModalOpen(false);
-    setSelectedUser(null);
-    showNotification('success', '用户信息已更新');
-  };
-
-  const handleToggleStatus = (userId: string) => {
-    setUsers(
-      users.map((user) =>
-        user.id === userId
-          ? { ...user, status: user.status === 'active' ? 'inactive' : 'active' }
-          : user
-      )
-    );
+  const handleToggleStatus = async (userId: string) => {
     const user = users.find((u) => u.id === userId);
-    showNotification('success', `用户 ${user?.name} 已${user?.status === 'active' ? '禁用' : '启用'}`);
+    if (!user) return;
+    const next: UserStatus = user.status === 'active' ? 'inactive' : 'active';
+    try {
+      await patchAdminUserStatus(userId, next);
+      message.success(`用户 ${user.name} 已${next === 'active' ? '启用' : '禁用'}`);
+      await loadUsers();
+    } catch (e: unknown) {
+      message.error(e instanceof Error ? e.message : '操作失败');
+    }
   };
 
-  const handleDeleteUser = () => {
+  const handleDeleteUser = async () => {
     if (!selectedUser) return;
-
-    setUsers(users.filter((user) => user.id !== selectedUser.id));
-    setStats({
-      ...stats,
-      totalUsers: stats.totalUsers - 1,
-      [selectedUser.role === 'student' ? 'students' : 'teachers']: stats[selectedUser.role === 'student' ? 'students' : 'teachers'] - 1,
-    });
-    setIsDeleteModalOpen(false);
-    showNotification('success', `用户 ${selectedUser.name} 已删除`);
-    setSelectedUser(null);
+    try {
+      await deleteAdminUser(selectedUser.id);
+      message.success(`用户 ${selectedUser.name} 已删除`);
+      setIsDeleteModalOpen(false);
+      setSelectedUser(null);
+      await loadUsers();
+    } catch (e: unknown) {
+      message.error(e instanceof Error ? e.message : '删除失败');
+    }
   };
 
-  const getRoleBadge = (role: UserRole) => {
-    const styles = {
-      student: 'bg-blue-100 text-blue-700',
-      teacher: 'bg-purple-100 text-purple-700',
-      admin: 'bg-orange-100 text-orange-700',
-    };
-    const labels = {
-      student: '学生',
-      teacher: '教师',
-      admin: '管理员',
-    };
-    return (
-      <span className={`px-2 py-1 rounded-md text-xs font-medium ${styles[role]}`}>
-        {labels[role]}
-      </span>
-    );
+  const handleResetPassword = async (userId: string, newPassword: string) => {
+    try {
+      await patchAdminUserPassword(userId, newPassword);
+      setIsResetPasswordOpen(false);
+      setSelectedUser(null);
+      message.success('密码已重置');
+      await loadUsers();
+    } catch (e: unknown) {
+      message.error(e instanceof Error ? e.message : '重置失败');
+    }
   };
 
-  const getStatusBadge = (status: UserStatus) => {
-    return status === 'active' ? (
-      <span className="px-2 py-1 rounded-md text-xs font-medium bg-green-100 text-green-700">
-        正常
-      </span>
-    ) : (
-      <span className="px-2 py-1 rounded-md text-xs font-medium bg-gray-100 text-gray-700">
-        已禁用
-      </span>
-    );
+  const roleTag = (role: UserRole) => {
+    const color = role === 'student' ? 'blue' : role === 'teacher' ? 'purple' : 'orange';
+    const label = role === 'student' ? '学生' : role === 'teacher' ? '教师' : '管理员';
+    return <Tag color={color}>{label}</Tag>;
   };
+
+  const columns: TableProps<User>['columns'] = [
+    {
+      title: '姓名',
+      key: 'name',
+      width: 200,
+      render: (_, u) => (
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 shrink-0 bg-gradient-to-br from-teal-400 to-blue-500 rounded-full flex items-center justify-center text-white text-sm font-semibold">
+            {u.name.charAt(0)}
+          </div>
+          <span className="text-sm font-medium text-gray-900">{u.name}</span>
+        </div>
+      ),
+    },
+    {
+      title: '学号/工号',
+      key: 'id',
+      width: 140,
+      render: (_, u) => <span className="text-sm text-gray-600">{u.studentId || u.employeeId || '—'}</span>,
+    },
+    {
+      title: '邮箱',
+      dataIndex: 'email',
+      key: 'email',
+      ellipsis: true,
+      render: (v: string) => <span className="text-sm text-gray-600">{v?.trim() ? v : '—'}</span>,
+    },
+    {
+      title: '学院',
+      key: 'department',
+      ellipsis: true,
+      render: (_, u) => <span className="text-sm text-gray-600">{deptLabel(u.department)}</span>,
+    },
+    {
+      title: '班级',
+      key: 'className',
+      width: 160,
+      ellipsis: true,
+      render: (_, u) => <span className="text-sm text-gray-600">{u.className || '—'}</span>,
+    },
+    {
+      title: '角色',
+      dataIndex: 'role',
+      key: 'role',
+      width: 100,
+      render: (r: UserRole) => roleTag(r),
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      key: 'status',
+      width: 90,
+      render: (s: UserStatus) =>
+        s === 'active' ? <Tag color="success">正常</Tag> : <Tag>已禁用</Tag>,
+    },
+    {
+      title: '最后登录',
+      dataIndex: 'lastLogin',
+      key: 'lastLogin',
+      width: 170,
+      render: (v: string) => <span className="text-sm text-gray-600">{v || '—'}</span>,
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      fixed: 'right',
+      width: 176,
+      render: (_, u) => (
+        <Space size={0} wrap>
+          <Tooltip title="编辑">
+            <Button
+              type="text"
+              icon={<i className="ri-edit-line text-lg" />}
+              onClick={() => {
+                setSelectedUser(u);
+                setIsEditModalOpen(true);
+              }}
+            />
+          </Tooltip>
+          <Tooltip title="重置密码">
+            <Button
+              type="text"
+              icon={<i className="ri-lock-password-line text-lg" />}
+              onClick={() => {
+                setSelectedUser(u);
+                setIsResetPasswordOpen(true);
+              }}
+            />
+          </Tooltip>
+          <Tooltip title={u.status === 'active' ? '禁用' : '启用'}>
+            <Button
+              type="text"
+              icon={<i className={`text-lg ${u.status === 'active' ? 'ri-forbid-line' : 'ri-check-line'}`} />}
+              onClick={() => void handleToggleStatus(u.id)}
+            />
+          </Tooltip>
+          <Tooltip title="删除">
+            <Button
+              type="text"
+              danger
+              icon={<i className="ri-delete-bin-line text-lg" />}
+              onClick={() => {
+                setSelectedUser(u);
+                setIsDeleteModalOpen(true);
+              }}
+            />
+          </Tooltip>
+        </Space>
+      ),
+    },
+  ];
 
   return (
     <div className="space-y-6">
-      {/* 统计卡片 */}
-      <div className="grid grid-cols-4 gap-5">
-        <div className="bg-white rounded-xl p-5 border border-gray-200">
-          <div className="flex items-center justify-between mb-3">
-            <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center">
-              <i className="ri-group-line text-2xl text-blue-600"></i>
-            </div>
-            <span className="text-xs text-gray-500">总用户数</span>
-          </div>
-          <div className="text-3xl font-bold text-gray-900">{stats.totalUsers}</div>
-        </div>
-
-        <div className="bg-white rounded-xl p-5 border border-gray-200">
-          <div className="flex items-center justify-between mb-3">
-            <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center">
-              <i className="ri-user-star-line text-2xl text-purple-600"></i>
-            </div>
-            <span className="text-xs text-gray-500">教师数</span>
-          </div>
-          <div className="text-3xl font-bold text-gray-900">{stats.teachers}</div>
-        </div>
-
-        <div className="bg-white rounded-xl p-5 border border-gray-200">
-          <div className="flex items-center justify-between mb-3">
-            <div className="w-12 h-12 bg-teal-100 rounded-lg flex items-center justify-center">
-              <i className="ri-graduation-cap-line text-2xl text-teal-600"></i>
-            </div>
-            <span className="text-xs text-gray-500">学生数</span>
-          </div>
-          <div className="text-3xl font-bold text-gray-900">{stats.students}</div>
-        </div>
-
-        <div className="bg-white rounded-xl p-5 border border-gray-200">
-          <div className="flex items-center justify-between mb-3">
-            <div className="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center">
-              <i className="ri-user-smile-line text-2xl text-green-600"></i>
-            </div>
-            <span className="text-xs text-gray-500">活跃用户</span>
-          </div>
-          <div className="text-3xl font-bold text-gray-900">{stats.activeUsers}</div>
-        </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+        <Card bordered={false} className="border border-gray-200 shadow-sm">
+          <Statistic title="总用户数" value={stats.totalUsers} prefix={<i className="ri-group-line text-blue-500" />} />
+        </Card>
+        <Card bordered={false} className="border border-gray-200 shadow-sm">
+          <Statistic title="教师数" value={stats.teachers} prefix={<i className="ri-user-star-line text-purple-500" />} />
+        </Card>
+        <Card bordered={false} className="border border-gray-200 shadow-sm">
+          <Statistic title="学生数" value={stats.students} prefix={<i className="ri-graduation-cap-line text-teal-500" />} />
+        </Card>
+        <Card bordered={false} className="border border-gray-200 shadow-sm">
+          <Statistic title="活跃用户" value={stats.activeUsers} prefix={<i className="ri-user-smile-line text-green-500" />} />
+        </Card>
       </div>
 
-      {/* 搜索和筛选栏 */}
-      <div className="bg-white rounded-xl p-5 border border-gray-200">
-        <div className="flex items-center gap-4">
-          <div className="flex-1 relative">
-            <i className="ri-search-line absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"></i>
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="搜索姓名、学号/工号、邮箱..."
-              className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500 focus:border-transparent"
-            />
-          </div>
-
-          <select
+      <Card bordered={false} className="border border-gray-200 shadow-sm">
+        <Space wrap className="w-full" size="middle">
+          <Input
+            allowClear
+            className="max-w-md flex-1 min-w-[200px]"
+            placeholder="搜索姓名、学号/工号、邮箱…"
+            prefix={<i className="ri-search-line text-gray-400" />}
+            value={qInput}
+            onChange={(e) => setQInput(e.target.value)}
+          />
+          <Select<UserRole | 'all'>
+            className="w-40"
             value={roleFilter}
-            onChange={(e) => setRoleFilter(e.target.value as UserRole | 'all')}
-            className="px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500 focus:border-transparent"
-          >
-            <option value="all">全部角色</option>
-            <option value="student">学生</option>
-            <option value="teacher">教师</option>
-            <option value="admin">管理员</option>
-          </select>
-
-          <select
+            onChange={(v) => setRoleFilter(v)}
+            options={[
+              { value: 'all', label: '全部角色' },
+              { value: 'student', label: '学生' },
+              { value: 'teacher', label: '教师' },
+            ]}
+          />
+          <Select<UserStatus | 'all'>
+            className="w-36"
             value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value as UserStatus | 'all')}
-            className="px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500 focus:border-transparent"
-          >
-            <option value="all">全部状态</option>
-            <option value="active">正常</option>
-            <option value="inactive">已禁用</option>
-          </select>
-
-          <button
-            onClick={() => setIsBatchImportOpen(true)}
-            className="px-4 py-2.5 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 transition-colors whitespace-nowrap"
-          >
-            <i className="ri-upload-2-line mr-1.5"></i>
+            onChange={(v) => setStatusFilter(v)}
+            options={[
+              { value: 'all', label: '全部状态' },
+              { value: 'active', label: '正常' },
+              { value: 'inactive', label: '已禁用' },
+            ]}
+          />
+          <Button type="primary" className="!bg-green-600 hover:!bg-green-700" onClick={() => setIsBatchImportOpen(true)}>
+            <i className="ri-upload-2-line mr-1.5" />
             批量导入
-          </button>
-
-          <button
-            onClick={() => setIsAddModalOpen(true)}
-            className="px-4 py-2.5 bg-teal-600 text-white rounded-lg text-sm font-medium hover:bg-teal-700 transition-colors whitespace-nowrap"
-          >
-            <i className="ri-add-line mr-1.5"></i>
+          </Button>
+          <Button type="primary" className="!bg-teal-600 hover:!bg-teal-700" onClick={() => setIsAddModalOpen(true)}>
+            <i className="ri-add-line mr-1.5" />
             新增用户
-          </button>
-        </div>
-      </div>
+          </Button>
+        </Space>
+      </Card>
 
-      {/* 用户列表 */}
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead className="bg-gray-50 border-b border-gray-200">
-              <tr>
-                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-600">姓名</th>
-                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-600">学号/工号</th>
-                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-600">邮箱</th>
-                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-600">院系</th>
-                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-600">班级</th>
-                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-600">角色</th>
-                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-600">状态</th>
-                <th className="px-5 py-3 text-left text-xs font-semibold text-gray-600">最后登录</th>
-                <th className="px-5 py-3 text-center text-xs font-semibold text-gray-600">操作</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-200">
-              {filteredUsers.map((user) => (
-                <tr key={user.id} className="hover:bg-gray-50 transition-colors">
-                  <td className="px-5 py-4">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 bg-gradient-to-br from-teal-400 to-blue-500 rounded-full flex items-center justify-center text-white font-semibold">
-                        {user.name.charAt(0)}
-                      </div>
-                      <span className="text-sm font-medium text-gray-900">{user.name}</span>
-                    </div>
-                  </td>
-                  <td className="px-5 py-4 text-sm text-gray-600">
-                    {user.studentId || user.employeeId}
-                  </td>
-                  <td className="px-5 py-4 text-sm text-gray-600">{user.email}</td>
-                  <td className="px-5 py-4 text-sm text-gray-600">{user.department}</td>
-                  <td className="px-5 py-4 text-sm text-gray-600">
-                    {user.className || '-'}
-                  </td>
-                  <td className="px-5 py-4">{getRoleBadge(user.role)}</td>
-                  <td className="px-5 py-4">{getStatusBadge(user.status)}</td>
-                  <td className="px-5 py-4 text-sm text-gray-600">{user.lastLogin}</td>
-                  <td className="px-5 py-4">
-                    <div className="flex items-center justify-center gap-2">
-                      <button
-                        onClick={() => {
-                          setSelectedUser(user);
-                          setIsEditModalOpen(true);
-                        }}
-                        className="w-8 h-8 flex items-center justify-center text-gray-600 hover:text-teal-600 hover:bg-teal-50 rounded-lg transition-colors cursor-pointer"
-                        title="编辑"
-                      >
-                        <i className="ri-edit-line"></i>
-                      </button>
-                      <button
-                        onClick={() => {
-                          setSelectedUser(user);
-                          setIsResetPasswordOpen(true);
-                        }}
-                        className="w-8 h-8 flex items-center justify-center text-gray-600 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors cursor-pointer"
-                        title="重置密码"
-                      >
-                        <i className="ri-lock-password-line"></i>
-                      </button>
-                      <button
-                        onClick={() => handleToggleStatus(user.id)}
-                        className={`w-8 h-8 flex items-center justify-center rounded-lg transition-colors cursor-pointer ${
-                          user.status === 'active'
-                            ? 'text-gray-600 hover:text-orange-600 hover:bg-orange-50'
-                            : 'text-gray-600 hover:text-green-600 hover:bg-green-50'
-                        }`}
-                        title={user.status === 'active' ? '禁用' : '启用'}
-                      >
-                        <i className={user.status === 'active' ? 'ri-forbid-line' : 'ri-check-line'}></i>
-                      </button>
-                      <button
-                        onClick={() => {
-                          setSelectedUser(user);
-                          setIsDeleteModalOpen(true);
-                        }}
-                        className="w-8 h-8 flex items-center justify-center text-gray-600 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
-                        title="删除"
-                      >
-                        <i className="ri-delete-bin-line"></i>
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+      <Card bordered={false} className="border border-gray-200 shadow-sm overflow-hidden">
+        <Spin spinning={loading}>
+          <Table<User>
+            rowKey="id"
+            columns={columns}
+            dataSource={users}
+            scroll={{ x: 1100 }}
+            locale={{ emptyText: '暂无用户数据' }}
+            pagination={{
+              current: page,
+              pageSize,
+              total,
+              showSizeChanger: true,
+              showTotal: (t) => `共 ${t} 条`,
+              onChange: (p, ps) => {
+                setPage(p);
+                setPageSize(ps);
+              },
+            }}
+          />
+        </Spin>
+      </Card>
 
-        {filteredUsers.length === 0 && (
-          <div className="py-16 text-center">
-            <div className="w-20 h-20 mx-auto bg-gray-100 rounded-full flex items-center justify-center mb-4">
-              <i className="ri-user-search-line text-4xl text-gray-400"></i>
-            </div>
-            <p className="text-gray-500">未找到符合条件的用户</p>
-          </div>
-        )}
-      </div>
-
-      {/* 弹窗 */}
       <AddUserModal
         isOpen={isAddModalOpen}
         onClose={() => setIsAddModalOpen(false)}
@@ -384,7 +380,11 @@ export default function UserManagement() {
       <BatchImportModal
         isOpen={isBatchImportOpen}
         onClose={() => setIsBatchImportOpen(false)}
-        onImport={handleBatchImport}
+        onImport={async (rows) => {
+          const result = await postAdminUsersBatch(rows);
+          await loadUsers();
+          return result;
+        }}
       />
 
       <EditUserModal
@@ -416,26 +416,6 @@ export default function UserManagement() {
         }}
         onConfirm={handleResetPassword}
       />
-
-      {/* 通知提示 */}
-      {notification && (
-        <div className="fixed bottom-6 right-6 z-50 animate-slide-up">
-          <div
-            className={`px-5 py-3 rounded-lg shadow-lg flex items-center gap-3 ${
-              notification.type === 'success'
-                ? 'bg-green-600 text-white'
-                : 'bg-red-600 text-white'
-            }`}
-          >
-            <i
-              className={`text-xl ${
-                notification.type === 'success' ? 'ri-checkbox-circle-line' : 'ri-error-warning-line'
-              }`}
-            ></i>
-            <span className="text-sm font-medium">{notification.message}</span>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

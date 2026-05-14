@@ -69,3 +69,41 @@ INSERT INTO ai_scene_bindings (scene_code, model_id, is_enabled) VALUES
 
 INSERT INTO ai_prompt_templates (scene_code, template_name, template_content, version_no, is_enabled, created_by) VALUES
   ('default', 'system', '你是面向高校创新创业实训的助手，回答简洁、可执行。', '1.0', true, 1);
+
+-- 学院（独立表；管理端「学院管理」维护，不再使用字典 college）
+INSERT INTO colleges (name, status) VALUES
+  ('计算机科学与技术学院', 'active'),
+  ('经济管理学院', 'active'),
+  ('外国语学院', 'active'),
+  ('数学与统计学院', 'active'),
+  ('教务处', 'active'),
+  ('学生处', 'active');
+
+-- 班级状态（管理端筛选、列表展示；公开接口 typeCode=class_status）
+INSERT INTO dict_type (name, code, status, remark) VALUES
+  ('班级状态', 'class_status', 1, '班级业务状态：待开班/进行中/已结束');
+
+INSERT INTO dict_item (dict_type_id, name, data_key, sort_order, status, remark)
+SELECT t.id, v.name, v.data_key, v.sort_order, 1, NULL
+FROM dict_type t
+CROSS JOIN (
+  VALUES
+    ('待开班', 0, 1),
+    ('进行中', 1, 2),
+    ('已结束', 2, 3)
+) AS v(name, data_key, sort_order)
+WHERE t.code = 'class_status';
+
+-- 学期（公开接口 typeCode=semester；data_key 与业务约定：0 春季、9 秋季）
+INSERT INTO dict_type (name, code, status, remark) VALUES
+  ('学期', 'semester', 1, '春季/秋季学期枚举');
+
+INSERT INTO dict_item (dict_type_id, name, data_key, sort_order, status, remark)
+SELECT t.id, v.name, v.data_key, v.sort_order, 1, NULL
+FROM dict_type t
+CROSS JOIN (
+  VALUES
+    ('春季学期', 0, 1),
+    ('秋季学期', 9, 2)
+) AS v(name, data_key, sort_order)
+WHERE t.code = 'semester';

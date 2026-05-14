@@ -3,6 +3,8 @@ export type UserStatus = 'active' | 'inactive';
 
 export interface User {
   id: string;
+  /** 登录名，与学号/工号一致（管理员为 admin 等）；接口可能返回 */
+  username?: string;
   name: string;
   studentId?: string; // 学号（学生）
   employeeId?: string; // 工号（教师/管理员）

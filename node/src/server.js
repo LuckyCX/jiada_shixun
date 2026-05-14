@@ -6,6 +6,9 @@ import { getPool } from './lib/db.js';
 import { logError } from './lib/logError.js';
 import authRoutes from './routes/auth.js';
 import systemConfigRoutes from './routes/systemConfig.js';
+import dictionaryRoutes from './routes/dictionary.js';
+import adminUsersRoutes from './routes/adminUsers.js';
+import collegesRoutes from './routes/colleges.js';
 
 const app = express();
 
@@ -40,6 +43,9 @@ app.get('/api/health/ready', async (_req, res) => {
 
 app.use('/api/auth', authRoutes);
 app.use('/api', systemConfigRoutes);
+app.use('/api', dictionaryRoutes);
+app.use('/api', collegesRoutes);
+app.use('/api', adminUsersRoutes);
 
 app.use((err, req, res, _next) => {
   logError(`express errorHandler traceId=${req.traceId}`, err);

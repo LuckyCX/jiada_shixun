@@ -748,7 +748,7 @@ export default function SystemConfigPanel() {
     return (
       <ConfigProvider theme={adminTheme}>
         {contextHolder}
-        <div className="min-h-screen bg-gray-50 p-6">
+        <div className="min-h-0 bg-gray-50 p-6">
           <div className="max-w-md mx-auto bg-white rounded-xl border border-gray-200 p-8 shadow-sm">
             <h1 className="text-xl font-bold text-gray-900 mb-1">管理员登录</h1>
             <p className="text-sm text-gray-500 mb-6">登录后可编辑系统配置</p>
@@ -774,7 +774,7 @@ export default function SystemConfigPanel() {
   return (
     <ConfigProvider theme={adminTheme}>
       {contextHolder}
-      <div className="min-h-screen bg-gray-50 ">
+      <div className="min-h-0 bg-gray-50">
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
           <Spin spinning={loading} tip="加载中…">
             <Tabs

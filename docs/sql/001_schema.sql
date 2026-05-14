@@ -83,6 +83,19 @@ CREATE TABLE user_roles (
 -- ---------------------------------------------------------------------------
 -- 组织 · 课程 · 资源
 -- ---------------------------------------------------------------------------
+CREATE TABLE colleges (
+  id          bigserial PRIMARY KEY,
+  name        varchar(128) NOT NULL UNIQUE,
+  status      varchar(32) NOT NULL DEFAULT 'active',
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  updated_at  timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_colleges_status ON colleges (status);
+
+CREATE TRIGGER trg_colleges_updated_at BEFORE UPDATE ON colleges
+  FOR EACH ROW EXECUTE PROCEDURE trg_set_updated_at();
+
 CREATE TABLE classes (
   id            bigserial PRIMARY KEY,
   name          varchar(128) NOT NULL,
@@ -90,11 +103,14 @@ CREATE TABLE classes (
   academic_year varchar(32),
   semester      varchar(32),
   department    varchar(128),
+  college_id    bigint REFERENCES colleges (id) ON DELETE SET NULL,
   teacher_id    bigint REFERENCES users (id) ON DELETE SET NULL,
   status        varchar(32) NOT NULL DEFAULT 'active',
   created_at    timestamptz NOT NULL DEFAULT now(),
   updated_at    timestamptz NOT NULL DEFAULT now()
 );
+
+CREATE INDEX idx_classes_college_id ON classes (college_id);
 
 CREATE TRIGGER trg_classes_updated_at BEFORE UPDATE ON classes
   FOR EACH ROW EXECUTE PROCEDURE trg_set_updated_at();
@@ -777,4 +793,41 @@ ALTER TABLE submission_attachments
   FOREIGN KEY (file_id) REFERENCES files (id) ON DELETE SET NULL;
 
 CREATE TRIGGER trg_system_config_updated_at BEFORE UPDATE ON system_config
+  FOR EACH ROW EXECUTE PROCEDURE trg_set_updated_at();
+
+-- ---------------------------------------------------------------------------
+-- 数据字典（一级类型 + 二级项，管理端维护；业务通过 code 引用类型）
+-- ---------------------------------------------------------------------------
+CREATE TABLE dict_type (
+  id          bigserial PRIMARY KEY,
+  name        varchar(128) NOT NULL,
+  code        varchar(64) NOT NULL UNIQUE,
+  status      smallint NOT NULL DEFAULT 1,
+  remark      text,
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  updated_at  timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_dict_type_status ON dict_type (status);
+
+CREATE TABLE dict_item (
+  id              bigserial PRIMARY KEY,
+  dict_type_id   bigint NOT NULL REFERENCES dict_type (id) ON DELETE CASCADE,
+  name            varchar(256) NOT NULL,
+  data_key        integer NOT NULL,
+  sort_order      integer NOT NULL DEFAULT 0,
+  status          smallint NOT NULL DEFAULT 1,
+  remark          text,
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  updated_at      timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (dict_type_id, data_key)
+);
+
+CREATE INDEX idx_dict_item_type ON dict_item (dict_type_id);
+CREATE INDEX idx_dict_item_type_sort ON dict_item (dict_type_id, sort_order, id);
+
+CREATE TRIGGER trg_dict_type_updated_at BEFORE UPDATE ON dict_type
+  FOR EACH ROW EXECUTE PROCEDURE trg_set_updated_at();
+
+CREATE TRIGGER trg_dict_item_updated_at BEFORE UPDATE ON dict_item
   FOR EACH ROW EXECUTE PROCEDURE trg_set_updated_at();
