@@ -27,7 +27,7 @@ router.post('/login', async (req, res) => {
       return res.status(401).json({ code: 40103, message: '账号或密码错误', data: null, traceId: req.traceId });
     }
     const sec = await getConfigValue('security');
-    const accessTtl = sec?.jwt?.accessTtlSec ?? 900;
+    const accessTtl = sec?.jwt?.accessTtlSec ?? 43200;
     const secret = await getJwtSecret();
     const token = jwt.sign(
       { sub: String(u.id), username: u.username, role: u.role },

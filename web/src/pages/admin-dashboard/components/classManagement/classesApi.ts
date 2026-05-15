@@ -10,9 +10,10 @@ export type AdminClassListRow = {
   department: string;
   status: string;
   createdAt: string;
-  teacherId: string;
-  teacherName: string;
-  teacherEmail: string;
+  /** 历史字段，管理端班级列表不再展示任课教师 */
+  teacherId?: string;
+  teacherName?: string;
+  teacherEmail?: string;
   studentCount: number;
 };
 

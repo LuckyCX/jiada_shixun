@@ -1,4 +1,4 @@
-import { ADMIN_TOKEN_KEY } from '../../../../lib/authApi';
+import { ADMIN_TOKEN_KEY, redirectAdminSessionExpired } from '../../../../lib/authApi';
 
 export type DictTypeRow = {
   id: number;
@@ -35,8 +35,12 @@ export async function adminFetch(path: string, opts: RequestInit = {}) {
   if (token) headers.Authorization = `Bearer ${token}`;
   const r = await fetch(`${apiBase()}${path}`, { ...opts, headers });
   const j = await r.json().catch(() => ({ code: -1, message: '无效 JSON' }));
+  if (r.status === 401 || j.code === 40101 || j.code === 40102) {
+    redirectAdminSessionExpired();
+    throw new Error(typeof j.message === 'string' ? j.message : '登录已失效，请返回首页重新以管理员登录');
+  }
   if (!r.ok || j.code !== 0) {
-    throw new Error(j.message || `HTTP ${r.status}`);
+    throw new Error(typeof j.message === 'string' ? j.message : `HTTP ${r.status}`);
   }
   return j.data;
 }

@@ -62,9 +62,16 @@ export default function CollegeManagement() {
     {
       title: '操作',
       key: 'actions',
-      width: 200,
+      width: 280,
       render: (_, row) => (
         <Space>
+          <Button
+            type="link"
+            className="!text-teal-600 !p-0"
+            onClick={() => navigate(`/admin-dashboard?tab=college-teachers&collegeId=${row.id}`)}
+          >
+            教师管理
+          </Button>
           <Button
             type="link"
             className="!text-teal-600 !p-0"
@@ -96,8 +103,6 @@ export default function CollegeManagement() {
     <div className="min-h-0 bg-gray-50">
       <div className="bg-white rounded-xl border border-gray-200 p-6 mb-4 flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h2 className="text-lg font-semibold text-gray-900">学院管理</h2>
-          <p className="text-sm text-gray-500 mt-1">在此维护学院；学院不再从「字典管理」中配置。</p>
         </div>
         <Button type="primary" className="!bg-teal-600" onClick={() => setCreateOpen(true)}>
           新建学院

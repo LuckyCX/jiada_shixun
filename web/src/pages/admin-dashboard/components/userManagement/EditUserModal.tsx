@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { Select } from 'antd';
+import { useEffect, useState } from 'react';
+import { Button, Form, Input, Select } from 'antd';
 import { User, UserRole } from './types';
 import { useCollegeDictOptions } from './useCollegeDictOptions';
 import { fetchAdminClasses, type AdminClassOption } from './adminUsersApi';
@@ -9,27 +9,46 @@ interface EditUserModalProps {
   user: User | null;
   onClose: () => void;
   onSubmit: (userId: string, userData: Record<string, unknown>) => void | Promise<void>;
+  /** 锁定学院（教师管理二级页） */
+  lockDepartmentId?: string;
+  /** 锁定班级 id（学生管理二级页，仅学生有效） */
+  lockClassId?: string;
+  /** 锁定角色 */
+  lockRole?: 'student' | 'teacher';
 }
 
-export default function EditUserModal({ isOpen, user, onClose, onSubmit }: EditUserModalProps) {
+type EditFormValues = {
+  name: string;
+  idNumber: string;
+  email?: string;
+  department: string;
+  role: UserRole;
+  classId?: string;
+};
+
+export default function EditUserModal({
+  isOpen,
+  user,
+  onClose,
+  onSubmit,
+  lockDepartmentId,
+  lockClassId,
+  lockRole,
+}: EditUserModalProps) {
+  const [form] = Form.useForm<EditFormValues>();
+  const role = Form.useWatch('role', form);
   const { options: deptOptions, loading: deptLoading } = useCollegeDictOptions(isOpen && !!user);
   const [classOptions, setClassOptions] = useState<AdminClassOption[]>([]);
   const [classesLoading, setClassesLoading] = useState(false);
-  const [formData, setFormData] = useState({
-    name: '',
-    idNumber: '',
-    email: '',
-    department: '',
-    role: 'student' as UserRole,
-    classId: '',
-  });
   const [submitting, setSubmitting] = useState(false);
+
+  const isAdmin = user?.role === 'admin';
 
   useEffect(() => {
     if (!isOpen || !user) return;
     let cancelled = false;
     setClassesLoading(true);
-    fetchAdminClasses()
+    fetchAdminClasses(lockDepartmentId || user?.department || undefined)
       .then((rows) => {
         if (!cancelled) setClassOptions(rows);
       })
@@ -42,179 +61,219 @@ export default function EditUserModal({ isOpen, user, onClose, onSubmit }: EditU
     return () => {
       cancelled = true;
     };
-  }, [isOpen, user]);
+  }, [isOpen, user, lockDepartmentId]);
 
   useEffect(() => {
-    if (user) {
-      setFormData({
-        name: user.name,
-        idNumber: user.studentId || user.employeeId || user.username || '',
-        email: user.email || '',
-        department: user.department,
-        role: user.role,
-        classId: user.classId || '',
-      });
-    }
-  }, [user]);
+    if (!user) return;
+    form.setFieldsValue({
+      name: user.name,
+      idNumber: user.studentId || user.employeeId || user.username || '',
+      email: user.email || '',
+      department: user.department,
+      role: user.role,
+      classId: user.classId || undefined,
+    });
+  }, [user, form]);
 
   useEffect(() => {
     if (!deptOptions.length || !user) return;
-    setFormData((fd) => {
-      if (deptOptions.some((o) => o.value === fd.department)) return fd;
-      const byLabel = deptOptions.find((o) => o.label === fd.department);
-      if (byLabel) return { ...fd, department: byLabel.value };
-      return fd;
-    });
-  }, [deptOptions, user]);
+    const dept = form.getFieldValue('department');
+    if (deptOptions.some((o) => o.value === dept)) return;
+    const byLabel = deptOptions.find((o) => o.label === dept);
+    if (byLabel) form.setFieldsValue({ department: byLabel.value });
+  }, [deptOptions, user, form]);
+
+  useEffect(() => {
+    if (role !== 'student') {
+      form.setFieldsValue({ classId: undefined });
+    }
+  }, [role, form]);
 
   if (!isOpen || !user) return null;
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!formData.department.trim()) return;
+  const effectiveRole = lockRole ?? user.role;
+  const modalTitle =
+    effectiveRole === 'admin'
+      ? '编辑管理员信息'
+      : effectiveRole === 'student'
+        ? '编辑学生信息'
+        : '编辑教师信息';
+
+  const handleClose = () => {
+    form.resetFields();
+    onClose();
+  };
+
+  const handleFinish = async (values: EditFormValues) => {
     setSubmitting(true);
     try {
-      await Promise.resolve(onSubmit(user.id, { ...formData }));
+      await Promise.resolve(
+        onSubmit(user.id, {
+          ...values,
+          name: values.name.trim(),
+          idNumber: values.idNumber.trim(),
+          email: values.email != null ? String(values.email).trim() : '',
+          department: (lockDepartmentId ?? String(values.department)).trim(),
+          role: lockRole ?? (isAdmin ? user.role : values.role),
+          classId: lockClassId !== undefined ? lockClassId : (values.classId ?? ''),
+        })
+      );
     } finally {
       setSubmitting(false);
     }
   };
 
-  const isAdmin = user.role === 'admin';
+  const idLabel = role === 'student' ? '学号' : '工号';
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div className="bg-white rounded-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
         <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
-          <h3 className="text-xl font-semibold text-gray-900">编辑用户信息</h3>
+          <h3 className="text-xl font-semibold text-gray-900">{modalTitle}</h3>
           <button
             type="button"
-            onClick={onClose}
+            onClick={handleClose}
             className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-gray-600 transition-colors"
           >
             <i className="ri-close-line text-xl"></i>
           </button>
         </div>
 
-        <form onSubmit={(e) => void handleSubmit(e)} className="p-6 space-y-5">
-          <div className="grid grid-cols-2 gap-5">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                姓名 <span className="text-red-500">*</span>
-              </label>
-              <input
-                type="text"
-                required
-                value={formData.name}
-                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500 focus:border-transparent"
-                placeholder="请输入姓名"
-              />
-            </div>
+        <Form
+          form={form}
+          layout="vertical"
+          className="p-6"
+          onFinish={(v) => void handleFinish(v)}
+          requiredMark={(label, { required }) => (
+            <>
+              {label}
+              {required ? <span className="text-red-500 ml-0.5">*</span> : null}
+            </>
+          )}
+        >
+          <div className="grid grid-cols-2 gap-x-5 gap-y-0">
+            <Form.Item
+              label="姓名"
+              name="name"
+              rules={[
+                { required: true, message: '请输入姓名' },
+                { whitespace: true, message: '姓名不能为空' },
+              ]}
+            >
+              <Input placeholder="请输入姓名" className="!py-2.5" />
+            </Form.Item>
 
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                角色 <span className="text-red-500">*</span>
-              </label>
-              {isAdmin ? (
-                <input
-                  type="text"
-                  disabled
-                  value="管理员"
-                  className="w-full px-4 py-2.5 border border-gray-200 rounded-lg text-sm bg-gray-50 text-gray-600"
+            {isAdmin ? (
+              <Form.Item label="角色">
+                <Input disabled value="管理员" className="!py-2.5" />
+              </Form.Item>
+            ) : lockRole ? (
+              <Form.Item label="角色">
+                <Input disabled value={lockRole === 'student' ? '学生' : '教师'} className="!py-2.5" />
+              </Form.Item>
+            ) : (
+              <Form.Item label="角色" name="role" rules={[{ required: true, message: '请选择角色' }]}>
+                <Select
+                  className="h-[42px]"
+                  options={[
+                    { value: 'student', label: '学生' },
+                    { value: 'teacher', label: '教师' },
+                  ]}
                 />
-              ) : (
-                <select
-                  value={formData.role}
-                  onChange={(e) => setFormData({ ...formData, role: e.target.value as UserRole })}
-                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500 focus:border-transparent"
-                >
-                  <option value="student">学生</option>
-                  <option value="teacher">教师</option>
-                </select>
-              )}
-            </div>
+              </Form.Item>
+            )}
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              {formData.role === 'student' ? '学号' : '工号'} <span className="text-red-500">*</span>
-            </label>
-            <input
-              type="text"
-              required
+          <Form.Item
+            label={idLabel}
+            name="idNumber"
+            rules={[
+              { required: true, message: role === 'student' ? '请输入学号' : '请输入工号' },
+              { whitespace: true, message: role === 'student' ? '学号不能为空' : '工号不能为空' },
+            ]}
+          >
+            <Input
+              placeholder={role === 'student' ? '请输入学号' : '请输入工号'}
+              className="!py-2.5"
               disabled={isAdmin}
-              value={formData.idNumber}
-              onChange={(e) => setFormData({ ...formData, idNumber: e.target.value })}
-              className="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500 focus:border-transparent disabled:bg-gray-50"
-              placeholder={formData.role === 'student' ? '请输入学号' : '请输入工号'}
             />
-          </div>
+          </Form.Item>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">邮箱</label>
-            <input
-              type="text"
-              value={formData.email}
-              onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-              className="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500 focus:border-transparent"
-              placeholder="选填，无邮箱可留空"
-            />
-          </div>
+          <Form.Item
+            label="邮箱"
+            name="email"
+            rules={[
+              {
+                validator: async (_, v) => {
+                  const s = v != null ? String(v).trim() : '';
+                  if (!s) return;
+                  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s)) {
+                    throw new Error('请输入有效的邮箱地址');
+                  }
+                },
+              },
+            ]}
+          >
+            <Input placeholder="选填，无邮箱可留空" className="!py-2.5" />
+          </Form.Item>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              学院 <span className="text-red-500">*</span>
-            </label>
-            <Select
-              className="w-full"
-              placeholder="请选择学院"
-              loading={deptLoading}
-              value={formData.department || undefined}
-              onChange={(v) => setFormData({ ...formData, department: v ?? '' })}
-              options={deptOptions}
-              showSearch
-              optionFilterProp="label"
-            />
-          </div>
+          <Form.Item label="学院" name="department" rules={[{ required: true, message: '请选择学院' }]}>
+            {lockDepartmentId ? (
+              <Select
+                className="h-[42px]"
+                disabled
+                loading={deptLoading}
+                options={deptOptions}
+                value={lockDepartmentId}
+              />
+            ) : (
+              <Select
+                className="h-[42px]"
+                placeholder="请选择学院"
+                loading={deptLoading}
+                options={deptOptions}
+                showSearch
+                optionFilterProp="label"
+                allowClear
+              />
+            )}
+          </Form.Item>
 
-          {formData.role === 'student' && !isAdmin && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">班级分配</label>
-              <select
-                value={formData.classId}
-                disabled={classesLoading}
-                onChange={(e) => setFormData({ ...formData, classId: e.target.value })}
-                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500 focus:border-transparent"
-              >
-                <option value="">未分配班级</option>
-                {classOptions.map((cls) => (
-                  <option key={cls.id} value={cls.id}>
-                    {cls.name}
-                  </option>
-                ))}
-              </select>
-            </div>
+          {role === 'student' && !isAdmin && lockClassId === undefined && (
+            <Form.Item label="班级分配" name="classId">
+              <Select
+                className="h-[42px]"
+                placeholder="未分配班级"
+                loading={classesLoading}
+                allowClear
+                options={classOptions.map((cls) => ({ value: cls.id, label: cls.name }))}
+                showSearch
+                optionFilterProp="label"
+              />
+            </Form.Item>
+          )}
+          {role === 'student' && !isAdmin && lockClassId !== undefined && (
+            <Form.Item label="班级">
+              <Input disabled className="!py-2.5" value={classOptions.find((c) => c.id === lockClassId)?.name ?? `班级 #${lockClassId}`} />
+            </Form.Item>
           )}
 
           <div className="flex gap-3 pt-4 border-t border-gray-200">
-            <button
-              type="button"
-              onClick={onClose}
-              disabled={submitting}
-              className="flex-1 px-4 py-2.5 border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50 transition-colors whitespace-nowrap disabled:opacity-50"
-            >
+            <Button type="default" block size="large" onClick={handleClose} disabled={submitting} className="!h-[42px]">
               取消
-            </button>
-            <button
-              type="submit"
-              disabled={submitting}
-              className="flex-1 px-4 py-2.5 bg-teal-600 text-white rounded-lg font-medium hover:bg-teal-700 transition-colors whitespace-nowrap disabled:opacity-50"
+            </Button>
+            <Button
+              type="primary"
+              block
+              size="large"
+              htmlType="submit"
+              loading={submitting}
+              className="!h-[42px] !bg-teal-600 hover:!bg-teal-700"
             >
-              {submitting ? '保存中…' : '保存修改'}
-            </button>
+              保存修改
+            </Button>
           </div>
-        </form>
+        </Form>
       </div>
     </div>
   );

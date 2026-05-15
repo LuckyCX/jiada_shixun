@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import { Input, Select, Space, message } from 'antd';
-import { Class, Student, Teacher } from './types';
+import { useSearchParams, useNavigate } from 'react-router-dom';
+import { Button, Input, Select, Space, message } from 'antd';
+import { Class, Student } from './types';
 import type { User } from '../userManagement/types';
 import { useCollegeDictOptions } from '../userManagement/useCollegeDictOptions';
 import { usePublicDictOptions } from './usePublicDictOptions';
@@ -18,7 +18,6 @@ import type { CreateClassFormValues } from './CreateClassModal';
 import EditClassModal from './EditClassModal';
 import DeleteClassModal from './DeleteClassModal';
 import ClassDetailModal from './ClassDetailModal';
-import AssignTeacherModal from './AssignTeacherModal';
 
 function mapClassRow(r: AdminClassListRow): Class {
   const cid = r.collegeId || '';
@@ -31,15 +30,10 @@ function mapClassRow(r: AdminClassListRow): Class {
     department: cid,
     academicYear: r.academicYear,
     semester: r.semester,
-    teacher: { id: r.teacherId, name: r.teacherName || '-', email: r.teacherEmail || '' },
     studentCount: r.studentCount,
     status: st,
     createdAt: r.createdAt,
   };
-}
-
-function userToTeacher(u: User): Teacher {
-  return { id: u.id, name: u.name, email: u.email || '', department: u.department };
 }
 
 function userToStudent(u: User): Student {
@@ -55,11 +49,10 @@ function userToStudent(u: User): Student {
 
 export default function ClassManagement() {
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
   const [classes, setClasses] = useState<Class[]>([]);
-  const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [detailStudents, setDetailStudents] = useState<Student[]>([]);
   const [listLoading, setListLoading] = useState(true);
-  const [teachersLoading, setTeachersLoading] = useState(false);
 
   const { options: collegeOptions, loading: collegeLoading, labelByValue: deptLabel } = useCollegeDictOptions(true);
   const { options: classStatusOptions, loading: classStatusLoading, labelByValue: classStatusLabel } =
@@ -75,7 +68,6 @@ export default function ClassManagement() {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showDetailModal, setShowDetailModal] = useState(false);
   const [selectedClass, setSelectedClass] = useState<Class | null>(null);
-  const [assignTeacherClass, setAssignTeacherClass] = useState<Class | null>(null);
 
   const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
@@ -97,25 +89,9 @@ export default function ClassManagement() {
     }
   }, [collegeIdFilter]);
 
-  const loadTeachers = useCallback(async () => {
-    setTeachersLoading(true);
-    try {
-      const data = await fetchAdminUsers({ page: 1, pageSize: 100, role: 'teacher', status: 'active' });
-      setTeachers(data.list.map(userToTeacher));
-    } catch {
-      setTeachers([]);
-    } finally {
-      setTeachersLoading(false);
-    }
-  }, []);
-
   useEffect(() => {
     void loadClasses();
   }, [loadClasses]);
-
-  useEffect(() => {
-    void loadTeachers();
-  }, [loadTeachers]);
 
   const loadDetailStudents = useCallback(async (classId: string) => {
     try {
@@ -133,11 +109,8 @@ export default function ClassManagement() {
   }, []);
 
   const filteredClasses = classes.filter((cls) => {
-    const teacherName = cls.teacher.name === '-' ? '' : cls.teacher.name;
     const matchSearch =
-      cls.name.includes(searchKeyword) ||
-      cls.code.includes(searchKeyword) ||
-      (teacherName && teacherName.includes(searchKeyword));
+      cls.name.includes(searchKeyword) || cls.code.includes(searchKeyword);
     const matchCollege = !collegeIdFilter || cls.collegeId === collegeIdFilter;
     const matchStatus = !statusFilter || cls.status === statusFilter;
     return matchSearch && matchCollege && matchStatus;
@@ -146,7 +119,6 @@ export default function ClassManagement() {
   const totalClasses = classes.length;
   const activeClasses = classes.filter((c) => c.status === '1').length;
   const totalStudents = classes.reduce((s, c) => s + c.studentCount, 0);
-  const totalTeachers = new Set(classes.map((c) => c.teacher.id).filter((id) => id && id !== '')).size;
 
   const showNotification = (msg: string, type: 'success' | 'error' = 'success') => {
     setNotification({ message: msg, type });
@@ -209,32 +181,6 @@ export default function ClassManagement() {
     }
   };
 
-  const handleChangeTeacher = async (teacherId: string) => {
-    if (!selectedClass) return;
-    try {
-      await updateAdminClass(selectedClass.id, { teacherId });
-      showNotification('教师已更换');
-      setShowDetailModal(false);
-      setSelectedClass(null);
-      await loadClasses();
-    } catch (e: unknown) {
-      message.error(e instanceof Error ? e.message : '更换失败');
-    }
-  };
-
-  const handleAssignTeacherSubmit = async (teacherId: string) => {
-    if (!assignTeacherClass) return;
-    try {
-      await updateAdminClass(assignTeacherClass.id, { teacherId });
-      message.success('已保存任课教师');
-      setAssignTeacherClass(null);
-      await loadClasses();
-    } catch (e: unknown) {
-      message.error(e instanceof Error ? e.message : '保存失败');
-      throw e;
-    }
-  };
-
   const collegeNameForClass = (cls: Class | null) => {
     if (!cls) return '';
     return deptLabel(cls.collegeId);
@@ -242,7 +188,7 @@ export default function ClassManagement() {
 
   return (
     <div className="min-h-0 bg-gray-50">
-      <div className="grid grid-cols-4 gap-6 mb-6">
+      <div className="grid grid-cols-3 gap-6 mb-6">
         <div className="bg-white rounded-xl p-6 border border-gray-200">
           <div className="flex items-center justify-between">
             <div>
@@ -278,18 +224,6 @@ export default function ClassManagement() {
             </div>
           </div>
         </div>
-
-        <div className="bg-white rounded-xl p-6 border border-gray-200">
-          <div className="flex items-center justify-between">
-            <div>
-              <div className="text-sm text-gray-600 mb-1">任课教师（去重）</div>
-              <div className="text-3xl font-bold text-gray-900">{totalTeachers}</div>
-            </div>
-            <div className="w-12 h-12 bg-orange-100 rounded-full flex items-center justify-center">
-              <i className="ri-user-star-line text-2xl text-orange-600"></i>
-            </div>
-          </div>
-        </div>
       </div>
 
       <div className="bg-white rounded-xl p-6 mb-6 border border-gray-200">
@@ -298,7 +232,7 @@ export default function ClassManagement() {
             allowClear
             className="flex-1 min-w-[200px] max-w-xl"
             prefix={<i className="ri-search-line text-gray-400" />}
-            placeholder="搜索班级名称、编码或教师姓名"
+            placeholder="搜索班级名称或编码"
             value={searchKeyword}
             onChange={(e) => setSearchKeyword(e.target.value)}
           />
@@ -342,7 +276,6 @@ export default function ClassManagement() {
             <tr>
               <th className="px-6 py-4 text-left text-sm font-semibold text-gray-900">班级名称</th>
               <th className="px-6 py-4 text-left text-sm font-semibold text-gray-900">所属学院</th>
-              <th className="px-6 py-4 text-left text-sm font-semibold text-gray-900">指派教师</th>
               <th className="px-6 py-4 text-left text-sm font-semibold text-gray-900">学生人数</th>
               <th className="px-6 py-4 text-left text-sm font-semibold text-gray-900">创建时间</th>
               <th className="px-6 py-4 text-left text-sm font-semibold text-gray-900">状态</th>
@@ -352,13 +285,13 @@ export default function ClassManagement() {
           <tbody className="divide-y divide-gray-200">
             {listLoading ? (
               <tr>
-                <td colSpan={8} className="px-6 py-12 text-center text-gray-500">
+                <td colSpan={6} className="px-6 py-12 text-center text-gray-500">
                   加载中…
                 </td>
               </tr>
             ) : filteredClasses.length === 0 ? (
               <tr>
-                <td colSpan={8} className="px-6 py-12 text-center text-gray-500">
+                <td colSpan={6} className="px-6 py-12 text-center text-gray-500">
                   暂无班级数据
                 </td>
               </tr>
@@ -372,16 +305,6 @@ export default function ClassManagement() {
                     </div>
                   </td>
                   <td className="px-6 py-4 text-gray-700 font-mono text-sm">{deptLabel(cls.collegeId)}</td>
-                  <td className="px-6 py-4">
-                    {cls.teacher.id && cls.teacher.name !== '-' ? (
-                      <>
-                        <div className="font-medium text-gray-900">{cls.teacher.name}</div>
-                        <div className="text-sm text-gray-600">{cls.teacher.email}</div>
-                      </>
-                    ) : (
-                      <span className="text-sm text-gray-400">未指派</span>
-                    )}
-                  </td>
                   <td className="px-6 py-4">
                     <span className="text-teal-600 font-semibold">{cls.studentCount}</span>
                     <span className="text-gray-600"> 人</span>
@@ -401,52 +324,43 @@ export default function ClassManagement() {
                     </span>
                   </td>
                   <td className="px-6 py-4">
-                    <div className="flex items-center gap-1 flex-wrap">
-                      <button
-                        type="button"
+                    <Space size="small" wrap>
+                      <Button
+                        type="link"
+                        className="!px-0"
                         onClick={() => {
-                          setSelectedClass(cls);
-                          void loadDetailStudents(cls.id);
-                          setShowDetailModal(true);
+                          const q = new URLSearchParams();
+                          q.set('tab', 'class-students');
+                          q.set('classId', cls.id);
+                          q.set('collegeId', cls.collegeId);
+                          q.set('className', encodeURIComponent(cls.name));
+                          navigate(`/admin-dashboard?${q.toString()}`);
                         }}
-                        className="p-2 text-teal-600 hover:bg-teal-50 rounded-lg"
-                        title="查看详情"
                       >
-                        <i className="ri-eye-line text-lg"></i>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setAssignTeacherClass(cls);
-                        }}
-                        className="p-2 text-violet-600 hover:bg-violet-50 rounded-lg"
-                        title="指派教师"
-                      >
-                        <i className="ri-user-add-line text-lg"></i>
-                      </button>
-                      <button
-                        type="button"
+                        学生管理
+                      </Button>
+                      <Button
+                        type="link"
+                        className="!px-0"
                         onClick={() => {
                           setSelectedClass(cls);
                           setShowEditModal(true);
                         }}
-                        className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg"
-                        title="编辑"
                       >
-                        <i className="ri-edit-line text-lg"></i>
-                      </button>
-                      <button
-                        type="button"
+                        编辑
+                      </Button>
+                      <Button
+                        type="link"
+                        danger
+                        className="!px-0"
                         onClick={() => {
                           setSelectedClass(cls);
                           setShowDeleteModal(true);
                         }}
-                        className="p-2 text-red-600 hover:bg-red-50 rounded-lg"
-                        title="删除"
                       >
-                        <i className="ri-delete-bin-line text-lg"></i>
-                      </button>
-                    </div>
+                        删除
+                      </Button>
+                    </Space>
                   </td>
                 </tr>
               ))
@@ -471,15 +385,6 @@ export default function ClassManagement() {
         classData={selectedClass}
       />
 
-      <AssignTeacherModal
-        open={!!assignTeacherClass}
-        classData={assignTeacherClass}
-        teachers={teachers}
-        teachersLoading={teachersLoading}
-        onClose={() => setAssignTeacherClass(null)}
-        onSubmit={(id) => void handleAssignTeacherSubmit(id)}
-      />
-
       <DeleteClassModal
         isOpen={showDeleteModal}
         onClose={() => {
@@ -499,9 +404,6 @@ export default function ClassManagement() {
         classData={selectedClass}
         collegeName={collegeNameForClass(selectedClass)}
         enrolledStudents={detailStudents}
-        teachers={teachers}
-        teacherDeptLabel={deptLabel}
-        onChangeTeacher={(id) => void handleChangeTeacher(id)}
       />
 
       {notification && (

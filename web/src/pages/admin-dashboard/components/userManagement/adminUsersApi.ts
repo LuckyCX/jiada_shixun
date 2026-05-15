@@ -36,6 +36,8 @@ export async function fetchAdminUsers(params: {
   role?: UserRole | '' | 'all';
   status?: UserStatus | '' | 'all';
   classId?: string;
+  /** 与 colleges.id 一致，筛选 users.department */
+  collegeId?: string;
 }): Promise<AdminUsersPage> {
   const q = new URLSearchParams();
   q.set('page', String(params.page ?? 1));
@@ -44,6 +46,7 @@ export async function fetchAdminUsers(params: {
   if (params.role && params.role !== 'all') q.set('role', params.role);
   if (params.status && params.status !== 'all') q.set('status', params.status);
   if (params.classId?.trim()) q.set('classId', params.classId.trim());
+  if (params.collegeId?.trim()) q.set('collegeId', params.collegeId.trim());
   return adminFetch(`/api/admin/users?${q}`);
 }
 

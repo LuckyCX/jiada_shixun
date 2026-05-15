@@ -1,4 +1,4 @@
-import { Class, Student, Teacher } from './types';
+import { Class, Student } from './types';
 
 /** 院系 college / 学期 semester / 状态 class_status 均存 dict 的 data_key 字符串 */
 export const mockClasses: Class[] = [
@@ -10,11 +10,6 @@ export const mockClasses: Class[] = [
     department: '1',
     academicYear: '2023-2024',
     semester: '0',
-    teacher: {
-      id: 'teacher-001',
-      name: '张教授',
-      email: 'zhang@university.edu',
-    },
     studentCount: 45,
     status: '1',
     createdAt: '2024-02-15',
@@ -27,11 +22,6 @@ export const mockClasses: Class[] = [
     department: '2',
     academicYear: '2023-2024',
     semester: '0',
-    teacher: {
-      id: 'teacher-002',
-      name: '李老师',
-      email: 'li@university.edu',
-    },
     studentCount: 38,
     status: '1',
     createdAt: '2024-02-20',
@@ -44,11 +34,6 @@ export const mockClasses: Class[] = [
     department: '4',
     academicYear: '2023-2024',
     semester: '0',
-    teacher: {
-      id: 'teacher-003',
-      name: '王副教授',
-      email: 'wang@university.edu',
-    },
     studentCount: 32,
     status: '1',
     createdAt: '2024-02-18',
@@ -61,11 +46,6 @@ export const mockClasses: Class[] = [
     department: '1',
     academicYear: '2023-2024',
     semester: '9',
-    teacher: {
-      id: 'teacher-001',
-      name: '张教授',
-      email: 'zhang@university.edu',
-    },
     studentCount: 42,
     status: '2',
     createdAt: '2023-09-10',
@@ -78,11 +58,6 @@ export const mockClasses: Class[] = [
     department: '2',
     academicYear: '2023-2024',
     semester: '0',
-    teacher: {
-      id: 'teacher-004',
-      name: '赵老师',
-      email: 'zhao@university.edu',
-    },
     studentCount: 40,
     status: '1',
     createdAt: '2024-02-22',
@@ -95,11 +70,6 @@ export const mockClasses: Class[] = [
     department: '3',
     academicYear: '2023-2024',
     semester: '0',
-    teacher: {
-      id: 'teacher-005',
-      name: '刘教授',
-      email: 'liu@university.edu',
-    },
     studentCount: 35,
     status: '0',
     createdAt: '2024-02-25',
@@ -127,15 +97,4 @@ export const mockStudents: Student[] = [
   { id: 'stu-018', name: '马俊杰', studentId: '2021018', email: 'ma@student.edu', status: 'active' },
   { id: 'stu-019', name: '胡晓敏', studentId: '2021019', email: 'hu@student.edu', status: 'active' },
   { id: 'stu-020', name: '郭强', studentId: '2021020', email: 'guo@student.edu', status: 'active' },
-];
-
-export const mockTeachers: Teacher[] = [
-  { id: 'teacher-001', name: '张教授', email: 'zhang@university.edu', department: '1' },
-  { id: 'teacher-002', name: '李老师', email: 'li@university.edu', department: '2' },
-  { id: 'teacher-003', name: '王副教授', email: 'wang@university.edu', department: '4' },
-  { id: 'teacher-004', name: '赵老师', email: 'zhao@university.edu', department: '2' },
-  { id: 'teacher-005', name: '刘教授', email: 'liu@university.edu', department: '3' },
-  { id: 'teacher-006', name: '陈老师', email: 'chent@university.edu', department: '1' },
-  { id: 'teacher-007', name: '杨副教授', email: 'yang@university.edu', department: '2' },
-  { id: 'teacher-008', name: '周老师', email: 'zhout@university.edu', department: '4' },
 ];

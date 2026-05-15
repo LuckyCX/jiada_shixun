@@ -38,15 +38,39 @@ export async function invalidateConfigCache() {
 
 /**
  * Merge patch into base; string '********' means keep base value (masked secret from UI).
+ * Arrays merge by element `id` when present, else by index (so nested secrets in `providers[]` survive PATCH).
  */
 function mergeSkipMasked(base, patch) {
   if (patch === null || patch === undefined) return base;
-  if (typeof patch !== 'object' || Array.isArray(patch)) return patch;
-  const out = { ...base };
+  if (Array.isArray(patch)) {
+    if (!Array.isArray(base)) return patch;
+    const baseById = new Map(
+      base
+        .filter((x) => x && typeof x === 'object' && !Array.isArray(x) && x.id != null)
+        .map((x) => [String(x.id), x])
+    );
+    return patch.map((item, i) => {
+      if (item === null || item === undefined) return item;
+      if (typeof item !== 'object' || Array.isArray(item)) return item;
+      const id = item.id != null ? String(item.id) : '';
+      if (id && baseById.has(id)) return mergeSkipMasked(baseById.get(id), item);
+      if (base[i] && typeof base[i] === 'object' && !Array.isArray(base[i])) return mergeSkipMasked(base[i], item);
+      return item;
+    });
+  }
+  if (typeof patch !== 'object') return patch;
+  const safeBase = base && typeof base === 'object' && !Array.isArray(base) ? base : {};
+  const out = { ...safeBase };
   for (const [k, v] of Object.entries(patch)) {
     if (v === '********') continue;
-    if (typeof v === 'object' && v !== null && !Array.isArray(v) && typeof out[k] === 'object' && out[k] !== null) {
-      out[k] = mergeSkipMasked(out[k], v);
+    if (Array.isArray(v)) {
+      out[k] = mergeSkipMasked(Array.isArray(out[k]) ? out[k] : [], v);
+    } else if (typeof v === 'object' && v !== null) {
+      const prev = out[k];
+      out[k] = mergeSkipMasked(
+        prev && typeof prev === 'object' && !Array.isArray(prev) ? prev : {},
+        v
+      );
     } else {
       out[k] = v;
     }

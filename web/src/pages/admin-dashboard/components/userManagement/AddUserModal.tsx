@@ -7,6 +7,10 @@ interface AddUserModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSubmit: (userData: any) => void;
+  /** 锁定角色（学院教师 / 班级学生二级页） */
+  fixedRole?: 'student' | 'teacher';
+  /** 锁定学院 colleges.id */
+  fixedDepartmentId?: string;
 }
 
 /** 新建/导入统一规则：学号或工号的后 6 位作为初始密码（不足 6 位则取全部） */
@@ -16,7 +20,7 @@ export function initialPasswordFromIdNumber(idNumber: string): string {
   return s.slice(-6);
 }
 
-export default function AddUserModal({ isOpen, onClose, onSubmit }: AddUserModalProps) {
+export default function AddUserModal({ isOpen, onClose, onSubmit, fixedRole, fixedDepartmentId }: AddUserModalProps) {
   const [form] = Form.useForm<{ name: string; role: UserRole; idNumber: string; email?: string; department: string }>();
   const role = Form.useWatch('role', form);
   const idNumber = Form.useWatch('idNumber', form) ?? '';
@@ -25,8 +29,12 @@ export default function AddUserModal({ isOpen, onClose, onSubmit }: AddUserModal
   useEffect(() => {
     if (isOpen) {
       form.resetFields();
+      const init: Partial<{ role: UserRole; department: string }> = {};
+      if (fixedRole) init.role = fixedRole;
+      if (fixedDepartmentId) init.department = fixedDepartmentId;
+      if (Object.keys(init).length) form.setFieldsValue(init);
     }
-  }, [isOpen, form]);
+  }, [isOpen, form, fixedRole, fixedDepartmentId]);
 
   if (!isOpen) return null;
 
@@ -43,10 +51,14 @@ export default function AddUserModal({ isOpen, onClose, onSubmit }: AddUserModal
     department: string;
   }) => {
     const id = values.idNumber.trim();
+    const effRole = (fixedRole ?? values.role) as UserRole;
+    const effDept = fixedDepartmentId ?? values.department;
     try {
       await Promise.resolve(
         onSubmit({
           ...values,
+          role: effRole,
+          department: effDept,
           name: values.name.trim(),
           idNumber: id,
           email: values.email != null ? String(values.email).trim() : '',
@@ -59,7 +71,7 @@ export default function AddUserModal({ isOpen, onClose, onSubmit }: AddUserModal
     }
   };
 
-  const idLabel = role === 'student' ? '学号' : '工号';
+  const idLabel = (fixedRole ?? role) === 'student' ? '学号' : '工号';
   const defaultPwd = initialPasswordFromIdNumber(idNumber);
 
   return (
@@ -80,7 +92,7 @@ export default function AddUserModal({ isOpen, onClose, onSubmit }: AddUserModal
           form={form}
           layout="vertical"
           className="p-6"
-          initialValues={{ role: 'student' as UserRole }}
+          initialValues={{ role: (fixedRole ?? 'student') as UserRole }}
           onFinish={handleFinish}
           requiredMark={(label, { required }) => (
             <>
@@ -101,26 +113,36 @@ export default function AddUserModal({ isOpen, onClose, onSubmit }: AddUserModal
               <Input placeholder="请输入姓名" className="!py-2.5" />
             </Form.Item>
 
-            <Form.Item label="角色" name="role" rules={[{ required: true, message: '请选择角色' }]}>
-              <Select
-                className="h-[42px]"
-                options={[
-                  { value: 'student', label: '学生' },
-                  { value: 'teacher', label: '教师' },
-                ]}
-              />
-            </Form.Item>
+            {fixedRole ? (
+              <Form.Item label="角色">
+                <Input
+                  disabled
+                  className="!py-2.5"
+                  value={fixedRole === 'student' ? '学生' : '教师'}
+                />
+              </Form.Item>
+            ) : (
+              <Form.Item label="角色" name="role" rules={[{ required: true, message: '请选择角色' }]}>
+                <Select
+                  className="h-[42px]"
+                  options={[
+                    { value: 'student', label: '学生' },
+                    { value: 'teacher', label: '教师' },
+                  ]}
+                />
+              </Form.Item>
+            )}
           </div>
 
           <Form.Item
             label={idLabel}
             name="idNumber"
             rules={[
-              { required: true, message: role === 'student' ? '请输入学号' : '请输入工号' },
-              { whitespace: true, message: role === 'student' ? '学号不能为空' : '工号不能为空' },
+              { required: true, message: (fixedRole ?? role) === 'student' ? '请输入学号' : '请输入工号' },
+              { whitespace: true, message: (fixedRole ?? role) === 'student' ? '学号不能为空' : '工号不能为空' },
             ]}
           >
-            <Input placeholder={role === 'student' ? '请输入学号' : '请输入工号'} className="!py-2.5" />
+            <Input placeholder={(fixedRole ?? role) === 'student' ? '请输入学号' : '请输入工号'} className="!py-2.5" />
           </Form.Item>
 
           <Form.Item
@@ -142,15 +164,24 @@ export default function AddUserModal({ isOpen, onClose, onSubmit }: AddUserModal
           </Form.Item>
 
           <Form.Item label="学院" name="department" rules={[{ required: true, message: '请选择学院' }]}>
-            <Select
-              className="h-[42px]"
-              placeholder="请选择学院"
-              loading={deptLoading}
-              options={deptOptions}
-              showSearch
-              optionFilterProp="label"
-              allowClear
-            />
+            {fixedDepartmentId ? (
+              <Select
+                className="h-[42px]"
+                disabled
+                options={deptOptions}
+                value={fixedDepartmentId}
+              />
+            ) : (
+              <Select
+                className="h-[42px]"
+                placeholder="请选择学院"
+                loading={deptLoading}
+                options={deptOptions}
+                showSearch
+                optionFilterProp="label"
+                allowClear
+              />
+            )}
           </Form.Item>
 
           <div className="mb-6">

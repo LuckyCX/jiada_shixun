@@ -35,7 +35,7 @@ WHERE u.username = 'admin' AND r.code = 'admin';
 
 INSERT INTO system_config (config_key, config_value, description, updated_by) VALUES
   ('site', '{"siteTitle":"大学生创业实训平台","logoUrl":""}'::jsonb, '站点与品牌（Logo 建议 128×128，由管理端上传）', 1),
-  ('security', '{"jwt":{"accessTtlSec":900,"refreshTtlSec":604800,"issuer":"jiada-shixun","secret":"CHANGE_ME_IN_ADMIN_UI_USE_LONG_RANDOM_SECRET_DEV_ONLY"},"passwordMinLength":8}'::jsonb, 'JWT 与会话策略；secret 请在管理端修改后保存', 1),
+  ('security', '{"jwt":{"accessTtlSec":43200,"refreshTtlSec":604800,"issuer":"jiada-shixun","secret":"CHANGE_ME_IN_ADMIN_UI_USE_LONG_RANDOM_SECRET_DEV_ONLY"},"passwordMinLength":8}'::jsonb, 'JWT 与会话策略；accessTtlSec 为访问令牌秒数（默认 12h）；secret 请在管理端修改后保存', 1),
   ('upload', '{"maxSizeMb":50,"allowedExtensions":["pdf","doc","docx","ppt","pptx","png","jpg","zip"]}'::jsonb, '上传策略', 1),
   ('smtp_config', '{"host":"","port":465,"secure":true,"user":"","pass":"","from":""}'::jsonb, 'SMTP 邮件（在后台填写后保存；与常见 QQ 配置一致默认 465+SSL）', 1),
   (
@@ -51,7 +51,13 @@ INSERT INTO system_config (config_key, config_value, description, updated_by) VA
     1
   ),
   ('ai_global', '{"defaultTimeoutMs":60000,"maxRetries":2,"logSampleRate":1.0,"rateLimitPerUserPerMinute":60}'::jsonb, 'AI 全局：超时、重试、采样、限流', 1),
-  ('rtc_config', '{}'::jsonb, '实时音视频/RTC 扩展占位（本期可不启用）', 1);
+  ('rtc_config', '{}'::jsonb, '实时音视频/RTC 扩展占位（本期可不启用）', 1),
+  (
+    'llm_gateway_config',
+    '{"providers":[]}'::jsonb,
+    '管理端：多厂商 OpenAI 兼容大模型（多模态 / 文件处理）；同类型仅允许一条启用',
+    1
+  );
 
 INSERT INTO ai_providers (provider_code, provider_name, base_url, auth_type, status) VALUES
   ('volcengine', '火山引擎', 'https://ark.cn-beijing.volces.com', 'bearer', 'disabled');

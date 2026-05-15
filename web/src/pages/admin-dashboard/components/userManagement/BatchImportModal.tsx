@@ -9,9 +9,19 @@ interface BatchImportModalProps {
   isOpen: boolean;
   onClose: () => void;
   onImport: (rows: BatchImportRow[]) => Promise<ImportResult>;
+  /** 锁定学院 id，禁用学院选择 */
+  lockedCollegeId?: string;
+  /** 锁定班级 id（学生行入班）；教师批量时可不设 */
+  lockedClassId?: string;
+  /** 锁定导入角色：教师/学生页不写 CSV「角色」列，由本页场景自动写入身份 */
+  lockedRole?: 'student' | 'teacher';
 }
 
-function parseCsvToRows(text: string): { name: string; role: string; idNumber: string; email?: string }[] {
+/** 解析 CSV；fixedRole 时表头无需「角色」列，身份由本页导入场景自动决定 */
+function parseCsvToRows(
+  text: string,
+  fixedRole?: 'student' | 'teacher'
+): { name: string; role: string; idNumber: string; email?: string }[] {
   const raw = text.replace(/^\ufeff/, '');
   const lines = raw
     .split(/\r?\n/)
@@ -33,15 +43,24 @@ function parseCsvToRows(text: string): { name: string; role: string; idNumber: s
   const iRole = idx(['角色']);
   const iId = idx(['学号或工号', '学号', '工号']);
   const iEmail = idx(['邮箱']);
-  if (iName < 0 || iRole < 0 || iId < 0) {
+  if (iName < 0 || iId < 0) {
+    throw new Error(
+      fixedRole
+        ? '表头须包含：姓名、学号或工号（邮箱可省略列）；本页无需填写「角色」列'
+        : '表头须包含：姓名、角色、学号或工号（邮箱可省略列）'
+    );
+  }
+  if (!fixedRole && iRole < 0) {
     throw new Error('表头须包含：姓名、角色、学号或工号（邮箱可省略列）');
   }
+
+  const autoRole = fixedRole === 'teacher' ? '教师' : fixedRole === 'student' ? '学生' : '';
 
   const rows: { name: string; role: string; idNumber: string; email?: string }[] = [];
   for (let r = 1; r < contentLines.length; r++) {
     const cells = contentLines[r].split(',').map((c) => c.trim());
     const name = cells[iName] ?? '';
-    const role = cells[iRole] ?? '';
+    const role = fixedRole ? autoRole : (cells[iRole] ?? '');
     const idNumber = cells[iId] ?? '';
     const email = iEmail >= 0 ? (cells[iEmail] ?? '').trim() : '';
     rows.push({
@@ -61,7 +80,14 @@ function normalizeRoleLabel(r: string): '学生' | '教师' | '' {
   return '';
 }
 
-export default function BatchImportModal({ isOpen, onClose, onImport }: BatchImportModalProps) {
+export default function BatchImportModal({
+  isOpen,
+  onClose,
+  onImport,
+  lockedCollegeId,
+  lockedClassId,
+  lockedRole,
+}: BatchImportModalProps) {
   const [colleges, setColleges] = useState<AdminCollegeRow[]>([]);
   const [tplCollegeId, setTplCollegeId] = useState('');
   const [tplClassId, setTplClassId] = useState('');
@@ -89,6 +115,17 @@ export default function BatchImportModal({ isOpen, onClose, onImport }: BatchImp
   }, [isOpen]);
 
   useEffect(() => {
+    if (!isOpen) return;
+    if (lockedCollegeId) setTplCollegeId(lockedCollegeId);
+    if (lockedClassId) setTplClassId(lockedClassId);
+    if (lockedRole === 'teacher') setTplClassId('');
+  }, [isOpen, lockedCollegeId, lockedClassId, lockedRole]);
+
+  useEffect(() => {
+    if (lockedRole === 'teacher') {
+      setClassOptions([]);
+      return;
+    }
     if (!tplCollegeId) {
       setClassOptions([]);
       setTplClassId('');
@@ -106,9 +143,19 @@ export default function BatchImportModal({ isOpen, onClose, onImport }: BatchImp
     return () => {
       cancelled = true;
     };
-  }, [tplCollegeId]);
+  }, [tplCollegeId, lockedRole]);
 
   if (!isOpen) return null;
+
+  const modalTitle =
+    lockedRole === 'teacher' ? '批量导入教师' : lockedRole === 'student' ? '批量导入学生' : '批量导入用户';
+
+  const preSelectTitle =
+    lockedRole === 'teacher'
+      ? '导入前：选择学院'
+      : lockedRole === 'student'
+        ? '导入前：选择学院与班级'
+        : '导入前：选择学院与班级';
 
   const selectedCollege = colleges.find((c) => c.id === tplCollegeId);
   const selectedClassMeta = classOptions.find((o) => o.value === tplClassId);
@@ -155,31 +202,67 @@ export default function BatchImportModal({ isOpen, onClose, onImport }: BatchImp
         message.warning('请先在上方选择学院');
         return;
       }
-      const cls = await fetchAdminClasses(tplCollegeId);
-      if (!cls.length) {
-        const cn = active.find((c) => c.id === tplCollegeId)?.name ?? '该学院';
-        message.warning(`${cn}下没有班级，请先在学院下创建班级`);
-        return;
-      }
-      if (!tplClassId) {
-        message.warning('请选择班级');
-        return;
-      }
       const c = active.find((x) => x.id === tplCollegeId);
-      const cl = cls.find((x) => x.id === tplClassId);
-      if (!c || !cl) {
-        message.error('学院或班级数据已变化，请重新选择');
+      if (!c) {
+        message.error('学院数据已变化，请重新选择');
         return;
       }
-      const line1 = `# 学院,${c.name},id=${c.id} | 班级,${cl.name},id=${cl.id}（以下数据行勿含学院/班级列，导入时使用上方所选学院与班级）`;
-      const header = '姓名,角色,学号或工号,邮箱';
-      const rowStudent = '张三,学生,2021001001,';
-      const rowTeacher = '李老师,教师,T2021001,li@example.com';
-      const csvContent = `${line1}\n${header}\n${rowStudent}\n${rowTeacher}`;
+
+      let line1: string;
+      let header: string;
+      let bodyLines: string;
+      let filename: string;
+
+      if (lockedRole === 'teacher') {
+        line1 = `# 学院,${c.name},id=${c.id}（数据行勿含学院列；无需「角色」列，将按本页教师批量导入）`;
+        header = '姓名,学号或工号,邮箱';
+        bodyLines = '李老师,T2021001,li@example.com';
+        filename = '教师导入模板.csv';
+      } else if (lockedRole === 'student') {
+        const cls = await fetchAdminClasses(tplCollegeId);
+        if (!cls.length) {
+          message.warning(`${c.name}下没有班级，请先在学院下创建班级`);
+          return;
+        }
+        if (!tplClassId) {
+          message.warning('请选择班级');
+          return;
+        }
+        const cl = cls.find((x) => x.id === tplClassId);
+        if (!cl) {
+          message.error('班级数据已变化，请重新选择');
+          return;
+        }
+        line1 = `# 学院,${c.name},id=${c.id} | 班级,${cl.name},id=${cl.id}（数据行勿含学院/班级列；无需「角色」列，将按本页学生批量导入）`;
+        header = '姓名,学号或工号,邮箱';
+        bodyLines = '张三,2021001001,';
+        filename = '学生导入模板.csv';
+      } else {
+        const cls = await fetchAdminClasses(tplCollegeId);
+        if (!cls.length) {
+          message.warning(`${c.name}下没有班级，请先在学院下创建班级`);
+          return;
+        }
+        if (!tplClassId) {
+          message.warning('请选择班级');
+          return;
+        }
+        const cl = cls.find((x) => x.id === tplClassId);
+        if (!cl) {
+          message.error('学院或班级数据已变化，请重新选择');
+          return;
+        }
+        line1 = `# 学院,${c.name},id=${c.id} | 班级,${cl.name},id=${cl.id}（以下数据行勿含学院/班级列，导入时使用上方所选学院与班级）`;
+        header = '姓名,角色,学号或工号,邮箱';
+        bodyLines = '张三,学生,2021001001,\n李老师,教师,T2021001,li@example.com';
+        filename = '用户导入模板.csv';
+      }
+
+      const csvContent = `${line1}\n${header}\n${bodyLines}`;
       const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' });
       const link = document.createElement('a');
       link.href = URL.createObjectURL(blob);
-      link.download = '用户导入模板.csv';
+      link.download = filename;
       link.click();
     } catch (e: unknown) {
       message.error(e instanceof Error ? e.message : '下载失败');
@@ -201,14 +284,16 @@ export default function BatchImportModal({ isOpen, onClose, onImport }: BatchImp
       }, 200);
 
       const text = await file.text();
-      const parsed = parseCsvToRows(text);
+      const parsed = parseCsvToRows(text, lockedRole);
 
       if (!tplCollegeId.trim()) {
         throw new Error('请先在上方选择学院，再开始导入');
       }
-      let hasStudent = false;
-      for (const p of parsed) {
-        if (normalizeRoleLabel(p.role) === '学生') hasStudent = true;
+      let hasStudent = lockedRole === 'student';
+      if (!lockedRole) {
+        for (const p of parsed) {
+          if (normalizeRoleLabel(p.role) === '学生') hasStudent = true;
+        }
       }
       if (hasStudent && !tplClassId.trim()) {
         throw new Error('文件中包含学生，请先在上方选择班级');
@@ -219,7 +304,7 @@ export default function BatchImportModal({ isOpen, onClose, onImport }: BatchImp
         const rl = normalizeRoleLabel(p.role);
         rows.push({
           name: p.name.trim(),
-          role: p.role.trim(),
+          role: rl === '学生' ? '学生' : rl === '教师' ? '教师' : p.role.trim(),
           idNumber: p.idNumber.trim(),
           collegeId: tplCollegeId.trim(),
           ...(rl === '学生' && tplClassId.trim() ? { classId: tplClassId.trim() } : {}),
@@ -246,8 +331,8 @@ export default function BatchImportModal({ isOpen, onClose, onImport }: BatchImp
     setIsUploading(false);
     setUploadProgress(0);
     setImportResult(null);
-    setTplCollegeId('');
-    setTplClassId('');
+    if (!lockedCollegeId) setTplCollegeId('');
+    if (!lockedClassId) setTplClassId('');
     onClose();
   };
 
@@ -255,7 +340,7 @@ export default function BatchImportModal({ isOpen, onClose, onImport }: BatchImp
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div className="bg-white rounded-xl w-full max-w-3xl max-h-[90vh] overflow-y-auto">
         <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
-          <h3 className="text-xl font-semibold text-gray-900">批量导入用户</h3>
+          <h3 className="text-xl font-semibold text-gray-900">{modalTitle}</h3>
           <button
             type="button"
             onClick={handleClose}
@@ -269,7 +354,7 @@ export default function BatchImportModal({ isOpen, onClose, onImport }: BatchImp
           {!importResult ? (
             <>
               <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
-                <div className="text-sm font-medium text-gray-800 mb-2">导入前：选择学院与班级</div>
+                <div className="text-sm font-medium text-gray-800 mb-2">{preSelectTitle}</div>
                 <Space wrap className="w-full">
                   <Select
                     className="min-w-[220px]"
@@ -277,43 +362,74 @@ export default function BatchImportModal({ isOpen, onClose, onImport }: BatchImp
                     value={tplCollegeId || undefined}
                     onChange={(v) => {
                       setTplCollegeId(v);
-                      setTplClassId('');
+                      if (!lockedClassId) setTplClassId('');
                     }}
+                    disabled={!!lockedCollegeId}
                     options={colleges.map((c) => ({ label: `${c.name}（${c.id}）`, value: c.id }))}
                     showSearch
                     optionFilterProp="label"
                   />
-                  <Select
-                    className="min-w-[260px]"
-                    placeholder="选择班级"
-                    disabled={!tplCollegeId}
-                    value={tplClassId || undefined}
-                    onChange={(v) => setTplClassId(v ?? '')}
-                    options={classOptions}
-                    showSearch
-                    optionFilterProp="label"
-                  />
+                  {lockedRole !== 'teacher' && (
+                    <Select
+                      className="min-w-[260px]"
+                      placeholder="选择班级"
+                      disabled={!tplCollegeId || !!lockedClassId}
+                      value={tplClassId || undefined}
+                      onChange={(v) => setTplClassId(v ?? '')}
+                      options={classOptions}
+                      showSearch
+                      optionFilterProp="label"
+                    />
+                  )}
                 </Space>
-                {selectedCollege && tplClassId && selectedClassMeta && (
+                {lockedRole === 'teacher' && selectedCollege ? (
                   <p className="text-xs text-gray-600 mt-3 leading-relaxed">
-                    下载模板首行为说明（含学院、班级 id 供核对）。<strong>数据行仅含姓名、角色、学号或工号、邮箱</strong>
+                    下载模板首行为说明。<strong>数据列：姓名、学号或工号、邮箱</strong>（无需「角色」列，将按教师导入）；教师仅归属所选学院、不与班级绑定；实际学院以本页上方所选为准。
+                  </p>
+                ) : lockedRole === 'student' && selectedCollege && tplClassId && selectedClassMeta ? (
+                  <p className="text-xs text-gray-600 mt-3 leading-relaxed">
+                    下载模板首行为说明（含学院、班级 id 供核对）。<strong>数据列：姓名、学号或工号、邮箱</strong>（无需「角色」列，将按学生导入）；学院与班级以本页上方所选为准。
+                  </p>
+                ) : !lockedRole && selectedCollege && tplClassId && selectedClassMeta ? (
+                  <p className="text-xs text-gray-600 mt-3 leading-relaxed">
+                    下载模板首行为说明（含学院、班级 id 供核对）。<strong>数据行含姓名、角色、学号或工号、邮箱</strong>
                     ；实际导入的学院与班级以本页上方选择为准。
                   </p>
-                )}
+                ) : null}
               </div>
 
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
                 <div className="flex items-start gap-3">
                   <i className="ri-information-line text-blue-600 text-lg mt-0.5" />
                   <div className="flex-1">
-                    <h4 className="text-sm font-medium text-blue-900 mb-1">导入说明</h4>
+                    <h4 className="text-sm font-medium text-blue-900 mb-1">
+                      {lockedRole === 'teacher' ? '教师导入说明' : lockedRole === 'student' ? '学生导入说明' : '导入说明'}
+                    </h4>
                     <ul className="text-sm text-blue-700 space-y-1">
                       <li>• 请使用 UTF-8 编码的 CSV；Excel 请先「另存为 CSV」</li>
-                      <li>• 支持导入学生与教师：学生填学号，教师填工号（均在「学号或工号」列）</li>
-                      <li>• 必填列：姓名、角色、学号或工号；邮箱可整列省略</li>
-                      <li>• 学院、班级不在 CSV 中填写：请先在本页上方选择学院与班级，再下载模板或上传文件；学生将入所选班级，教师仅归属所选学院</li>
-                      <li>• 若文件中包含学生，必须已选择班级；仅教师时可只选学院</li>
-                      <li>• 邮箱为选填；初始密码为学号/工号后 6 位（与单个新建一致）</li>
+                      {lockedRole === 'teacher' ? (
+                        <>
+                          <li>• 每行一名教师：「学号或工号」列填写<strong>工号</strong>（与登录账号一致）</li>
+                          <li>• 表头须含：<strong>姓名、学号或工号</strong>；<strong>邮箱</strong>列可整列省略；<strong>无需「角色」列</strong>，身份按本页「教师」自动写入</li>
+                          <li>• 学院不在 CSV 中：须先在本页上方<strong>选择学院</strong>；导入的教师归属该学院，<strong>不与班级绑定</strong>，本页无需选择班级</li>
+                          <li>• 初始密码为工号<strong>后 6 位</strong>（与单个新增教师一致）</li>
+                        </>
+                      ) : lockedRole === 'student' ? (
+                        <>
+                          <li>• 每行一名学生：「学号或工号」列填写<strong>学号</strong></li>
+                          <li>• 表头须含：<strong>姓名、学号或工号</strong>；<strong>邮箱</strong>可整列省略；<strong>无需「角色」列</strong>，身份按本页「学生」自动写入</li>
+                          <li>• 学院、班级不在 CSV 中：须先在本页上方<strong>选择学院与班级</strong>；学生将入所选班级</li>
+                          <li>• 初始密码为学号<strong>后 6 位</strong>（与单个新增学生一致）</li>
+                        </>
+                      ) : (
+                        <>
+                          <li>• 支持导入学生与教师：学生在「学号或工号」列填<strong>学号</strong>，教师填<strong>工号</strong></li>
+                          <li>• 必填列：姓名、角色、学号或工号；邮箱可整列省略</li>
+                          <li>• 学院、班级不在 CSV 中填写：请先在本页上方选择学院与班级，再下载模板或上传文件；学生将入所选班级，教师仅归属所选学院</li>
+                          <li>• 若文件中包含学生，必须已选择班级；仅教师时可只选学院</li>
+                          <li>• 邮箱为选填；初始密码为学号/工号后 6 位（与单个新建一致）</li>
+                        </>
+                      )}
                       <li>• 单次最多导入 500 条数据</li>
                     </ul>
                   </div>

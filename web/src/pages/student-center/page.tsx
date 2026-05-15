@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Modal } from 'antd';
 import { Link, useSearchParams, useNavigate } from 'react-router-dom';
 import { useSiteBrand } from '../../lib/publicSite';
 import LearningDetail from '../knowledge-system/components/LearningDetail';
@@ -75,6 +76,7 @@ export default function StudentCenterPage() {
   const [notificationReadFilter, setNotificationReadFilter] = useState<'all' | 'unread' | 'read'>('all');
   const [notificationList, setNotificationList] = useState(notifications);
   const [expandedNotificationId, setExpandedNotificationId] = useState<string | null>(null);
+  const [logoutModalOpen, setLogoutModalOpen] = useState(false);
 
   const overallProgress = {
     currentLevel: '初级创业者', nextLevel: '中级创业者', levelProgress: 36,
@@ -392,9 +394,34 @@ export default function StudentCenterPage() {
           </div>
         )}
 
-        <div className="p-3 border-t border-gray-100">
-          <button onClick={() => setSidebarCollapsed(!sidebarCollapsed)} className={`w-full flex items-center gap-2 px-3 py-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors whitespace-nowrap cursor-pointer ${sidebarCollapsed ? 'justify-center' : ''}`}>
-            <div className="w-5 h-5 flex items-center justify-center flex-shrink-0"><i className={`${sidebarCollapsed ? 'ri-arrow-right-s-line' : 'ri-arrow-left-s-line'} text-base`}></i></div>
+        <div className="p-3 border-t border-gray-100 shrink-0 space-y-2">
+          <div className={`flex items-center gap-2.5 ${sidebarCollapsed ? 'justify-center' : ''}`}>
+            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-teal-400 to-cyan-400 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
+              张
+            </div>
+            {!sidebarCollapsed && (
+              <div className="flex-1 min-w-0">
+                <div className="text-xs font-semibold text-gray-800 truncate">张三同学</div>
+                <div className="text-xs text-gray-400 truncate">{overallProgress.currentLevel}</div>
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={() => setLogoutModalOpen(true)}
+              className="w-6 h-6 flex items-center justify-center text-gray-400 hover:text-red-500 cursor-pointer flex-shrink-0 transition-colors"
+              title="退出登录"
+            >
+              <i className="ri-logout-box-r-line text-sm" />
+            </button>
+          </div>
+          <button
+            type="button"
+            onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+            className={`w-full flex items-center gap-2 px-3 py-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors whitespace-nowrap cursor-pointer ${sidebarCollapsed ? 'justify-center' : ''}`}
+          >
+            <div className="w-5 h-5 flex items-center justify-center flex-shrink-0">
+              <i className={`${sidebarCollapsed ? 'ri-arrow-right-s-line' : 'ri-arrow-left-s-line'} text-base`} />
+            </div>
             {!sidebarCollapsed && <span className="text-xs">收起菜单</span>}
           </button>
         </div>
@@ -414,9 +441,6 @@ export default function StudentCenterPage() {
               <div className="flex items-center gap-2 px-3 py-1.5 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors whitespace-nowrap cursor-pointer">
                 <i className="ri-trophy-line"></i><span>{overallProgress.currentLevel}</span>
               </div>
-              <Link to="/" className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors whitespace-nowrap cursor-pointer">
-                <i className="ri-home-line"></i><span>返回首页</span>
-              </Link>
             </div>
           </div>
         </header>
@@ -1051,6 +1075,22 @@ export default function StudentCenterPage() {
           onPass={(knowledgeId, moduleId) => { handleQuizPass(knowledgeId, moduleId); setActiveQuizId(null); }}
         />
       )}
+
+      <Modal
+        title="确认退出登录"
+        open={logoutModalOpen}
+        onCancel={() => setLogoutModalOpen(false)}
+        onOk={() => {
+          setLogoutModalOpen(false);
+          navigate('/');
+        }}
+        okText="确认退出"
+        cancelText="取消"
+        okButtonProps={{ danger: true }}
+        centered
+      >
+        <p className="text-sm text-gray-600">退出后将返回首页。</p>
+      </Modal>
     </div>
   );
 }

@@ -1,22 +1,25 @@
 import { useState, useEffect } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
+import { message, Modal } from 'antd';
 import { useSiteBrand } from '../../lib/publicSite';
-import UserManagement from './components/userManagement';
 import Overview from './components/overview';
 import ClassManagement from './components/classManagement';
 import CollegeManagement from './components/collegeManagement';
 import OperationLog from './components/operationLog';
+import { fetchAdminColleges } from './components/collegeApi';
 
 import SystemConfig from './components/systemConfig';
 import DictTypeManage from './components/dictionary/DictTypeManage';
 import DictItemManage from './components/dictionary/DictItemManage';
-import { ADMIN_TOKEN_KEY } from '../../lib/authApi';
+import AdminUsersPanel from './components/userManagement/AdminUsersPanel';
+import { ADMIN_TOKEN_KEY, clearAdminToken, redirectAdminSessionExpired } from '../../lib/authApi';
 
 type TabType =
   | 'overview'
-  | 'user-management'
   | 'college-management'
+  | 'college-teachers'
   | 'class-management'
+  | 'class-students'
   | 'operation-log'
   | 'system-config'
   | 'dictionary'
@@ -24,9 +27,10 @@ type TabType =
 
 const TAB_WHITELIST: TabType[] = [
   'overview',
-  'user-management',
   'college-management',
+  'college-teachers',
   'class-management',
+  'class-students',
   'operation-log',
   'system-config',
   'dictionary',
@@ -41,13 +45,19 @@ export default function AdminDashboard() {
   const [activeTab, setActiveTab] = useState<TabType>('overview');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
+  const [logoutModalOpen, setLogoutModalOpen] = useState(false);
 
   const [dictItemTypeName, setDictItemTypeName] = useState('');
+  const [collegeTeachersHint, setCollegeTeachersHint] = useState('');
 
   useEffect(() => {
     const raw = searchParams.get('tab');
     if (raw === 'course-resource') {
       navigate('/admin-dashboard?tab=overview', { replace: true });
+      return;
+    }
+    if (raw === 'user-management') {
+      navigate('/admin-dashboard?tab=college-management', { replace: true });
       return;
     }
     const tab = raw as TabType;
@@ -58,6 +68,23 @@ export default function AdminDashboard() {
         if (!typeIdRaw || !Number.isFinite(tid) || tid <= 0) {
           setActiveTab('dictionary');
           navigate('/admin-dashboard?tab=dictionary', { replace: true });
+          return;
+        }
+      }
+      if (tab === 'college-teachers') {
+        const cid = searchParams.get('collegeId');
+        if (!cid || !/^\d+$/.test(cid)) {
+          message.warning('缺少有效学院');
+          navigate('/admin-dashboard?tab=college-management', { replace: true });
+          return;
+        }
+      }
+      if (tab === 'class-students') {
+        const classIdQ = searchParams.get('classId');
+        const collegeIdQ = searchParams.get('collegeId');
+        if (!classIdQ || !/^\d+$/.test(classIdQ) || !collegeIdQ || !/^\d+$/.test(collegeIdQ)) {
+          message.warning('缺少有效班级或学院');
+          navigate('/admin-dashboard?tab=class-management', { replace: true });
           return;
         }
       }
@@ -83,11 +110,37 @@ export default function AdminDashboard() {
     fetch(`/api/admin/dict-types/${tid}`, { headers: { Authorization: `Bearer ${token}` } })
       .then((r) => r.json())
       .then((j) => {
-        if (cancelled || j.code !== 0 || !j.data?.name) return;
+        if (cancelled) return;
+        if (j.code === 40101 || j.code === 40102) {
+          redirectAdminSessionExpired();
+          return;
+        }
+        if (j.code !== 0 || !j.data?.name) return;
         setDictItemTypeName(String(j.data.name));
       })
       .catch(() => {
         if (!cancelled) setDictItemTypeName('');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, searchParams]);
+
+  useEffect(() => {
+    if (activeTab !== 'college-teachers') {
+      setCollegeTeachersHint('');
+      return;
+    }
+    const cid = searchParams.get('collegeId') || '';
+    if (!/^\d+$/.test(cid)) return;
+    let cancelled = false;
+    fetchAdminColleges()
+      .then((list) => {
+        if (cancelled) return;
+        setCollegeTeachersHint(list.find((c) => c.id === cid)?.name || '');
+      })
+      .catch(() => {
+        if (!cancelled) setCollegeTeachersHint('');
       });
     return () => {
       cancelled = true;
@@ -101,7 +154,6 @@ export default function AdminDashboard() {
 
   const menuItems = [
     { id: 'overview' as TabType, label: '数据概览', icon: 'ri-dashboard-line' },
-    { id: 'user-management' as TabType, label: '用户管理', icon: 'ri-user-settings-line' },
     { id: 'college-management' as TabType, label: '学院管理', icon: 'ri-building-4-line' },
     { id: 'class-management' as TabType, label: '班级管理', icon: 'ri-team-line' },
     { id: 'dictionary' as TabType, label: '字典管理', icon: 'ri-booklet-line' },
@@ -113,11 +165,22 @@ export default function AdminDashboard() {
     if (activeTab === 'dictionary-items') {
       return dictItemTypeName ? `字典管理 / ${dictItemTypeName}` : '字典管理 / 字典数据';
     }
+    if (activeTab === 'college-teachers') {
+      return collegeTeachersHint ? `学院管理 / 教师管理 · ${collegeTeachersHint}` : '学院管理 / 教师管理';
+    }
+    if (activeTab === 'class-students') {
+      const cn = searchParams.get('className');
+      const label = cn ? decodeURIComponent(cn) : '';
+      return label ? `班级管理 / 学生管理 · ${label}` : '班级管理 / 学生管理';
+    }
     const item = menuItems.find((m) => m.id === activeTab);
     return item ? item.label : '数据概览';
   };
 
   const dictionaryItemsTypeId = Number(searchParams.get('typeId'));
+  const collegeTeachersId = searchParams.get('collegeId') || '';
+  const classStudentsId = searchParams.get('classId') || '';
+  const classStudentsCollegeId = searchParams.get('collegeId') || '';
 
   return (
     <div className="h-dvh max-h-dvh min-h-0 flex overflow-hidden bg-gray-50">
@@ -157,7 +220,10 @@ export default function AdminDashboard() {
               key={item.id}
               onClick={() => handleTabChange(item.id)}
               className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all whitespace-nowrap ${
-                activeTab === item.id || (item.id === 'dictionary' && activeTab === 'dictionary-items')
+                activeTab === item.id ||
+                (item.id === 'dictionary' && activeTab === 'dictionary-items') ||
+                (item.id === 'college-management' && activeTab === 'college-teachers') ||
+                (item.id === 'class-management' && activeTab === 'class-students')
                   ? 'bg-teal-50 text-teal-600'
                   : 'text-gray-600 hover:bg-gray-50'
               }`}
@@ -170,16 +236,24 @@ export default function AdminDashboard() {
 
         {/* 底部用户信息 */}
         <div className="p-4 border-t border-gray-200 shrink-0">
-          <div className={`flex items-center gap-3 ${sidebarCollapsed ? 'justify-center' : ''}`}>
+          <div className={`flex items-center gap-2.5 ${sidebarCollapsed ? 'justify-center' : ''}`}>
             <div className="w-10 h-10 bg-gradient-to-br from-purple-500 to-pink-500 rounded-full flex items-center justify-center flex-shrink-0">
               <span className="text-white font-semibold text-sm">管</span>
             </div>
             {!sidebarCollapsed && (
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-medium text-gray-900 truncate">管理员</div>
-                <div className="text-xs text-gray-500">admin@system.com</div>
+                <div className="text-xs text-gray-500 truncate">admin@system.com</div>
               </div>
             )}
+            <button
+              type="button"
+              onClick={() => setLogoutModalOpen(true)}
+              className="w-6 h-6 flex items-center justify-center text-gray-400 hover:text-red-500 cursor-pointer flex-shrink-0 transition-colors"
+              title="退出登录"
+            >
+              <i className="ri-logout-box-r-line text-sm" />
+            </button>
           </div>
         </div>
       </div>
@@ -235,12 +309,6 @@ export default function AdminDashboard() {
             </div>
 
             {/* 返回首页 */}
-            <button
-              onClick={() => navigate('/')}
-              className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors whitespace-nowrap"
-            >
-              返回首页
-            </button>
           </div>
         </header>
 
@@ -249,7 +317,34 @@ export default function AdminDashboard() {
           {activeTab === 'overview' && <Overview />}
           {activeTab === 'college-management' && <CollegeManagement />}
           {activeTab === 'class-management' && <ClassManagement />}
-          {activeTab === 'user-management' && <UserManagement />}
+          {activeTab === 'college-teachers' && /^\d+$/.test(collegeTeachersId) && (
+            <AdminUsersPanel
+              scope="college-teachers"
+              collegeId={collegeTeachersId}
+              subtitle={collegeTeachersHint || `学院 ID ${collegeTeachersId}`}
+              onBack={() => navigate('/admin-dashboard?tab=college-management')}
+            />
+          )}
+          {activeTab === 'class-students' &&
+            /^\d+$/.test(classStudentsId) &&
+            /^\d+$/.test(classStudentsCollegeId) && (
+              <AdminUsersPanel
+                scope="class-students"
+                collegeId={classStudentsCollegeId}
+                classId={classStudentsId}
+                subtitle={
+                  searchParams.get('className')
+                    ? decodeURIComponent(searchParams.get('className') || '')
+                    : `班级 ID ${classStudentsId}`
+                }
+                onBack={() => {
+                  const back = new URLSearchParams();
+                  back.set('tab', 'class-management');
+                  if (classStudentsCollegeId) back.set('collegeId', classStudentsCollegeId);
+                  navigate(`/admin-dashboard?${back.toString()}`);
+                }}
+              />
+            )}
           {activeTab === 'operation-log' && <OperationLog />}
           {activeTab === 'system-config' && <SystemConfig />}
           {activeTab === 'dictionary' && <DictTypeManage />}
@@ -258,6 +353,23 @@ export default function AdminDashboard() {
             dictionaryItemsTypeId > 0 && <DictItemManage typeId={dictionaryItemsTypeId} />}
         </main>
       </div>
+
+      <Modal
+        title="确认退出登录"
+        open={logoutModalOpen}
+        onCancel={() => setLogoutModalOpen(false)}
+        onOk={() => {
+          clearAdminToken();
+          setLogoutModalOpen(false);
+          navigate('/');
+        }}
+        okText="确认退出"
+        cancelText="取消"
+        okButtonProps={{ danger: true }}
+        centered
+      >
+        <p className="text-sm text-gray-600">退出后将返回首页，需重新登录管理后台。</p>
+      </Modal>
     </div>
   );
 }

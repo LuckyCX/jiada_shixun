@@ -337,15 +337,15 @@ export default function Overview() {
           <h3 className="text-base font-semibold text-gray-900 mb-4">快捷入口</h3>
           <div className="space-y-3">
             <Link
-              to="/admin-dashboard?tab=user-management"
+              to="/admin-dashboard?tab=college-management"
               className="flex items-center gap-3 p-3 rounded-lg bg-teal-50 hover:bg-teal-100 transition-colors group cursor-pointer"
             >
               <div className="w-10 h-10 rounded-lg bg-teal-500 flex items-center justify-center">
-                <i className="ri-user-settings-line text-white text-lg"></i>
+                <i className="ri-building-4-line text-white text-lg"></i>
               </div>
               <div className="flex-1">
-                <div className="text-sm font-medium text-gray-900">用户管理</div>
-                <div className="text-xs text-gray-500">管理学生和教师账号</div>
+                <div className="text-sm font-medium text-gray-900">学院管理</div>
+                <div className="text-xs text-gray-500">维护学院并管理教师账号</div>
               </div>
               <i className="ri-arrow-right-s-line text-gray-400 group-hover:text-teal-500 transition-colors"></i>
             </Link>

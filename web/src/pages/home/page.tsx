@@ -1,4 +1,4 @@
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useState, useEffect } from 'react';
 import { ADMIN_TOKEN_KEY, loginWithApi } from '../../lib/authApi';
 import { useSiteBrand } from '../../lib/publicSite';
@@ -7,6 +7,7 @@ export default function Home() {
   const { logoUrl, siteTitle } = useSiteBrand();
   const navBrandTitle = siteTitle.trim() || '嘉兴大学创业实训平台';
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [scrolled, setScrolled] = useState(false);
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [loginRole, setLoginRole] = useState<'student' | 'teacher' | 'admin'>('student');
@@ -22,6 +23,15 @@ export default function Home() {
     window.addEventListener('scroll', handleScroll);
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
+
+  useEffect(() => {
+    if (searchParams.get('adminExpired') === '1') {
+      setLoginError('管理员登录已过期，请重新登录');
+      setLoginRole('admin');
+      setShowLoginModal(true);
+      setSearchParams({}, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -452,19 +462,27 @@ export default function Home() {
                   </button>
                 ))}
               </div>
-              <form onSubmit={handleLogin} className="space-y-4">
+              <form key={loginRole} onSubmit={handleLogin} className="space-y-4" autoComplete="off">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
                     {loginRole === 'admin' ? '管理员账号' : loginRole === 'student' ? '学号' : '工号'}
                   </label>
-                  <input type="text" name="username" required
+                  <input
+                    type="text"
+                    name="username"
+                    required
+                    autoComplete="off"
                     className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all text-sm"
                     placeholder={loginRole === 'admin' ? '请输入管理员账号' : loginRole === 'student' ? '请输入学号' : '请输入工号'}
                   />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">密码</label>
-                  <input type="password" name="password" required
+                  <input
+                    type="password"
+                    name="password"
+                    required
+                    autoComplete="off"
                     className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all text-sm"
                     placeholder="请输入密码"
                   />

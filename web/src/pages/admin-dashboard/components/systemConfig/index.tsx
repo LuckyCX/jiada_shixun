@@ -6,13 +6,19 @@ import {
   Input,
   InputNumber,
   message,
+  Modal,
+  Popconfirm,
   Select,
+  Space,
   Spin,
   Switch,
+  Table,
   Tabs,
+  Tag,
+  type TableColumnsType,
   type TabsProps,
 } from 'antd';
-import { ADMIN_TOKEN_KEY, loginWithApi } from '../../../../lib/authApi';
+import { ADMIN_TOKEN_KEY, loginWithApi, redirectAdminSessionExpired } from '../../../../lib/authApi';
 import { notifySiteBrandUpdated } from '../../../../lib/publicSite';
 import { resizeImageFileTo128Png } from '../../../../lib/resizeLogoTo128';
 
@@ -27,7 +33,57 @@ type ConfigEntry = {
 
 type AdminConfigResponse = Record<string, ConfigEntry>;
 
-type TabValue = 'site' | 'smtp' | 'sms' | (typeof SHOW_RTC_TAB extends true ? 'rtc' : never);
+type TabValue = 'site' | 'smtp' | 'sms' | 'llm' | (typeof SHOW_RTC_TAB extends true ? 'rtc' : never);
+
+type LlmCategory = 'multimodal' | 'file_processing';
+
+type LlmProviderRow = {
+  id: string;
+  name: string;
+  category: LlmCategory;
+  vendor: string;
+  baseUrl: string;
+  modelId: string;
+  apiKey: string;
+  timeoutMs: number;
+  enabled: boolean;
+};
+
+const LLM_CATEGORY_OPTIONS: { value: LlmCategory; label: string }[] = [
+  { value: 'multimodal', label: '多模态（对话、图文理解等）' },
+  { value: 'file_processing', label: '文件处理' },
+];
+
+const LLM_CATEGORY_TAG: Record<LlmCategory, { color: string; text: string }> = {
+  multimodal: { color: 'blue', text: '多模态' },
+  file_processing: { color: 'purple', text: '文件处理' },
+};
+
+function parseLlmProviders(raw: unknown): LlmProviderRow[] {
+  if (!raw || typeof raw !== 'object') return [];
+  const arr = (raw as { providers?: unknown }).providers;
+  if (!Array.isArray(arr)) return [];
+  const out: LlmProviderRow[] = [];
+  for (const x of arr) {
+    if (!x || typeof x !== 'object') continue;
+    const o = x as Record<string, unknown>;
+    const id = String(o.id || '').trim();
+    const cat = o.category === 'file_processing' ? 'file_processing' : 'multimodal';
+    if (!id) continue;
+    out.push({
+      id,
+      name: String(o.name || '').trim(),
+      category: cat,
+      vendor: String(o.vendor || '').trim(),
+      baseUrl: String(o.baseUrl || '').trim(),
+      modelId: String(o.modelId || o.model_name || '').trim(),
+      apiKey: String(o.apiKey || '').trim(),
+      timeoutMs: Math.min(600_000, Math.max(1_000, Number(o.timeoutMs ?? 60_000) || 60_000)),
+      enabled: o.enabled === true || o.is_enabled === true,
+    });
+  }
+  return out;
+}
 
 /** system_config.config_key → 配置页 Tab */
 const CONFIG_TAB_MAP: Record<string, TabValue> = {
@@ -35,11 +91,12 @@ const CONFIG_TAB_MAP: Record<string, TabValue> = {
   smtp_config: 'smtp',
   aliyun_sms_config: 'sms',
   sms_biz_config: 'sms',
+  llm_gateway_config: 'llm',
   /** 最近更新落在 RTC 时仍打开「站点」避免无 Tab */
   rtc_config: 'site',
 };
 
-const TAB_ORDER: TabValue[] = ['site', 'smtp', 'sms'];
+const TAB_ORDER: TabValue[] = ['site', 'smtp', 'sms', 'llm'];
 
 const ALIYUN_SMS_REGION_OPTIONS = [
   { key: 'cn-hangzhou|dysmsapi.aliyuncs.com', label: '华东1（杭州）— dysmsapi.aliyuncs.com', regionId: 'cn-hangzhou', endpoint: 'dysmsapi.aliyuncs.com' },
@@ -111,6 +168,10 @@ async function apiFetch(path: string, opts: RequestInit & { token?: string } = {
   if (opts.token) headers.Authorization = `Bearer ${opts.token}`;
   const r = await fetch(`${apiBase()}${path}`, { ...opts, headers });
   const j = await r.json().catch(() => ({ code: -1, message: '无效 JSON' }));
+  if (r.status === 401 || j.code === 40101 || j.code === 40102) {
+    redirectAdminSessionExpired();
+    throw new Error(typeof j.message === 'string' ? j.message : '登录已失效，请返回首页重新以管理员登录');
+  }
   if (!r.ok || j.code !== 0) {
     throw new Error(j.message || `HTTP ${r.status}`);
   }
@@ -154,6 +215,21 @@ export default function SystemConfigPanel() {
     endpoint: 'dysmsapi.aliyuncs.com',
   });
   const [aliyunSmsRegionPreset, setAliyunSmsRegionPreset] = useState('');
+
+  const [llmProviders, setLlmProviders] = useState<LlmProviderRow[]>([]);
+  const [llmModalOpen, setLlmModalOpen] = useState(false);
+  const [llmDraft, setLlmDraft] = useState<LlmProviderRow & { isNew: boolean }>({
+    id: '',
+    name: '',
+    category: 'multimodal',
+    vendor: '',
+    baseUrl: '',
+    modelId: '',
+    apiKey: '',
+    timeoutMs: 60_000,
+    enabled: false,
+    isNew: true,
+  });
 
   const [rtc, setRtc] = useState('{}');
 
@@ -212,6 +288,8 @@ export default function SystemConfigPanel() {
     });
     const rtcVal = data.rtc_config?.value;
     setRtc(JSON.stringify(rtcVal ?? {}, null, 2));
+    const llmVal = data.llm_gateway_config?.value;
+    setLlmProviders(parseLlmProviders(llmVal));
   }, []);
 
   const loadConfig = useCallback(async () => {
@@ -355,6 +433,135 @@ export default function SystemConfigPanel() {
     }
   };
 
+  const openLlmCreate = () => {
+    setLlmDraft({
+      id: crypto.randomUUID(),
+      name: '',
+      category: 'multimodal',
+      vendor: '',
+      baseUrl: '',
+      modelId: '',
+      apiKey: '',
+      timeoutMs: 60_000,
+      enabled: false,
+      isNew: true,
+    });
+    setLlmModalOpen(true);
+  };
+
+  const openLlmEdit = (row: LlmProviderRow) => {
+    setLlmDraft({ ...row, isNew: false });
+    setLlmModalOpen(true);
+  };
+
+  /** 将弹窗草稿合并进列表（不入库）；校验失败返回 null */
+  const buildLlmProvidersAfterDraftSave = (
+    d: LlmProviderRow & { isNew: boolean },
+    current: LlmProviderRow[]
+  ): LlmProviderRow[] | null => {
+    const name = d.name.trim();
+    const baseUrl = d.baseUrl.trim();
+    const modelId = d.modelId.trim();
+    if (!name) {
+      messageApi.warning('请填写配置名称');
+      return null;
+    }
+    if (!baseUrl) {
+      messageApi.warning('请填写 Base URL');
+      return null;
+    }
+    if (!modelId) {
+      messageApi.warning('请填写模型 ID');
+      return null;
+    }
+    const key = d.apiKey.trim();
+    if (d.isNew && (!key || key === '********')) {
+      messageApi.warning('新增配置须填写 API Key');
+      return null;
+    }
+    let apiKeyOut = key;
+    if (!d.isNew && (!apiKeyOut || apiKeyOut === '********')) {
+      apiKeyOut = '********';
+    }
+    let next = current.filter((r) => r.id !== d.id);
+    const row: LlmProviderRow = {
+      id: d.id,
+      name,
+      category: d.category,
+      vendor: d.vendor.trim(),
+      baseUrl,
+      modelId,
+      apiKey: apiKeyOut,
+      timeoutMs: Math.min(600_000, Math.max(1_000, Math.floor(d.timeoutMs) || 60_000)),
+      enabled: d.enabled,
+    };
+    if (row.enabled) {
+      next = next.map((r) => (r.category === row.category ? { ...r, enabled: false } : r));
+    }
+    next.push(row);
+    return next;
+  };
+
+  const persistLlmProvidersList = async (next: LlmProviderRow[]): Promise<boolean> => {
+    for (const r of next) {
+      if (!r.name.trim() || !r.baseUrl.trim() || !r.modelId.trim()) {
+        messageApi.warning('每条配置须填写名称、Base URL 与模型 ID');
+        return false;
+      }
+      if (r.apiKey !== '********' && !r.apiKey.trim()) {
+        messageApi.warning(`「${r.name}」须填写 API Key，或从服务端重新加载后再编辑`);
+        return false;
+      }
+    }
+    const multimodalOn = next.filter((r) => r.category === 'multimodal' && r.enabled);
+    const fileOn = next.filter((r) => r.category === 'file_processing' && r.enabled);
+    if (multimodalOn.length > 1 || fileOn.length > 1) {
+      messageApi.warning('每种类型最多启用一条配置');
+      return false;
+    }
+    return savePatch({
+      llm_gateway_config: {
+        providers: next.map((r) => ({
+          id: r.id,
+          name: r.name.trim(),
+          category: r.category,
+          vendor: r.vendor.trim(),
+          baseUrl: r.baseUrl.trim(),
+          modelId: r.modelId.trim(),
+          apiKey: r.apiKey.trim() === '' ? '********' : r.apiKey.trim(),
+          timeoutMs: r.timeoutMs,
+          enabled: r.enabled === true,
+        })),
+      },
+    });
+  };
+
+  const saveLlmFromModal = async () => {
+    const next = buildLlmProvidersAfterDraftSave(llmDraft, llmProviders);
+    if (!next) throw new Error('invalid');
+    const ok = await persistLlmProvidersList(next);
+    if (!ok) throw new Error('save failed');
+    setLlmModalOpen(false);
+  };
+
+  const deleteLlmRow = async (id: string) => {
+    const next = llmProviders.filter((r) => r.id !== id);
+    await persistLlmProvidersList(next);
+  };
+
+  const setLlmRowEnabled = async (row: LlmProviderRow, enabled: boolean) => {
+    let next: LlmProviderRow[];
+    if (!enabled) {
+      next = llmProviders.map((r) => (r.id === row.id ? { ...r, enabled: false } : r));
+    } else {
+      next = llmProviders.map((r) => {
+        if (r.category !== row.category) return r;
+        return { ...r, enabled: r.id === row.id };
+      });
+    }
+    await persistLlmProvidersList(next);
+  };
+
   const sendTestSmtp = async () => {
     if (!token) return;
     const to = testSmtpTo.trim();
@@ -400,6 +607,50 @@ export default function SystemConfigPanel() {
   };
 
   const regionSelectOptions = ALIYUN_SMS_REGION_OPTIONS.map((o) => ({ label: o.label, value: o.key }));
+
+  const llmColumns: TableColumnsType<LlmProviderRow> = [
+    { title: '配置名称', dataIndex: 'name', ellipsis: true, width: 150 },
+    {
+      title: '厂商',
+      dataIndex: 'vendor',
+      ellipsis: true,
+      width: 120,
+      render: (v: string) => v || '—',
+    },
+    { title: '模型 ID', dataIndex: 'modelId', ellipsis: true, minWidth: 140 },
+    { title: 'Base URL', dataIndex: 'baseUrl', ellipsis: true },
+    { title: '超时(ms)', dataIndex: 'timeoutMs', width: 100 },
+    {
+      title: '启用',
+      key: 'en',
+      width: 88,
+      render: (_: unknown, row: LlmProviderRow) => (
+        <Switch
+          checked={row.enabled}
+          onChange={(c) => void setLlmRowEnabled(row, c)}
+          disabled={loading}
+        />
+      ),
+    },
+    {
+      title: '操作',
+      key: 'act',
+      width: 150,
+      fixed: 'right' as const,
+      render: (_: unknown, row: LlmProviderRow) => (
+        <Space size="small">
+          <Button type="link" size="small" className="!px-0" onClick={() => openLlmEdit(row)}>
+            编辑
+          </Button>
+          <Popconfirm title="确定删除该配置？" onConfirm={() => void deleteLlmRow(row.id)}>
+            <Button type="link" danger size="small" className="!px-0">
+              删除
+            </Button>
+          </Popconfirm>
+        </Space>
+      ),
+    },
+  ];
 
   const smsSwitchRows: { key: 'enabled' | 'allowLogin' | 'allowRegister' | 'allowReset'; label: string }[] = [
     { key: 'enabled', label: '短信总开关' },
@@ -708,6 +959,113 @@ export default function SystemConfigPanel() {
               </Form.Item>
             </Form>
           </div>
+        </div>
+      ),
+    },
+    {
+      key: 'llm',
+      label: '大模型',
+      forceRender: true,
+      children: (
+        <div className="p-6 w-full max-w-[1280px] min-w-0 min-[1200px]:px-8 space-y-8">
+          <div className="flex flex-wrap items-center justify-end gap-3">
+            <Button type="primary" onClick={openLlmCreate}>
+              新增模型配置
+            </Button>
+          </div>
+          {(['multimodal', 'file_processing'] as const).map((cat) => (
+            <section key={cat} className="min-w-0 border border-gray-100 rounded-lg p-4 bg-white">
+              <h4 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
+                {LLM_CATEGORY_TAG[cat].text}
+                <Tag color={LLM_CATEGORY_TAG[cat].color}>{cat}</Tag>
+              </h4>
+              <Table<LlmProviderRow>
+                rowKey="id"
+                size="small"
+                pagination={false}
+                columns={llmColumns}
+                dataSource={llmProviders.filter((r) => r.category === cat)}
+                locale={{ emptyText: '该类型暂无配置' }}
+                scroll={{ x: 900 }}
+              />
+            </section>
+          ))}
+          <Modal
+            title={llmDraft.isNew ? '新增大模型配置' : '编辑大模型配置'}
+            open={llmModalOpen}
+            onCancel={() => setLlmModalOpen(false)}
+            onOk={() => saveLlmFromModal()}
+            confirmLoading={loading}
+            width={640}
+            destroyOnClose
+            okText="保存"
+          >
+            <Form {...formItemLayout} layout="vertical" requiredMark={false} className="mt-2">
+              <Form.Item label="配置名称">
+                <Input
+                  value={llmDraft.name}
+                  onChange={(e) => setLlmDraft((d) => ({ ...d, name: e.target.value }))}
+                  placeholder="如 doubao-vision-primary"
+                />
+              </Form.Item>
+              <Form.Item label="厂商（展示用）">
+                <Input
+                  value={llmDraft.vendor}
+                  onChange={(e) => setLlmDraft((d) => ({ ...d, vendor: e.target.value }))}
+                  placeholder="如火山 Ark、阿里云 DashScope"
+                />
+              </Form.Item>
+              <Form.Item label="模型类型">
+                <Select<LlmCategory>
+                  options={LLM_CATEGORY_OPTIONS}
+                  value={llmDraft.category}
+                  onChange={(v) => setLlmDraft((d) => ({ ...d, category: v }))}
+                  style={{ width: '100%' }}
+                />
+              </Form.Item>
+              <Form.Item label="Base URL">
+                <Input
+                  value={llmDraft.baseUrl}
+                  onChange={(e) => setLlmDraft((d) => ({ ...d, baseUrl: e.target.value }))}
+                  placeholder="OpenAI 兼容网关根地址"
+                />
+              </Form.Item>
+              <Form.Item label="模型 ID">
+                <Input
+                  value={llmDraft.modelId}
+                  onChange={(e) => setLlmDraft((d) => ({ ...d, modelId: e.target.value }))}
+                  placeholder="服务端模型名称"
+                />
+              </Form.Item>
+              <Form.Item label="API Key">
+                <Input.Password
+                  value={llmDraft.apiKey}
+                  onChange={(e) => setLlmDraft((d) => ({ ...d, apiKey: e.target.value }))}
+                  placeholder={llmDraft.isNew ? '仅保存在服务端' : '留空或不修改表示保留已保存密钥'}
+                />
+                {!llmDraft.isNew ? (
+                  <p className="text-xs text-gray-500 mt-1">编辑时若已显示为掩码，可直接保存其他字段；改密钥请重新输入。</p>
+                ) : null}
+              </Form.Item>
+              <Form.Item label="超时（毫秒）">
+                <InputNumber
+                  className="w-full"
+                  min={1000}
+                  max={600000}
+                  step={1000}
+                  value={llmDraft.timeoutMs}
+                  onChange={(v) => setLlmDraft((d) => ({ ...d, timeoutMs: typeof v === 'number' ? v : 60_000 }))}
+                />
+              </Form.Item>
+              <Form.Item label="启用">
+                <Switch
+                  checked={llmDraft.enabled}
+                  onChange={(v) => setLlmDraft((d) => ({ ...d, enabled: v }))}
+                />
+                <span className="text-xs text-gray-500 ml-2">同类型仅能启用一条；打开后将自动关闭同类型其他配置。</span>
+              </Form.Item>
+            </Form>
+          </Modal>
         </div>
       ),
     },

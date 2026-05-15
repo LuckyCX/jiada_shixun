@@ -86,6 +86,13 @@ router.get('/admin/users', requireAuth(), requireAdmin(), async (req, res) => {
         i++;
       }
     }
+    /** 教师/学生「学院」与 colleges.id 对齐，存于 users.department */
+    const collegeIdQ = String(req.query.collegeId || '').trim();
+    if (collegeIdQ && /^\d+$/.test(collegeIdQ)) {
+      where.push(`TRIM(COALESCE(u.department, '')) = $${i}`);
+      params.push(collegeIdQ);
+      i++;
+    }
     const whereSql = where.join(' AND ');
 
     const { rows: statRows } = await getPool().query(
