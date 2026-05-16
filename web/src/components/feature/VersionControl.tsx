@@ -49,39 +49,7 @@ export default function VersionControl({
   return (
     <>
       {/* 版本控制工具栏 */}
-      <div className="bg-white border border-gray-200 rounded-xl p-4 flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-gradient-to-br from-indigo-500 to-purple-500 rounded-lg flex items-center justify-center">
-              <i className="ri-git-branch-line text-white text-sm"></i>
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-bold text-gray-900">当前版本</span>
-                <span className="px-2 py-0.5 bg-indigo-100 text-indigo-700 text-xs font-bold rounded-full">
-                  v{currentVersion}
-                </span>
-              </div>
-              <p className="text-xs text-gray-500">{moduleName}</p>
-            </div>
-          </div>
-          <div className="h-8 w-px bg-gray-200"></div>
-          <button
-            onClick={() => setIsOpen(true)}
-            className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-200 transition-colors cursor-pointer whitespace-nowrap"
-          >
-            <i className="ri-history-line"></i>
-            历史版本 ({versions.length})
-          </button>
-        </div>
-        <button
-          onClick={() => setShowSaveModal(true)}
-          className="px-4 py-2 bg-gradient-to-r from-indigo-500 to-purple-500 text-white text-sm font-medium rounded-lg hover:shadow-md transition-all cursor-pointer whitespace-nowrap flex items-center gap-2"
-        >
-          <i className="ri-save-line"></i>
-          保存当前版本
-        </button>
-      </div>
+       
 
       {/* 历史版本侧边抽屉 */}
       {isOpen && (

@@ -12,7 +12,7 @@ import SystemConfig from './components/systemConfig';
 import DictTypeManage from './components/dictionary/DictTypeManage';
 import DictItemManage from './components/dictionary/DictItemManage';
 import AdminUsersPanel from './components/userManagement/AdminUsersPanel';
-import { ADMIN_TOKEN_KEY, clearAdminToken, redirectAdminSessionExpired } from '../../lib/authApi';
+import { clearAdminToken, getPortalToken, redirectAdminSessionExpired } from '../../lib/authApi';
 
 type TabType =
   | 'overview'
@@ -101,7 +101,7 @@ export default function AdminDashboard() {
     }
     const tid = Number(searchParams.get('typeId'));
     if (!Number.isFinite(tid) || tid <= 0) return;
-    const token = localStorage.getItem(ADMIN_TOKEN_KEY);
+    const token = getPortalToken('admin');
     if (!token) {
       setDictItemTypeName('');
       return;

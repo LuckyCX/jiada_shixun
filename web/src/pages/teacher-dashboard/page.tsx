@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { clearPortalToken, getPortalToken, parseJwtPayload } from '../../lib/authApi';
 import { useSiteBrand } from '../../lib/publicSite';
 import TeamCard, { TeamProject } from './components/TeamCard';
 import TeamDetailModal from './components/TeamDetailModal';
@@ -20,6 +21,7 @@ import ClassProjectOverview from '../class-project-overview/page';
 import TeacherGuide from '../teacher-guide/page';
 import CourseSettings from '../course-settings/page';
 import EvaluationPanel from './components/EvaluationPanel';
+import { getTeacherProfile, type TeacherProfile } from './teacherPortalApi';
 
 type TabKey =
   | 'monitor'
@@ -74,11 +76,12 @@ const sidebarGroups: SidebarGroup[] = [
     ],
   },
   {
-    groupLabel: '总览与设置',
+    groupLabel: '指南与设置',
     items: [
-      { key: 'classProjectOverview', label: '班级项目总览', icon: 'ri-layout-grid-line', type: 'tab' },
+      // { key: 'classProjectOverview', label: '班级项目总览', icon: 'ri-layout-grid-line', type: 'tab' },
       { key: 'teacherGuide', label: '教学指南', icon: 'ri-book-open-line', type: 'tab' },
       { key: 'courseSettings', label: '课程设置', icon: 'ri-settings-3-line', type: 'tab' },
+      // { key: 'courseResources', label: '课程资源', icon: 'ri-file-line', type: 'link', to: '/teacher-resources' },
     ],
   },
 ];
@@ -303,6 +306,25 @@ export default function TeacherDashboard() {
   const [filterStatus, setFilterStatus] = useState<'all' | 'on-track' | 'at-risk' | 'delayed'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+  const [teacherProfile, setTeacherProfile] = useState<TeacherProfile | null>(null);
+
+  const { teacherDisplayName, teacherAvatarChar } = useMemo(() => {
+    const token = getPortalToken('teacher');
+    const p = token ? parseJwtPayload(token) : null;
+    const username = (p?.username && String(p.username).trim()) || '';
+    const real = (teacherProfile?.realName && String(teacherProfile.realName).trim()) || '';
+    const displayName = real || username || '教师';
+    const first = [...displayName][0] || '师';
+    return { teacherDisplayName: displayName, teacherAvatarChar: first };
+  }, [teacherProfile]);
+
+  useEffect(() => {
+    getTeacherProfile()
+      .then(setTeacherProfile)
+      .catch(() => {
+        /* 侧栏仍可用 JWT 中的 username 兜底 */
+      });
+  }, []);
 
   const filteredTeams = mockTeams.filter((t) => {
     const matchStatus = filterStatus === 'all' || t.status === filterStatus;
@@ -311,6 +333,10 @@ export default function TeacherDashboard() {
   });
 
   const handleSidebarClick = (item: typeof sidebarItems[number]) => {
+    if (item.type === 'link' && item.to) {
+      navigate(item.to);
+      return;
+    }
     setActiveTab(item.key as TabKey);
   };
 
@@ -500,11 +526,10 @@ export default function TeacherDashboard() {
         <div className="px-4 py-4 border-t border-gray-100">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-full bg-gradient-to-br from-teal-400 to-cyan-400 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
-              师
+              {teacherAvatarChar}
             </div>
             <div className="flex-1 min-w-0">
-              <div className="text-xs font-semibold text-gray-800 truncate">王老师</div>
-              <div className="text-xs text-gray-400 truncate">创业基础课程</div>
+              <div className="text-xs font-semibold text-gray-800 truncate">{teacherDisplayName}</div>
             </div>
             <button
               onClick={() => setShowLogoutConfirm(true)}
@@ -609,6 +634,7 @@ export default function TeacherDashboard() {
                 <button
                   onClick={() => {
                     setShowLogoutConfirm(false);
+                    clearPortalToken('teacher');
                     navigate('/');
                   }}
                   className="flex-1 py-2.5 bg-red-500 text-white text-sm font-medium rounded-xl hover:bg-red-600 transition-colors cursor-pointer whitespace-nowrap"

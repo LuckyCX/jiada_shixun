@@ -1,126 +1,144 @@
-import { useState } from 'react';
-import { mockClasses, mockStudents, mockTeachers } from './mockData';
-import { Class, Student } from './types';
+import { useCallback, useEffect, useState } from 'react';
+import { Alert, Modal, Spin, message } from 'antd';
+import { useTranslation } from 'react-i18next';
+import { usePublicDictOptions } from '../../../admin-dashboard/components/classManagement/usePublicDictOptions';
 import CreateClassModal from './CreateClassModal';
-import BatchImportModal from './BatchImportModal';
+import AddStudentsTransferModal from './AddStudentsTransferModal';
+import ClassRosterModal from './ClassRosterModal';
+import {
+  type TeacherPersonalClassRow,
+  type TeacherProfile,
+  type TeacherRosterStudent,
+  deleteTeacherPersonalClass,
+  getTeacherProfile,
+  listTeacherPersonalClasses,
+  listPersonalClassStudents,
+  removePersonalClassStudent,
+} from '../../teacherPortalApi';
 
 export default function ClassManagement() {
-  const [classes, setClasses] = useState<Class[]>(mockClasses);
-  const [students, setStudents] = useState<Student[]>(mockStudents);
-  const [selectedClass, setSelectedClass] = useState<Class | null>(null);
+  const { t } = useTranslation();
+  const { labelByValue: semesterLabel } = usePublicDictOptions('semester', true);
+  const [profile, setProfile] = useState<TeacherProfile | null>(null);
+  const [classes, setClasses] = useState<TeacherPersonalClassRow[]>([]);
+  const [rosterModalClass, setRosterModalClass] = useState<TeacherPersonalClassRow | null>(null);
+  const [addStudentsClass, setAddStudentsClass] = useState<TeacherPersonalClassRow | null>(null);
+  const [roster, setRoster] = useState<TeacherRosterStudent[]>([]);
+  const [rosterLoading, setRosterLoading] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [showImportModal, setShowImportModal] = useState(false);
-  const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [showAddStudentsModal, setShowAddStudentsModal] = useState(false);
+  const [loading, setLoading] = useState(true);
 
-  const showNotification = (message: string, type: 'success' | 'error' = 'success') => {
-    setNotification({ message, type });
-    setTimeout(() => setNotification(null), 3000);
-  };
+  const loadAll = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [p, list] = await Promise.all([getTeacherProfile(), listTeacherPersonalClasses()]);
+      setProfile(p);
+      setClasses(list);
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : t('teacher_class.page.load_fail'));
+    } finally {
+      setLoading(false);
+    }
+  }, [t]);
 
-  const handleCreateClass = (data: {
-    name: string;
-    department: string;
-    academicYear: string;
-    semester: string;
-    teacherId: string;
-  }) => {
-    const teacher = mockTeachers.find(t => t.id === data.teacherId);
-    if (!teacher) return;
+  useEffect(() => {
+    void loadAll();
+  }, [loadAll]);
 
-    const newClass: Class = {
-      id: `class-${Date.now()}`,
-      name: data.name,
-      department: data.department,
-      academicYear: data.academicYear,
-      semester: data.semester,
-      teacher: {
-        id: teacher.id,
-        name: teacher.name,
-        email: teacher.email
+  const loadRoster = useCallback(async (classId: string) => {
+    setRosterLoading(true);
+    try {
+      const list = await listPersonalClassStudents(classId);
+      setRoster(list);
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : t('teacher_class.page.roster_load_fail'));
+      setRoster([]);
+    } finally {
+      setRosterLoading(false);
+    }
+  }, [t]);
+
+  useEffect(() => {
+    if (!rosterModalClass) {
+      setRoster([]);
+      return;
+    }
+    void loadRoster(rosterModalClass.id);
+  }, [rosterModalClass, loadRoster]);
+
+  const handleDeleteClass = (cls: TeacherPersonalClassRow) => {
+    Modal.confirm({
+      title: t('teacher_class.confirm_delete_group_title'),
+      content: t('teacher_class.confirm_delete_group_content'),
+      okText: t('teacher_class.confirm_delete_ok'),
+      okType: 'danger',
+      cancelText: t('teacher_class.confirm_cancel'),
+      onOk: async () => {
+        try {
+          await deleteTeacherPersonalClass(cls.id);
+          message.success(t('teacher_class.delete_success'));
+          if (rosterModalClass?.id === cls.id) {
+            setRosterModalClass(null);
+            setRoster([]);
+          }
+          if (addStudentsClass?.id === cls.id) {
+            setAddStudentsClass(null);
+            setShowAddStudentsModal(false);
+          }
+          await loadAll();
+        } catch (e) {
+          message.error(e instanceof Error ? e.message : t('teacher_class.delete_fail'));
+        }
       },
-      studentCount: 0,
-      status: 'active',
-      createdAt: new Date().toISOString().split('T')[0]
-    };
-
-    setClasses([...classes, newClass]);
-    setShowCreateModal(false);
-    showNotification('班级创建成功');
-  };
-
-  const handleBatchImport = async (file: File, classId: string): Promise<{ success: number; failed: number; errors: { row: number; reason: string }[] }> => {
-    return new Promise((resolve) => {
-      setTimeout(() => {
-        const successCount = Math.floor(Math.random() * 15) + 10;
-        const failedCount = Math.floor(Math.random() * 3);
-
-        const errors = Array.from({ length: failedCount }, (_, i) => ({
-          row: i + 2,
-          reason: ['邮箱格式错误', '学号重复', '必填字段缺失'][Math.floor(Math.random() * 3)],
-        }));
-
-        // 更新班级学生数
-        setClasses(classes.map(cls => 
-          cls.id === classId 
-            ? { ...cls, studentCount: cls.studentCount + successCount }
-            : cls
-        ));
-
-        resolve({
-          success: successCount,
-          failed: failedCount,
-          errors,
-        });
-
-        showNotification(`成功导入 ${successCount} 名学生`);
-      }, 2000);
     });
   };
 
-  const handleDeleteClass = (classId: string) => {
-    if (!confirm('确定要删除这个班级吗？班级内的学生将被移除。')) return;
-
-    setStudents(students.map(s => 
-      s.classId === classId ? { ...s, classId: undefined } : s
-    ));
-
-    setClasses(classes.filter(cls => cls.id !== classId));
-    showNotification('班级已删除');
-  };
-
   const handleRemoveStudent = (studentId: string, classId: string) => {
-    if (!confirm('确定要将该学生从班级中移除吗？')) return;
-
-    setStudents(students.map(s => 
-      s.id === studentId ? { ...s, classId: undefined } : s
-    ));
-
-    setClasses(classes.map(cls => 
-      cls.id === classId
-        ? { ...cls, studentCount: Math.max(0, cls.studentCount - 1) }
-        : cls
-    ));
-
-    showNotification('学生已移除');
+    Modal.confirm({
+      title: t('teacher_class.confirm_remove_student_title'),
+      okText: t('teacher_class.confirm_remove_student_ok'),
+      okType: 'danger',
+      cancelText: t('teacher_class.confirm_cancel'),
+      onOk: async () => {
+        try {
+          await removePersonalClassStudent(classId, studentId);
+          message.success(t('teacher_class.remove_success'));
+          await loadAll();
+          if (rosterModalClass?.id === classId) {
+            await loadRoster(classId);
+          }
+        } catch (e) {
+          message.error(e instanceof Error ? e.message : t('teacher_class.remove_fail'));
+        }
+      },
+    });
   };
 
-  const classStudents = selectedClass 
-    ? students.filter(s => s.classId === selectedClass.id)
-    : [];
+  const totalStudentsInGroups = classes.reduce((acc, c) => acc + c.studentCount, 0);
+  const avgPerClass =
+    classes.length > 0 ? Math.round(totalStudentsInGroups / classes.length) : 0;
 
   return (
     <div className="space-y-6">
-      {/* 顶部统计 */}
+
       <div className="grid grid-cols-4 gap-5">
         {[
-          { label: '班级总数', value: classes.length, icon: 'ri-team-line', color: 'from-teal-500 to-cyan-500' },
-          { label: '进行中班级', value: classes.filter(c => c.status === 'active').length, icon: 'ri-play-circle-line', color: 'from-green-500 to-emerald-500' },
-          { label: '学生总人数', value: students.filter(s => s.classId).length, icon: 'ri-user-line', color: 'from-blue-500 to-indigo-500' },
-          { label: '平均班级人数', value: Math.round(students.filter(s => s.classId).length / classes.length) || 0, icon: 'ri-group-line', color: 'from-orange-500 to-amber-500' },
+          { label: t('teacher_class.page.stat_group_total'), value: classes.length, icon: 'ri-team-line', color: 'from-teal-500 to-cyan-500' },
+          {
+            label: t('teacher_class.page.stat_active'),
+            value: classes.length,
+            icon: 'ri-play-circle-line',
+            color: 'from-green-500 to-emerald-500',
+          },
+          { label: t('teacher_class.page.stat_students'), value: totalStudentsInGroups, icon: 'ri-user-line', color: 'from-blue-500 to-indigo-500' },
+          { label: t('teacher_class.page.stat_avg'), value: avgPerClass, icon: 'ri-group-line', color: 'from-orange-500 to-amber-500' },
         ].map((card, i) => (
           <div key={i} className="bg-white rounded-xl p-5 border border-gray-200 shadow-sm">
             <div className="flex items-center justify-between mb-3">
-              <div className={`w-10 h-10 rounded-lg bg-gradient-to-br ${card.color} flex items-center justify-center`}>
+              <div
+                className={`w-10 h-10 rounded-lg bg-gradient-to-br ${card.color} flex items-center justify-center`}
+              >
                 <i className={`${card.icon} text-white text-base`}></i>
               </div>
               <span className="text-3xl font-bold text-gray-900">{card.value}</span>
@@ -130,166 +148,138 @@ export default function ClassManagement() {
         ))}
       </div>
 
-      {/* 操作栏 */}
       <div className="bg-white rounded-xl p-4 border border-gray-200 shadow-sm">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-bold text-gray-900">班级管理</h2>
+          <h2 className="text-lg font-bold text-gray-900">{t('teacher_class.page.panel_title')}</h2>
           <button
             onClick={() => setShowCreateModal(true)}
             className="flex items-center gap-2 px-4 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700 transition-colors text-sm font-medium cursor-pointer whitespace-nowrap"
           >
             <i className="ri-add-line"></i>
-            创建班级
+            {t('teacher_class.page.create_group')}
           </button>
         </div>
       </div>
 
-      {/* 班级列表 */}
-      <div className="grid lg:grid-cols-2 gap-5">
-        {classes.map(cls => (
-          <div key={cls.id} className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden hover:shadow-md transition-all">
-            <div className="bg-gradient-to-r from-teal-500 to-cyan-500 px-5 py-4">
-              <div className="flex items-start justify-between">
-                <div className="flex-1">
-                  <h3 className="text-lg font-bold text-white mb-1">{cls.name}</h3>
-                  <p className="text-sm text-teal-100">{cls.academicYear} {cls.semester}</p>
-                </div>
-                <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                  cls.status === 'active' ? 'bg-white/20 text-white' : 'bg-gray-100 text-gray-700'
-                }`}>
-                  {cls.status === 'active' ? '进行中' : '已结束'}
-                </span>
-              </div>
+      <Spin spinning={loading}>
+        <div className="grid lg:grid-cols-2 gap-5">
+          {classes.length === 0 && !loading ? (
+            <div className="col-span-2 bg-white rounded-xl border border-dashed border-gray-200 py-16 text-center text-gray-500 text-sm">
+              {t('teacher_class.page.empty')}
             </div>
-
-            <div className="p-5 space-y-4">
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-gray-600">所属院系</span>
-                <span className="font-medium text-gray-900">{cls.department}</span>
-              </div>
-
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-gray-600">指派教师</span>
-                <div className="text-right">
-                  <div className="font-medium text-gray-900">{cls.teacher.name}</div>
-                  <div className="text-xs text-gray-500">{cls.teacher.email}</div>
-                </div>
-              </div>
-
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-gray-600">学生人数</span>
-                <span className="text-lg font-bold text-teal-600">{cls.studentCount} 人</span>
-              </div>
-
-              <div className="flex items-center gap-2 pt-3 border-t border-gray-100">
-                <button
-                  onClick={() => setSelectedClass(selectedClass?.id === cls.id ? null : cls)}
-                  className="flex-1 px-3 py-2 bg-teal-50 text-teal-600 rounded-lg hover:bg-teal-100 transition-colors text-sm font-medium cursor-pointer whitespace-nowrap"
-                >
-                  <i className="ri-eye-line mr-1"></i>
-                  {selectedClass?.id === cls.id ? '收起' : '查看学生'}
-                </button>
-                <button
-                  onClick={() => {
-                    setSelectedClass(cls);
-                    setShowImportModal(true);
-                  }}
-                  className="flex-1 px-3 py-2 bg-green-50 text-green-600 rounded-lg hover:bg-green-100 transition-colors text-sm font-medium cursor-pointer whitespace-nowrap"
-                >
-                  <i className="ri-upload-line mr-1"></i>
-                  导入学生
-                </button>
-                <button
-                  onClick={() => handleDeleteClass(cls.id)}
-                  className="px-3 py-2 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors text-sm font-medium cursor-pointer whitespace-nowrap"
-                >
-                  <i className="ri-delete-bin-line"></i>
-                </button>
-              </div>
-            </div>
-
-            {/* 学生列表 */}
-            {selectedClass?.id === cls.id && (
-              <div className="border-t border-gray-200 bg-gray-50">
-                <div className="px-5 py-3 border-b border-gray-200 bg-white">
-                  <h4 className="text-sm font-bold text-gray-900">班级学生名单</h4>
-                </div>
-                {classStudents.length === 0 ? (
-                  <div className="px-5 py-8 text-center">
-                    <i className="ri-user-line text-3xl text-gray-300 mb-2 block"></i>
-                    <p className="text-sm text-gray-500">暂无学生，请导入学生名单</p>
+          ) : (
+            classes.map((cls) => (
+              <div
+                key={cls.id}
+                className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden hover:shadow-md transition-all"
+              >
+                <div className="bg-gradient-to-r from-teal-500 to-cyan-500 px-5 py-4">
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1">
+                      <h3 className="text-lg font-bold text-white mb-1">{cls.name}</h3>
+                      <p className="text-sm text-teal-100">
+                        {cls.academicYear} {semesterLabel(cls.semester)}
+                      </p>
+                    </div>
+                    <span className="px-3 py-1 rounded-full text-xs font-medium bg-white/20 text-white">
+                      {t('teacher_class.page.badge')}
+                    </span>
                   </div>
-                ) : (
-                  <div className="max-h-80 overflow-y-auto">
-                    <table className="w-full text-sm">
-                      <thead className="bg-gray-100 sticky top-0">
-                        <tr>
-                          <th className="px-5 py-2 text-left text-xs font-semibold text-gray-600">姓名</th>
-                          <th className="px-5 py-2 text-left text-xs font-semibold text-gray-600">学号</th>
-                          <th className="px-5 py-2 text-left text-xs font-semibold text-gray-600">邮箱</th>
-                          <th className="px-5 py-2 text-center text-xs font-semibold text-gray-600">操作</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-100 bg-white">
-                        {classStudents.map(student => (
-                          <tr key={student.id} className="hover:bg-gray-50">
-                            <td className="px-5 py-3">
-                              <div className="flex items-center gap-2">
-                                <div className="w-7 h-7 bg-gradient-to-br from-teal-500 to-cyan-500 rounded-full flex items-center justify-center text-white text-xs font-bold">
-                                  {student.name.charAt(0)}
-                                </div>
-                                <span className="font-medium text-gray-900">{student.name}</span>
-                              </div>
-                            </td>
-                            <td className="px-5 py-3 text-gray-600">{student.studentId}</td>
-                            <td className="px-5 py-3 text-gray-600">{student.email}</td>
-                            <td className="px-5 py-3 text-center">
-                              <button
-                                onClick={() => handleRemoveStudent(student.id, cls.id)}
-                                className="px-2 py-1 text-red-600 hover:bg-red-50 rounded text-xs cursor-pointer whitespace-nowrap"
-                              >
-                                移除
-                              </button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
+                </div>
 
-      {/* 弹窗 */}
+                <div className="p-5 space-y-4">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-gray-600">{t('teacher_class.page.col_my_college')}</span>
+                    <span className="font-medium text-gray-900 text-right">
+                      {profile?.collegeName?.trim() || t('dash')}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-gray-600">{t('teacher_class.page.col_creator')}</span>
+                    <div className="text-right">
+                      <div className="font-medium text-gray-900">{profile?.realName?.trim() || t('teacher_class.page.creator_self')}</div>
+                      <div className="text-xs text-gray-500">{profile?.email || ''}</div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-gray-600">{t('teacher_class.page.col_students')}</span>
+                    <span className="text-lg font-bold text-teal-600">
+                      {cls.studentCount}
+                      {t('teacher_class.page.suffix_people')}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-2 pt-3 border-t border-gray-100">
+                    <button
+                      type="button"
+                      onClick={() => setRosterModalClass(cls)}
+                      className="flex-1 px-3 py-2 bg-teal-50 text-teal-600 rounded-lg hover:bg-teal-100 transition-colors text-sm font-medium cursor-pointer whitespace-nowrap"
+                    >
+                      <i className="ri-eye-line mr-1"></i>
+                      {t('teacher_class.page.view_students')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAddStudentsClass(cls);
+                        setShowAddStudentsModal(true);
+                      }}
+                      className="flex-1 px-3 py-2 bg-green-50 text-green-600 rounded-lg hover:bg-green-100 transition-colors text-sm font-medium cursor-pointer whitespace-nowrap"
+                    >
+                      <i className="ri-user-add-line mr-1"></i>
+                      {t('teacher_class.page.add_students')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteClass(cls)}
+                      className="px-3 py-2 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors text-sm font-medium cursor-pointer whitespace-nowrap"
+                    >
+                      <i className="ri-delete-bin-line"></i>
+                    </button>
+                  </div>
+                </div>
+
+
+              </div>
+            ))
+          )}
+        </div>
+      </Spin>
+
       <CreateClassModal
-        isOpen={showCreateModal}
+        open={showCreateModal}
         onClose={() => setShowCreateModal(false)}
-        onConfirm={handleCreateClass}
-        teachers={mockTeachers}
+        profile={profile}
+        onCreated={() => void loadAll()}
       />
 
-      {selectedClass && (
-        <BatchImportModal
-          isOpen={showImportModal}
-          onClose={() => setShowImportModal(false)}
-          onImport={handleBatchImport}
-          classId={selectedClass.id}
-        />
-      )}
+      <ClassRosterModal
+        open={rosterModalClass != null}
+        classRow={rosterModalClass}
+        roster={roster}
+        loading={rosterLoading}
+        onClose={() => setRosterModalClass(null)}
+        onRemove={handleRemoveStudent}
+      />
 
-      {/* 通知 */}
-      {notification && (
-        <div className="fixed bottom-6 right-6 z-50 animate-fade-in">
-          <div className={`px-6 py-4 rounded-lg shadow-lg flex items-center gap-3 ${
-            notification.type === 'success' ? 'bg-green-600' : 'bg-red-600'
-          } text-white`}>
-            <i className={`${notification.type === 'success' ? 'ri-check-line' : 'ri-error-warning-line'} text-xl`}></i>
-            <span className="font-medium">{notification.message}</span>
-          </div>
-        </div>
+      {addStudentsClass && (
+        <AddStudentsTransferModal
+          open={showAddStudentsModal}
+          personalClassId={addStudentsClass.id}
+          groupName={addStudentsClass.name}
+          onClose={() => {
+            setShowAddStudentsModal(false);
+            setAddStudentsClass(null);
+          }}
+          onSaved={() => {
+            void loadAll();
+            if (rosterModalClass?.id === addStudentsClass.id) {
+              void loadRoster(addStudentsClass.id);
+            }
+          }}
+        />
       )}
     </div>
   );

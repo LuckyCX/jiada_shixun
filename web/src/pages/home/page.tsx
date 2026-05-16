@@ -1,7 +1,26 @@
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useState, useEffect } from 'react';
-import { ADMIN_TOKEN_KEY, loginWithApi } from '../../lib/authApi';
+import { message } from 'antd';
+import {
+  clearPortalToken,
+  getPortalToken,
+  getSavedLoginForm,
+  isJwtLikelyValid,
+  loginWithApi,
+  parseJwtPayload,
+  saveLoginForm,
+  setPortalToken,
+  type PortalRole,
+} from '../../lib/authApi';
+import { studentHasPersonalClassEnrollmentWithToken } from '../../lib/studentPortalApi';
 import { useSiteBrand } from '../../lib/publicSite';
+
+function getRequiredPortalRole(link: string): PortalRole | null {
+  if (link.startsWith('/admin-dashboard')) return 'admin';
+  if (link.startsWith('/teacher-dashboard')) return 'teacher';
+  if (link.startsWith('/student-center')) return 'student';
+  return null;
+}
 
 export default function Home() {
   const { logoUrl, siteTitle } = useSiteBrand();
@@ -17,6 +36,9 @@ export default function Home() {
   const [pendingNavTarget, setPendingNavTarget] = useState<string>('');
   const [loginLoading, setLoginLoading] = useState(false);
   const [loginError, setLoginError] = useState('');
+  const [loginUsername, setLoginUsername] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginRemember, setLoginRemember] = useState(false);
 
   useEffect(() => {
     const handleScroll = () => setScrolled(window.scrollY > 50);
@@ -30,74 +52,132 @@ export default function Home() {
       setLoginRole('admin');
       setShowLoginModal(true);
       setSearchParams({}, { replace: true });
+    } else if (searchParams.get('teacherExpired') === '1') {
+      setLoginError('教师登录已过期，请重新登录');
+      setLoginRole('teacher');
+      setShowLoginModal(true);
+      setSearchParams({}, { replace: true });
+    } else if (searchParams.get('studentExpired') === '1') {
+      setLoginError('学生登录已过期，请重新登录');
+      setLoginRole('student');
+      setShowLoginModal(true);
+      setSearchParams({}, { replace: true });
+    } else if (searchParams.get('studentNoClass') === '1') {
+      setLoginError('未进入班级，当前暂无实训');
+      setLoginRole('student');
+      setShowLoginModal(true);
+      setSearchParams({}, { replace: true });
     }
   }, [searchParams, setSearchParams]);
 
+  useEffect(() => {
+    if (!showLoginModal) return;
+    const saved = getSavedLoginForm(loginRole);
+    setLoginUsername(saved.username);
+    setLoginPassword(saved.password);
+    setLoginRemember(saved.remember);
+  }, [showLoginModal, loginRole]);
+
+  /** 从 Cookie / sessionStorage / 兼容的 localStorage 恢复登录态 */
+  useEffect(() => {
+    const order: PortalRole[] = ['admin', 'teacher', 'student'];
+    for (const role of order) {
+      const t = getPortalToken(role);
+      if (!t) continue;
+      if (!isJwtLikelyValid(t)) {
+        clearPortalToken(role);
+        continue;
+      }
+      const p = parseJwtPayload(t);
+      if (!p || p.role !== role) {
+        clearPortalToken(role);
+        continue;
+      }
+      setUserInfo({ name: String(p.username || '用户'), role });
+      setIsLoggedIn(true);
+      return;
+    }
+  }, []);
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    const form = e.target as HTMLFormElement;
-    const username = (form.elements.namedItem('username') as HTMLInputElement).value;
-    const password = (form.elements.namedItem('password') as HTMLInputElement).value;
+    const username = loginUsername.trim();
+    const password = loginPassword;
+    const remember = loginRemember;
     setLoginError('');
 
-    if (loginRole === 'admin') {
-      setLoginLoading(true);
-      try {
-        const { token, user } = await loginWithApi(username, password);
-        if (user.role !== 'admin') {
-          throw new Error('该账号不是管理员，请使用管理员账号登录');
+    const expected = loginRole as PortalRole;
+    setLoginLoading(true);
+    try {
+      const { token, user } = await loginWithApi(username, password);
+      if (user.role !== expected) {
+        if (expected === 'admin') throw new Error('该账号不是管理员，请使用管理员账号登录');
+        if (expected === 'teacher') throw new Error('该账号不是教师，请使用教师账号登录');
+        throw new Error('该账号不是学生，请使用学生账号登录');
+      }
+      if (expected === 'student') {
+        const enrolled = await studentHasPersonalClassEnrollmentWithToken(token);
+        if (!enrolled) {
+          throw new Error('未进入班级，当前暂无实训');
         }
-        localStorage.setItem(ADMIN_TOKEN_KEY, token);
-        setUserInfo({ name: user.username, role: 'admin' });
-        setIsLoggedIn(true);
-        setShowLoginModal(false);
+      }
+      saveLoginForm(expected, { remember, username, password });
+      setPortalToken(expected, token, remember);
+      setUserInfo({ name: user.username, role: expected });
+      setIsLoggedIn(true);
+      setShowLoginModal(false);
 
-        if (pendingNavTarget) {
-          navigate(pendingNavTarget);
+      if (pendingNavTarget) {
+        const req = getRequiredPortalRole(pendingNavTarget);
+        if (req && req !== expected) {
+          message.warning('当前账号与目标模块所需身份不一致，已进入您的个人工作台');
           setPendingNavTarget('');
+          navigate(
+            expected === 'admin' ? '/admin-dashboard' : expected === 'teacher' ? '/teacher-dashboard' : '/student-center'
+          );
           return;
         }
-        navigate('/admin-dashboard');
-      } catch (err) {
-        setLoginError((err as Error).message || '登录失败');
-      } finally {
-        setLoginLoading(false);
+        navigate(pendingNavTarget);
+        setPendingNavTarget('');
+        return;
       }
-      return;
+
+      if (expected === 'admin') navigate('/admin-dashboard');
+      else if (expected === 'teacher') navigate('/teacher-dashboard');
+      else navigate('/student-center');
+    } catch (err) {
+      setLoginError((err as Error).message || '登录失败');
+    } finally {
+      setLoginLoading(false);
     }
-
-    // 学生 / 教师：演示环境暂无统一账号接口，仍走本地状态（后续可接真实登录）
-    setUserInfo({ name: username, role: loginRole });
-    setIsLoggedIn(true);
-    setShowLoginModal(false);
-
-    if (pendingNavTarget) {
-      navigate(pendingNavTarget);
-      setPendingNavTarget('');
-      return;
-    }
-
-    if (loginRole === 'teacher') navigate('/teacher-dashboard');
-    else navigate('/student-center');
   };
 
   const handleLogout = () => {
-    if (userInfo?.role === 'admin') {
-      localStorage.removeItem(ADMIN_TOKEN_KEY);
-    }
+    if (userInfo?.role) clearPortalToken(userInfo.role);
     setIsLoggedIn(false);
     setUserInfo(null);
   };
 
   // 点击模块时：未登录先弹登录框，已登录直接跳转
   const handleModuleClick = (link: string, preferRole?: 'student' | 'teacher') => {
-    if (!isLoggedIn) {
+    if (!isLoggedIn || !userInfo) {
       setPendingNavTarget(link);
       if (preferRole) setLoginRole(preferRole);
       setShowLoginModal(true);
-    } else {
-      navigate(link);
+      return;
     }
+    const req = getRequiredPortalRole(link);
+    if (req && userInfo.role !== req) {
+      message.warning(
+        req === 'admin'
+          ? '请使用管理员账号访问管理后台'
+          : req === 'teacher'
+            ? '请使用教师账号访问教师看板'
+            : '请使用学生账号访问学生中心'
+      );
+      return;
+    }
+    navigate(link);
   };
 
   const personalCenterLink =
@@ -462,7 +542,7 @@ export default function Home() {
                   </button>
                 ))}
               </div>
-              <form key={loginRole} onSubmit={handleLogin} className="space-y-4" autoComplete="off">
+              <form onSubmit={handleLogin} className="space-y-4" autoComplete="off">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
                     {loginRole === 'admin' ? '管理员账号' : loginRole === 'student' ? '学号' : '工号'}
@@ -472,6 +552,8 @@ export default function Home() {
                     name="username"
                     required
                     autoComplete="off"
+                    value={loginUsername}
+                    onChange={(ev) => setLoginUsername(ev.target.value)}
                     className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all text-sm"
                     placeholder={loginRole === 'admin' ? '请输入管理员账号' : loginRole === 'student' ? '请输入学号' : '请输入工号'}
                   />
@@ -483,6 +565,8 @@ export default function Home() {
                     name="password"
                     required
                     autoComplete="off"
+                    value={loginPassword}
+                    onChange={(ev) => setLoginPassword(ev.target.value)}
                     className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all text-sm"
                     placeholder="请输入密码"
                   />
@@ -492,7 +576,13 @@ export default function Home() {
                 )}
                 <div className="flex items-center justify-between text-sm">
                   <label className="flex items-center gap-2 cursor-pointer">
-                    <input type="checkbox" className="w-4 h-4 text-teal-500 rounded focus:ring-teal-500" />
+                    <input
+                      type="checkbox"
+                      name="remember"
+                      checked={loginRemember}
+                      onChange={(ev) => setLoginRemember(ev.target.checked)}
+                      className="w-4 h-4 text-teal-500 rounded focus:ring-teal-500"
+                    />
                     <span className="text-gray-600">记住我</span>
                   </label>
                   <a href="#" className="text-teal-600 hover:text-teal-700 font-medium">忘记密码？</a>

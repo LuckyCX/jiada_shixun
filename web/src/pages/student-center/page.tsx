@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { Modal } from 'antd';
+import { clearPortalToken, getPortalToken, parseJwtPayload } from '../../lib/authApi';
 import { Link, useSearchParams, useNavigate } from 'react-router-dom';
 import { useSiteBrand } from '../../lib/publicSite';
 import LearningDetail from '../knowledge-system/components/LearningDetail';
@@ -13,6 +14,7 @@ import ProductDesignModule from './components/ProductDesignModule';
 import BusinessModelModule from './components/BusinessModelModule';
 import RoleSimulationModule from './components/RoleSimulationModule';
 import BusinessPlanModule from './components/BusinessPlanModule';
+import { getStudentProfile, type StudentProfile } from '../../lib/studentPortalApi';
 
 type TabType =
   | 'overview'
@@ -77,11 +79,33 @@ export default function StudentCenterPage() {
   const [notificationList, setNotificationList] = useState(notifications);
   const [expandedNotificationId, setExpandedNotificationId] = useState<string | null>(null);
   const [logoutModalOpen, setLogoutModalOpen] = useState(false);
+  const [studentProfile, setStudentProfile] = useState<StudentProfile | null>(null);
+
+  useEffect(() => {
+    getStudentProfile()
+      .then(setStudentProfile)
+      .catch(() => {
+        /* 失败时下面仍用 JWT username 兜底 */
+      });
+  }, []);
 
   const overallProgress = {
     currentLevel: '初级创业者', nextLevel: '中级创业者', levelProgress: 36,
   };
 
+  const { studentDisplayName, studentAvatarChar } = useMemo(() => {
+    const token = getPortalToken('student');
+    const payloadUser = token ? parseJwtPayload(token)?.username : null;
+    const jwtFallback = (payloadUser && String(payloadUser).trim()) || '';
+
+    const realName = (studentProfile?.realName && String(studentProfile.realName).trim()) || '';
+    const studentNo = (studentProfile?.studentNo && String(studentProfile.studentNo).trim()) || '';
+    const loginUsername = (studentProfile?.username && String(studentProfile.username).trim()) || jwtFallback;
+
+    /** 姓名 → 学号 → 登录名（JWT 常为数字内部账号，不适合作为首选展示） */
+    const name = realName || studentNo || loginUsername || '学生';
+    return { studentDisplayName: name, studentAvatarChar: [...name][0] || '学' };
+  }, [studentProfile]);
   const getModuleUnlockStatus = (moduleId: string): 'locked' | 'in_progress' | 'completed' => {
     const thresholds: Record<string, number> = { team: 4, ideation: 6, market: 8, product: 7, business: 9, simulation: 4, plan: 4 };
     const val = moduleProgressState[moduleId] || 0;
@@ -295,8 +319,10 @@ export default function StudentCenterPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-white flex">
-      {/* 左侧侧边栏 */}
-      <aside className={`flex-shrink-0 bg-white border-r border-gray-100 shadow-sm flex flex-col transition-all duration-300 ${sidebarCollapsed ? 'w-16' : 'w-60'} min-h-screen sticky top-0 z-30`}>
+      {/* 左侧侧边栏：视口固定高度；主内容超长时由 body 滚动 */}
+      <aside
+        className={`flex-shrink-0 self-start sticky top-0 z-30 h-screen max-h-screen bg-white border-r border-gray-100 shadow-sm flex flex-col transition-all duration-300 ${sidebarCollapsed ? 'w-16' : 'w-60'}`}
+      >
         <div className={`flex items-center gap-3 px-4 py-5 border-b border-gray-100 ${sidebarCollapsed ? 'justify-center' : ''}`}>
           {logoUrl ? (
             <img src={logoUrl} alt="" className="w-8 h-8 object-contain rounded-lg flex-shrink-0 border border-gray-100 bg-white" />
@@ -316,9 +342,9 @@ export default function StudentCenterPage() {
         {!sidebarCollapsed && (
           <div className="mx-3 mt-4 p-3 bg-gradient-to-br from-teal-50 to-cyan-50 rounded-xl border border-teal-100">
             <div className="flex items-center gap-2 mb-2">
-              <div className="w-8 h-8 bg-gradient-to-br from-teal-500 to-cyan-500 rounded-full flex items-center justify-center text-white text-sm font-bold flex-shrink-0">张</div>
+              <div className="w-8 h-8 bg-gradient-to-br from-teal-500 to-cyan-500 rounded-full flex items-center justify-center text-white text-sm font-bold flex-shrink-0">{studentAvatarChar}</div>
               <div className="overflow-hidden">
-                <div className="text-xs font-bold text-gray-900 truncate">张三同学</div>
+                <div className="text-xs font-bold text-gray-900 truncate">{studentDisplayName}</div>
                 <div className="text-xs text-teal-600 truncate">{overallProgress.currentLevel}</div>
               </div>
             </div>
@@ -397,11 +423,11 @@ export default function StudentCenterPage() {
         <div className="p-3 border-t border-gray-100 shrink-0 space-y-2">
           <div className={`flex items-center gap-2.5 ${sidebarCollapsed ? 'justify-center' : ''}`}>
             <div className="w-8 h-8 rounded-full bg-gradient-to-br from-teal-400 to-cyan-400 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
-              张
+              {studentAvatarChar}
             </div>
             {!sidebarCollapsed && (
               <div className="flex-1 min-w-0">
-                <div className="text-xs font-semibold text-gray-800 truncate">张三同学</div>
+                <div className="text-xs font-semibold text-gray-800 truncate">{studentDisplayName}</div>
                 <div className="text-xs text-gray-400 truncate">{overallProgress.currentLevel}</div>
               </div>
             )}
@@ -414,7 +440,7 @@ export default function StudentCenterPage() {
               <i className="ri-logout-box-r-line text-sm" />
             </button>
           </div>
-          <button
+          {/* <button
             type="button"
             onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
             className={`w-full flex items-center gap-2 px-3 py-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors whitespace-nowrap cursor-pointer ${sidebarCollapsed ? 'justify-center' : ''}`}
@@ -423,7 +449,7 @@ export default function StudentCenterPage() {
               <i className={`${sidebarCollapsed ? 'ri-arrow-right-s-line' : 'ri-arrow-left-s-line'} text-base`} />
             </div>
             {!sidebarCollapsed && <span className="text-xs">收起菜单</span>}
-          </button>
+          </button> */}
         </div>
       </aside>
 
@@ -1082,6 +1108,7 @@ export default function StudentCenterPage() {
         onCancel={() => setLogoutModalOpen(false)}
         onOk={() => {
           setLogoutModalOpen(false);
+          clearPortalToken('student');
           navigate('/');
         }}
         okText="确认退出"

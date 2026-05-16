@@ -40,4 +40,22 @@ export function requireAdmin() {
   };
 }
 
+export function requireTeacher() {
+  return (req, res, next) => {
+    if (!req.user || req.user.role !== 'teacher') {
+      return res.status(403).json({ code: 40302, message: '需要教师权限', data: null });
+    }
+    next();
+  };
+}
+
+export function requireStudent() {
+  return (req, res, next) => {
+    if (!req.user || req.user.role !== 'student') {
+      return res.status(403).json({ code: 40303, message: '需要学生权限', data: null });
+    }
+    next();
+  };
+}
+
 export { getJwtSecret };

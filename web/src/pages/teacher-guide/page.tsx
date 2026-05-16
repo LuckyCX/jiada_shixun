@@ -154,44 +154,10 @@ export default function TeacherGuidePage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-teal-50/30 to-cyan-50/20">
-      {/* 顶部导航 */}
-      <nav className="bg-white/90 backdrop-blur-md border-b border-slate-200 sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-teal-500 to-cyan-500 flex items-center justify-center shadow">
-              <i className="ri-graduation-cap-line text-white text-lg"></i>
-            </div>
-            <div>
-              <span className="text-base font-bold text-gray-900">嘉兴大学创业实训平台</span>
-              <span className="ml-2 text-xs text-teal-600 font-medium bg-teal-50 px-2 py-0.5 rounded-full">教学指南</span>
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <Link
-              to="/teacher-dashboard"
-              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-teal-500 text-white text-sm font-medium hover:bg-teal-600 transition-colors whitespace-nowrap"
-            >
-              <i className="ri-dashboard-line"></i>
-              <span>进入工作台</span>
-            </Link>
-            <Link
-              to="/"
-              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 transition-colors text-sm whitespace-nowrap"
-            >
-              <i className="ri-home-line"></i>
-              <span>返回首页</span>
-            </Link>
-          </div>
-        </div>
-      </nav>
 
       <div className="max-w-7xl mx-auto px-6 py-10">
         {/* 页面标题 */}
         <div className="text-center mb-12">
-          <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-teal-100 text-teal-700 text-sm font-medium mb-4">
-            <i className="ri-user-star-line"></i>
-            <span>教师专属</span>
-          </div>
           <h1 className="text-4xl font-bold text-gray-900 mb-4">教学指南</h1>
           <p className="text-lg text-gray-500 max-w-2xl mx-auto">
             全面了解教师工作台的各项功能，掌握监控、分析、引导、评价的完整教学流程
@@ -377,23 +343,6 @@ export default function TeacherGuidePage() {
                 )}
               </div>
             ))}
-          </div>
-        </div>
-
-        {/* 底部行动号召 */}
-        <div className="text-center pb-10">
-          <div className="inline-flex flex-col items-center gap-4 p-8 rounded-3xl bg-gradient-to-br from-teal-500 to-cyan-500 text-white shadow-xl">
-            <i className="ri-user-star-line text-5xl"></i>
-            <h3 className="text-2xl font-bold">开始高效教学管理</h3>
-            <p className="text-white/90 max-w-md text-sm">
-              进入教师工作台，实时掌握学生动态，精准引导每一个团队
-            </p>
-            <Link
-              to="/teacher-dashboard"
-              className="px-8 py-3 rounded-xl bg-white text-teal-600 font-bold hover:shadow-xl transition-all whitespace-nowrap"
-            >
-              进入教师工作台
-            </Link>
           </div>
         </div>
       </div>

@@ -316,7 +316,7 @@ export default function TaskManagement() {
                     <i className="ri-user-line text-gray-400 text-sm"></i>
                     <div>
                       <p className="text-xs text-gray-400">发布人</p>
-                      <p className="text-sm font-medium text-gray-900">{task.publishedBy}</p>
+                      <p className="text-sm font-medium text-gray-900">张老师</p>
                     </div>
                   </div>
                 </div>

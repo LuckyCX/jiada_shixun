@@ -1,4 +1,4 @@
-import { ADMIN_TOKEN_KEY, redirectAdminSessionExpired } from '../../../../lib/authApi';
+import { getPortalToken, redirectAdminSessionExpired } from '../../../../lib/authApi';
 
 export type DictTypeRow = {
   id: number;
@@ -27,7 +27,7 @@ function apiBase() {
 }
 
 export async function adminFetch(path: string, opts: RequestInit = {}) {
-  const token = localStorage.getItem(ADMIN_TOKEN_KEY) || '';
+  const token = getPortalToken('admin') || '';
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(opts.headers as Record<string, string>),

@@ -18,7 +18,7 @@ import {
   type TableColumnsType,
   type TabsProps,
 } from 'antd';
-import { ADMIN_TOKEN_KEY, loginWithApi, redirectAdminSessionExpired } from '../../../../lib/authApi';
+import { getPortalToken, loginWithApi, redirectAdminSessionExpired, setPortalToken } from '../../../../lib/authApi';
 import { notifySiteBrandUpdated } from '../../../../lib/publicSite';
 import { resizeImageFileTo128Png } from '../../../../lib/resizeLogoTo128';
 
@@ -180,7 +180,7 @@ async function apiFetch(path: string, opts: RequestInit & { token?: string } = {
 
 export default function SystemConfigPanel() {
   const [messageApi, contextHolder] = message.useMessage();
-  const [token, setToken] = useState(() => localStorage.getItem(ADMIN_TOKEN_KEY) || '');
+  const [token, setToken] = useState(() => getPortalToken('admin') || '');
   const [loginUser, setLoginUser] = useState('');
   const [loginPass, setLoginPass] = useState('');
   const [loading, setLoading] = useState(false);
@@ -318,7 +318,7 @@ export default function SystemConfigPanel() {
         messageApi.error('该账号不是管理员');
         return;
       }
-      localStorage.setItem(ADMIN_TOKEN_KEY, t);
+      setPortalToken('admin', t, false);
       setToken(t);
       setLoginPass('');
       messageApi.success('登录成功');

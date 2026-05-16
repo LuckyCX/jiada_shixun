@@ -1,5 +1,7 @@
 import { lazy } from 'react';
 import { RouteObject } from 'react-router-dom';
+import RequireRole from './RequireRole';
+import RequireStudentPersonalClass from './RequireStudentPersonalClass';
 
 const HomePage = lazy(() => import('../pages/home/page'));
 const TeamFormationPage = lazy(() => import('../pages/team-formation/page'));
@@ -63,7 +65,11 @@ const routes: RouteObject[] = [
   },
   {
     path: '/teacher-dashboard',
-    element: <TeacherDashboardPage />,
+    element: (
+      <RequireRole role="teacher">
+        <TeacherDashboardPage />
+      </RequireRole>
+    ),
   },
   {
     path: '/knowledge-system',
@@ -83,11 +89,21 @@ const routes: RouteObject[] = [
   },
   {
     path: '/student-center',
-    element: <StudentCenterPage />,
+    element: (
+      <RequireRole role="student">
+        <RequireStudentPersonalClass>
+          <StudentCenterPage />
+        </RequireStudentPersonalClass>
+      </RequireRole>
+    ),
   },
   {
     path: '/admin-dashboard',
-    element: <AdminDashboardPage />,
+    element: (
+      <RequireRole role="admin">
+        <AdminDashboardPage />
+      </RequireRole>
+    ),
   },
   {
     path: '/user-guide',
