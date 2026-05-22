@@ -325,7 +325,7 @@ function AIGenerateModal({
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-6 space-y-5">
+        <div className="flex-1 overflow-y-auto py-1 px-6 space-y-5">
           {plan.goal && (
             <div className="bg-green-50 border border-green-200 rounded-xl p-4">
               <p className="text-xs font-medium text-green-700 mb-1">
@@ -525,7 +525,7 @@ function AIGeneratePersonaModal({
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-6">
+        <div className="flex-1 overflow-y-auto py-1 px-6">
           {!generated ? (
             <div className="text-center py-12">
               <div className="w-20 h-20 mx-auto mb-6 bg-gradient-to-br from-purple-100 to-blue-100 rounded-2xl flex items-center justify-center">
@@ -702,7 +702,7 @@ function EditPersonaModal({ persona, onSave, onClose }: { persona: UserPersona; 
             <i className="ri-close-line text-xl"></i>
           </button>
         </div>
-        <div className="flex-1 overflow-y-auto p-6 space-y-5">
+        <div className="flex-1 overflow-y-auto py-1 px-6 space-y-5">
           <div className="grid grid-cols-2 gap-4">
             {[
               { label: '姓名', field: 'name' as const, type: 'text' },
@@ -797,7 +797,7 @@ function CreatePersonaModal({ onSave, onClose }: { onSave: (p: UserPersona) => v
             <i className="ri-close-line text-xl"></i>
           </button>
         </div>
-        <div className="flex-1 overflow-y-auto p-6 space-y-5">
+        <div className="flex-1 overflow-y-auto py-1 px-6 space-y-5">
           <div className="grid grid-cols-2 gap-4">
             {[
               { label: '姓名 *', field: 'name' as const, type: 'text' },
@@ -1763,7 +1763,7 @@ export default function MarketResearchModule() {
               </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-6">
+            <div className="flex-1 overflow-y-auto py-1 px-6">
               {/* 收集进度 */}
               <div className="bg-green-50 rounded-xl p-4 mb-6">
                 <div className="flex items-center justify-between mb-2">

@@ -146,7 +146,7 @@ function AIGenerateModal({
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-6 space-y-5">
+        <div className="flex-1 overflow-y-auto py-1 px-6 space-y-5">
           {/* Plan summary */}
           {plan.goal && (
             <div className="bg-purple-50 border border-purple-200 rounded-xl p-4">

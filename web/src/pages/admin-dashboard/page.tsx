@@ -7,6 +7,7 @@ import ClassManagement from './components/classManagement';
 import CollegeManagement from './components/collegeManagement';
 import OperationLog from './components/operationLog';
 import { fetchAdminColleges } from './components/collegeApi';
+import CourseResourceManagement from './components/courseResource';
 
 import SystemConfig from './components/systemConfig';
 import DictTypeManage from './components/dictionary/DictTypeManage';
@@ -20,6 +21,7 @@ type TabType =
   | 'college-teachers'
   | 'class-management'
   | 'class-students'
+  | 'course-resource'
   | 'operation-log'
   | 'system-config'
   | 'dictionary'
@@ -31,6 +33,7 @@ const TAB_WHITELIST: TabType[] = [
   'college-teachers',
   'class-management',
   'class-students',
+  'course-resource',
   'operation-log',
   'system-config',
   'dictionary',
@@ -52,10 +55,6 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     const raw = searchParams.get('tab');
-    if (raw === 'course-resource') {
-      navigate('/admin-dashboard?tab=overview', { replace: true });
-      return;
-    }
     if (raw === 'user-management') {
       navigate('/admin-dashboard?tab=college-management', { replace: true });
       return;
@@ -173,6 +172,9 @@ export default function AdminDashboard() {
       const label = cn ? decodeURIComponent(cn) : '';
       return label ? `班级管理 / 学生管理 · ${label}` : '班级管理 / 学生管理';
     }
+    if (activeTab === 'course-resource') {
+      return '课程与资源';
+    }
     const item = menuItems.find((m) => m.id === activeTab);
     return item ? item.label : '数据概览';
   };
@@ -223,7 +225,8 @@ export default function AdminDashboard() {
                 activeTab === item.id ||
                 (item.id === 'dictionary' && activeTab === 'dictionary-items') ||
                 (item.id === 'college-management' && activeTab === 'college-teachers') ||
-                (item.id === 'class-management' && activeTab === 'class-students')
+                (item.id === 'class-management' && activeTab === 'class-students') ||
+                (item.id === 'course-resource' && activeTab === 'course-resource')
                   ? 'bg-teal-50 text-teal-600'
                   : 'text-gray-600 hover:bg-gray-50'
               }`}
@@ -345,6 +348,7 @@ export default function AdminDashboard() {
                 }}
               />
             )}
+          {activeTab === 'course-resource' && <CourseResourceManagement />}
           {activeTab === 'operation-log' && <OperationLog />}
           {activeTab === 'system-config' && <SystemConfig />}
           {activeTab === 'dictionary' && <DictTypeManage />}

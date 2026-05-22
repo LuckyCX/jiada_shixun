@@ -23,15 +23,10 @@ export default function CourseResourceManagement() {
 
   return (
     <div>
-      <div className="mb-6">
-        <h2 className="text-2xl font-bold text-gray-900 mb-1">课程与资源</h2>
-        <p className="text-sm text-gray-500">
-          管理课程章节内容、公共知识点库与案例库
-        </p>
-      </div>
+      
 
       {/* 子Tab切换 */}
-      <div className="flex gap-2 mb-6 bg-white rounded-xl p-2 shadow-sm border border-gray-100">
+      {/* <div className="flex gap-2 mb-6 bg-white rounded-xl p-2 shadow-sm border border-gray-100">
         {subTabs.map(tab => (
           <button
             key={tab.key}
@@ -46,7 +41,7 @@ export default function CourseResourceManagement() {
             {tab.label}
           </button>
         ))}
-      </div>
+      </div> */}
 
       {subTab === 'course' && <CourseManagement />}
       {subTab === 'knowledge' && <KnowledgePointLibrary />}

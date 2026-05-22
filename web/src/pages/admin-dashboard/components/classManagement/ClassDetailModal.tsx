@@ -38,7 +38,7 @@ export default function ClassDetailModal({
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-6">
+        <div className="flex-1 overflow-y-auto py-1 px-6">
           <div className="bg-gradient-to-br from-teal-50 to-cyan-50 rounded-xl p-6 mb-6">
             <div className="grid grid-cols-2 gap-6">
               <div>

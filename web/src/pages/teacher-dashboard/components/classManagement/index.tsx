@@ -1,30 +1,27 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, Modal, Spin, message } from 'antd';
+import { Modal, Spin, message } from 'antd';
 import { useTranslation } from 'react-i18next';
 import { usePublicDictOptions } from '../../../admin-dashboard/components/classManagement/usePublicDictOptions';
 import CreateClassModal from './CreateClassModal';
 import AddStudentsTransferModal from './AddStudentsTransferModal';
-import ClassRosterModal from './ClassRosterModal';
 import {
   type TeacherPersonalClassRow,
   type TeacherProfile,
-  type TeacherRosterStudent,
   deleteTeacherPersonalClass,
   getTeacherProfile,
   listTeacherPersonalClasses,
-  listPersonalClassStudents,
-  removePersonalClassStudent,
 } from '../../teacherPortalApi';
 
-export default function ClassManagement() {
+type ClassManagementProps = {
+  onOpenClassStudents: (cls: TeacherPersonalClassRow) => void;
+};
+
+export default function ClassManagement({ onOpenClassStudents }: ClassManagementProps) {
   const { t } = useTranslation();
   const { labelByValue: semesterLabel } = usePublicDictOptions('semester', true);
   const [profile, setProfile] = useState<TeacherProfile | null>(null);
   const [classes, setClasses] = useState<TeacherPersonalClassRow[]>([]);
-  const [rosterModalClass, setRosterModalClass] = useState<TeacherPersonalClassRow | null>(null);
   const [addStudentsClass, setAddStudentsClass] = useState<TeacherPersonalClassRow | null>(null);
-  const [roster, setRoster] = useState<TeacherRosterStudent[]>([]);
-  const [rosterLoading, setRosterLoading] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showAddStudentsModal, setShowAddStudentsModal] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -46,27 +43,6 @@ export default function ClassManagement() {
     void loadAll();
   }, [loadAll]);
 
-  const loadRoster = useCallback(async (classId: string) => {
-    setRosterLoading(true);
-    try {
-      const list = await listPersonalClassStudents(classId);
-      setRoster(list);
-    } catch (e) {
-      message.error(e instanceof Error ? e.message : t('teacher_class.page.roster_load_fail'));
-      setRoster([]);
-    } finally {
-      setRosterLoading(false);
-    }
-  }, [t]);
-
-  useEffect(() => {
-    if (!rosterModalClass) {
-      setRoster([]);
-      return;
-    }
-    void loadRoster(rosterModalClass.id);
-  }, [rosterModalClass, loadRoster]);
-
   const handleDeleteClass = (cls: TeacherPersonalClassRow) => {
     Modal.confirm({
       title: t('teacher_class.confirm_delete_group_title'),
@@ -78,10 +54,6 @@ export default function ClassManagement() {
         try {
           await deleteTeacherPersonalClass(cls.id);
           message.success(t('teacher_class.delete_success'));
-          if (rosterModalClass?.id === cls.id) {
-            setRosterModalClass(null);
-            setRoster([]);
-          }
           if (addStudentsClass?.id === cls.id) {
             setAddStudentsClass(null);
             setShowAddStudentsModal(false);
@@ -89,27 +61,6 @@ export default function ClassManagement() {
           await loadAll();
         } catch (e) {
           message.error(e instanceof Error ? e.message : t('teacher_class.delete_fail'));
-        }
-      },
-    });
-  };
-
-  const handleRemoveStudent = (studentId: string, classId: string) => {
-    Modal.confirm({
-      title: t('teacher_class.confirm_remove_student_title'),
-      okText: t('teacher_class.confirm_remove_student_ok'),
-      okType: 'danger',
-      cancelText: t('teacher_class.confirm_cancel'),
-      onOk: async () => {
-        try {
-          await removePersonalClassStudent(classId, studentId);
-          message.success(t('teacher_class.remove_success'));
-          await loadAll();
-          if (rosterModalClass?.id === classId) {
-            await loadRoster(classId);
-          }
-        } catch (e) {
-          message.error(e instanceof Error ? e.message : t('teacher_class.remove_fail'));
         }
       },
     });
@@ -214,7 +165,7 @@ export default function ClassManagement() {
                   <div className="flex items-center gap-2 pt-3 border-t border-gray-100">
                     <button
                       type="button"
-                      onClick={() => setRosterModalClass(cls)}
+                      onClick={() => onOpenClassStudents(cls)}
                       className="flex-1 px-3 py-2 bg-teal-50 text-teal-600 rounded-lg hover:bg-teal-100 transition-colors text-sm font-medium cursor-pointer whitespace-nowrap"
                     >
                       <i className="ri-eye-line mr-1"></i>
@@ -255,15 +206,6 @@ export default function ClassManagement() {
         onCreated={() => void loadAll()}
       />
 
-      <ClassRosterModal
-        open={rosterModalClass != null}
-        classRow={rosterModalClass}
-        roster={roster}
-        loading={rosterLoading}
-        onClose={() => setRosterModalClass(null)}
-        onRemove={handleRemoveStudent}
-      />
-
       {addStudentsClass && (
         <AddStudentsTransferModal
           open={showAddStudentsModal}
@@ -275,9 +217,6 @@ export default function ClassManagement() {
           }}
           onSaved={() => {
             void loadAll();
-            if (rosterModalClass?.id === addStudentsClass.id) {
-              void loadRoster(addStudentsClass.id);
-            }
           }}
         />
       )}

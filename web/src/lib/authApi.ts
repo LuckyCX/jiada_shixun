@@ -3,6 +3,10 @@ export const ADMIN_TOKEN_KEY = 'jiada_admin_token';
 export const TEACHER_TOKEN_KEY = 'jiada_teacher_token';
 export const STUDENT_TOKEN_KEY = 'jiada_student_token';
 
+const ADMIN_REFRESH_TOKEN_KEY = 'jiada_admin_refresh_token';
+const TEACHER_REFRESH_TOKEN_KEY = 'jiada_teacher_refresh_token';
+const STUDENT_REFRESH_TOKEN_KEY = 'jiada_student_refresh_token';
+
 export type PortalRole = 'admin' | 'teacher' | 'student';
 
 const LOGIN_FORM_STORAGE_KEY = 'jiada_portal_login_form_v1';
@@ -54,6 +58,16 @@ function storageKeyForRole(role: PortalRole): string {
   if (role === 'admin') return ADMIN_TOKEN_KEY;
   if (role === 'teacher') return TEACHER_TOKEN_KEY;
   return STUDENT_TOKEN_KEY;
+}
+
+function refreshStorageKeyForRole(role: PortalRole): string {
+  if (role === 'admin') return ADMIN_REFRESH_TOKEN_KEY;
+  if (role === 'teacher') return TEACHER_REFRESH_TOKEN_KEY;
+  return STUDENT_REFRESH_TOKEN_KEY;
+}
+
+function isPortalRememberMe(role: PortalRole): boolean {
+  return Boolean(getAuthCookie(storageKeyForRole(role)));
 }
 
 function cookieAttrs(): string {
@@ -137,6 +151,19 @@ export function getPortalToken(role: PortalRole): string | null {
   return null;
 }
 
+export function getPortalRefreshToken(role: PortalRole): string | null {
+  const key = refreshStorageKeyForRole(role);
+  const fromCookie = getAuthCookie(key);
+  if (fromCookie) return fromCookie;
+  try {
+    const fromSession = sessionStorage.getItem(key);
+    if (fromSession) return fromSession;
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
 function clearOtherPortalTokens(keep: PortalRole): void {
   const roles: PortalRole[] = ['admin', 'teacher', 'student'];
   for (const r of roles) {
@@ -148,25 +175,44 @@ function clearOtherPortalTokens(keep: PortalRole): void {
  * 写入登录 token，并清除其它角色的存储，避免串端。
  * @param remember 为 true 时写入 Cookie（Max-Age 30 天）；否则仅 sessionStorage。
  */
-export function setPortalToken(role: PortalRole, token: string, remember: boolean): void {
+export function setPortalToken(
+  role: PortalRole,
+  token: string,
+  remember: boolean,
+  refreshToken?: string | null
+): void {
   clearOtherPortalTokens(role);
   const key = storageKeyForRole(role);
+  const refreshKey = refreshStorageKeyForRole(role);
   try {
     localStorage.removeItem(key);
+    localStorage.removeItem(refreshKey);
   } catch {
     /* ignore */
   }
   if (remember) {
     try {
       sessionStorage.removeItem(key);
+      sessionStorage.removeItem(refreshKey);
     } catch {
       /* ignore */
     }
     setAuthCookie(key, token, 30 * 24 * 60 * 60);
+    if (refreshToken) {
+      setAuthCookie(refreshKey, refreshToken, 30 * 24 * 60 * 60);
+    } else {
+      clearAuthCookie(refreshKey);
+    }
   } else {
     clearAuthCookie(key);
+    clearAuthCookie(refreshKey);
     try {
       sessionStorage.setItem(key, token);
+      if (refreshToken) {
+        sessionStorage.setItem(refreshKey, refreshToken);
+      } else {
+        sessionStorage.removeItem(refreshKey);
+      }
     } catch {
       /* ignore */
     }
@@ -175,14 +221,18 @@ export function setPortalToken(role: PortalRole, token: string, remember: boolea
 
 export function clearPortalToken(role: PortalRole): void {
   const key = storageKeyForRole(role);
+  const refreshKey = refreshStorageKeyForRole(role);
   clearAuthCookie(key);
+  clearAuthCookie(refreshKey);
   try {
     sessionStorage.removeItem(key);
+    sessionStorage.removeItem(refreshKey);
   } catch {
     /* ignore */
   }
   try {
     localStorage.removeItem(key);
+    localStorage.removeItem(refreshKey);
   } catch {
     /* ignore */
   }
@@ -228,8 +278,118 @@ export type LoginUser = {
 
 export type LoginResponse = {
   token: string;
+  refreshToken?: string;
   user: LoginUser;
 };
+
+const refreshInflight: Partial<Record<PortalRole, Promise<boolean>>> = {};
+
+function redirectPortalSessionExpired(role: PortalRole): void {
+  if (role === 'admin') redirectAdminSessionExpired();
+  else if (role === 'teacher') redirectTeacherSessionExpired();
+  else redirectStudentSessionExpired();
+}
+
+function isAuthFailure(status: number, code: unknown): boolean {
+  return status === 401 || code === 40101 || code === 40102;
+}
+
+/**
+ * 使用 refresh token 换取新的 access（及轮换后的 refresh）。
+ */
+export async function refreshPortalAccessToken(role: PortalRole): Promise<boolean> {
+  const existing = refreshInflight[role];
+  if (existing) return existing;
+
+  const job = (async () => {
+    const refreshToken = getPortalRefreshToken(role);
+    if (!refreshToken) return false;
+    try {
+      const r = await fetch('/api/auth/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refreshToken }),
+      });
+      const j = await r.json().catch(() => ({ code: -1, message: '无效 JSON' }));
+      if (!r.ok || j.code !== 0 || !j.data?.token) return false;
+      const remember = isPortalRememberMe(role);
+      setPortalToken(role, j.data.token as string, remember, (j.data.refreshToken as string) || refreshToken);
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+
+  refreshInflight[role] = job;
+  try {
+    return await job;
+  } finally {
+    delete refreshInflight[role];
+  }
+}
+
+/** 访问令牌将过期时尝试静默刷新（进入页面前） */
+export async function ensurePortalAccessToken(role: PortalRole): Promise<boolean> {
+  const token = getPortalToken(role);
+  if (token && isJwtLikelyValid(token)) {
+    const p = parseJwtPayload(token);
+    return Boolean(p && p.role === role);
+  }
+  return refreshPortalAccessToken(role);
+}
+
+export function redirectStudentSessionExpired(): void {
+  if (typeof window === 'undefined') return;
+  if (!window.location.pathname.startsWith('/student-center')) return;
+  clearPortalToken('student');
+  window.location.replace('/?studentExpired=1');
+}
+
+/**
+ * 带 Bearer 的 API 请求；access 过期时自动 refresh 并重试一次。
+ */
+export async function portalAuthenticatedFetch(
+  role: PortalRole,
+  path: string,
+  opts: RequestInit = {}
+): Promise<unknown> {
+  const runOnce = async (accessToken: string) => {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...(opts.headers as Record<string, string>),
+    };
+    if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+    const r = await fetch(path, { ...opts, headers });
+    const j = await r.json().catch(() => ({ code: -1, message: '无效 JSON' }));
+    return { r, j };
+  };
+
+  let access = getPortalToken(role) || '';
+  let { r, j } = await runOnce(access);
+
+  if (isAuthFailure(r.status, j.code) && getPortalRefreshToken(role)) {
+    const ok = await refreshPortalAccessToken(role);
+    if (ok) {
+      access = getPortalToken(role) || '';
+      ({ r, j } = await runOnce(access));
+    }
+  }
+
+  if (isAuthFailure(r.status, j.code)) {
+    redirectPortalSessionExpired(role);
+    const msg =
+      role === 'teacher'
+        ? '登录已失效，请返回首页重新以教师登录'
+        : role === 'admin'
+          ? '登录已失效，请返回首页重新以管理员登录'
+          : '登录已失效，请返回首页重新登录';
+    throw new Error(typeof j.message === 'string' ? j.message : msg);
+  }
+  if (!r.ok || j.code !== 0) {
+    throw new Error(typeof j.message === 'string' ? j.message : `HTTP ${r.status}`);
+  }
+  return j.data;
+}
 
 /**
  * POST /api/auth/login

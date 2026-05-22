@@ -115,7 +115,7 @@ export default function DetailModal({ plan, onClose, onReview }: DetailModalProp
         </div>
 
         {/* 内容区域 */}
-        <div className="flex-1 overflow-y-auto p-6">
+        <div className="flex-1 overflow-y-auto py-1 px-6">
           {activeTab === 'content' && (
             <div className="space-y-6">
               {sections.map((section) => (

@@ -1,29 +1,9 @@
-import { clearPortalToken, getPortalToken } from './authApi';
+import { portalAuthenticatedFetch, redirectStudentSessionExpired } from './authApi';
 
-export function redirectStudentSessionExpired(): void {
-  if (typeof window === 'undefined') return;
-  if (!window.location.pathname.startsWith('/student-center')) return;
-  clearPortalToken('student');
-  window.location.replace('/?studentExpired=1');
-}
+export { redirectStudentSessionExpired };
 
 async function studentFetch(path: string, opts: RequestInit = {}) {
-  const token = getPortalToken('student') || '';
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    ...(opts.headers as Record<string, string>),
-  };
-  if (token) headers.Authorization = `Bearer ${token}`;
-  const r = await fetch(path, { ...opts, headers });
-  const j = await r.json().catch(() => ({ code: -1, message: '无效 JSON' }));
-  if (r.status === 401 || j.code === 40101 || j.code === 40102) {
-    redirectStudentSessionExpired();
-    throw new Error(typeof j.message === 'string' ? j.message : '登录已失效，请返回首页重新登录');
-  }
-  if (!r.ok || j.code !== 0) {
-    throw new Error(typeof j.message === 'string' ? j.message : `HTTP ${r.status}`);
-  }
-  return j.data;
+  return portalAuthenticatedFetch('student', path, opts);
 }
 
 export type StudentPersonalEnrollment = {

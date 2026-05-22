@@ -1,4 +1,4 @@
-import { getPortalToken, redirectAdminSessionExpired } from '../../../../lib/authApi';
+import { portalAuthenticatedFetch } from '../../../../lib/authApi';
 
 export type DictTypeRow = {
   id: number;
@@ -27,22 +27,7 @@ function apiBase() {
 }
 
 export async function adminFetch(path: string, opts: RequestInit = {}) {
-  const token = getPortalToken('admin') || '';
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    ...(opts.headers as Record<string, string>),
-  };
-  if (token) headers.Authorization = `Bearer ${token}`;
-  const r = await fetch(`${apiBase()}${path}`, { ...opts, headers });
-  const j = await r.json().catch(() => ({ code: -1, message: '无效 JSON' }));
-  if (r.status === 401 || j.code === 40101 || j.code === 40102) {
-    redirectAdminSessionExpired();
-    throw new Error(typeof j.message === 'string' ? j.message : '登录已失效，请返回首页重新以管理员登录');
-  }
-  if (!r.ok || j.code !== 0) {
-    throw new Error(typeof j.message === 'string' ? j.message : `HTTP ${r.status}`);
-  }
-  return j.data;
+  return portalAuthenticatedFetch('admin', `${apiBase()}${path}`, opts);
 }
 
 export async function fetchDictTypes(params: {

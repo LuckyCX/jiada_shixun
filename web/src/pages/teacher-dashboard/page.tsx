@@ -21,7 +21,12 @@ import ClassProjectOverview from '../class-project-overview/page';
 import TeacherGuide from '../teacher-guide/page';
 import CourseSettings from '../course-settings/page';
 import EvaluationPanel from './components/EvaluationPanel';
-import { getTeacherProfile, type TeacherProfile } from './teacherPortalApi';
+import {
+  getTeacherProfile,
+  type TeacherPersonalClassRow,
+  type TeacherProfile,
+} from './teacherPortalApi';
+import CourseResourceManagement from '../admin-dashboard/components/courseResource';
 
 type TabKey =
   | 'monitor'
@@ -36,7 +41,8 @@ type TabKey =
   | 'businessPlanReview'
   | 'classProjectOverview'
   | 'teacherGuide'
-  | 'courseSettings';
+  | 'courseSettings'
+  | 'courseResources';
 
 type SidebarGroup = {
   groupLabel?: string;
@@ -63,7 +69,6 @@ const sidebarGroups: SidebarGroup[] = [
     groupLabel: '班级与学生',
     items: [
       { key: 'classManagement', label: '班级管理', icon: 'ri-building-4-line', type: 'tab' },
-      { key: 'studentManagement', label: '学生管理', icon: 'ri-user-3-line', type: 'tab' },
     ],
   },
   {
@@ -80,8 +85,8 @@ const sidebarGroups: SidebarGroup[] = [
     items: [
       // { key: 'classProjectOverview', label: '班级项目总览', icon: 'ri-layout-grid-line', type: 'tab' },
       { key: 'teacherGuide', label: '教学指南', icon: 'ri-book-open-line', type: 'tab' },
-      { key: 'courseSettings', label: '课程设置', icon: 'ri-settings-3-line', type: 'tab' },
-      // { key: 'courseResources', label: '课程资源', icon: 'ri-file-line', type: 'link', to: '/teacher-resources' },
+      // { key: 'courseSettings', label: '课程设置', icon: 'ri-settings-3-line', type: 'tab' },
+      { key: 'courseResources', label: '课程资源', icon: 'ri-layout-grid-line', type: 'tab' },
     ],
   },
 ];
@@ -307,6 +312,12 @@ export default function TeacherDashboard() {
   const [searchQuery, setSearchQuery] = useState('');
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [teacherProfile, setTeacherProfile] = useState<TeacherProfile | null>(null);
+  const [studentClassContext, setStudentClassContext] = useState<TeacherPersonalClassRow | null>(null);
+
+  const backFromClassStudents = () => {
+    setStudentClassContext(null);
+    setActiveTab('classManagement');
+  };
 
   const { teacherDisplayName, teacherAvatarChar } = useMemo(() => {
     const token = getPortalToken('teacher');
@@ -325,6 +336,12 @@ export default function TeacherDashboard() {
         /* 侧栏仍可用 JWT 中的 username 兜底 */
       });
   }, []);
+
+  useEffect(() => {
+    if (activeTab === 'studentManagement' && !studentClassContext) {
+      setActiveTab('classManagement');
+    }
+  }, [activeTab, studentClassContext]);
 
   const filteredTeams = mockTeams.filter((t) => {
     const matchStatus = filterStatus === 'all' || t.status === filterStatus;
@@ -422,10 +439,25 @@ export default function TeacherDashboard() {
         return <GuidanceToolPanel />;
 
       case 'classManagement':
-        return <ClassManagement />;
+        return (
+          <ClassManagement
+            onOpenClassStudents={(cls) => {
+              setStudentClassContext(cls);
+              setActiveTab('studentManagement');
+            }}
+          />
+        );
 
       case 'studentManagement':
-        return <StudentManagement />;
+        if (!studentClassContext) {
+          return null;
+        }
+        return (
+          <StudentManagement
+            personalClass={studentClassContext}
+            onBack={backFromClassStudents}
+          />
+        );
 
       case 'taskManagement':
         return <TaskManagement />;
@@ -448,6 +480,9 @@ export default function TeacherDashboard() {
       case 'courseSettings':
         return <CourseSettings embedded={true} />;
 
+      case 'courseResources':
+        return <CourseResourceManagement />;
+
       case 'evaluation':
         return <EvaluationPanel />;
 
@@ -456,8 +491,10 @@ export default function TeacherDashboard() {
     }
   };
 
+  const sidebarHighlightKey =
+    activeTab === 'studentManagement' ? 'classManagement' : activeTab;
   const activeItem = sidebarItems.find(
-    (item) => item.type === 'tab' && item.key === activeTab
+    (item) => item.type === 'tab' && item.key === sidebarHighlightKey
   );
 
   return (
@@ -495,7 +532,7 @@ export default function TeacherDashboard() {
                 )}
                 <div className="space-y-0.5">
                   {group.items.map((item) => {
-                    const isActive = item.type === 'tab' && item.key === activeTab;
+                    const isActive = item.type === 'tab' && item.key === sidebarHighlightKey;
                     return (
                       <button
                         key={item.key}
@@ -546,16 +583,29 @@ export default function TeacherDashboard() {
       <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
         {/* 顶部 Header */}
         <header className="bg-white border-b border-gray-100 shadow-sm flex-shrink-0 px-6 py-4 flex items-center justify-between">
-          <div>
-            <h1 className="text-base font-bold text-gray-900">
-              {activeItem?.label ?? '教师工作台'}
+          <div className="flex items-center gap-3 min-w-0">
+            {activeTab === 'studentManagement' && studentClassContext && (
+              <button
+                type="button"
+                onClick={backFromClassStudents}
+                className="flex items-center gap-1 px-2 py-1 text-sm text-teal-600 hover:bg-teal-50 rounded-lg transition-colors cursor-pointer whitespace-nowrap flex-shrink-0"
+              >
+                <i className="ri-arrow-left-line" />
+                返回班级管理
+              </button>
+            )}
+            <div className="min-w-0">
+            <h1 className="text-base font-bold text-gray-900 truncate">
+              {activeTab === 'studentManagement' && studentClassContext
+                ? `学生管理 — ${studentClassContext.name}`
+                : (activeItem?.label ?? '教师工作台')}
             </h1>
             <p className="text-xs text-gray-400 mt-0.5">
               {activeTab === 'monitor' && `共 ${mockTeams.length} 个团队 · ${mockTeams.filter(t => t.status !== 'on-track').length} 个需关注`}
               {activeTab === 'analysis' && '智能分析学生学习数据'}
               {activeTab === 'guidance' && '动态生成教学引导策略'}
               {activeTab === 'classManagement' && '管理班级信息与学生导入'}
-              {activeTab === 'studentManagement' && '查看全部学生学习状态与进度'}
+              {activeTab === 'studentManagement' && studentClassContext && `班级「${studentClassContext.name}」学生名册`}
               {activeTab === 'taskManagement' && '发布与管理课程任务'}
               {activeTab === 'teamReview' && '审核学生组队申请'}
               {activeTab === 'topicReview' && '审核学生选题方案'}
@@ -563,8 +613,10 @@ export default function TeacherDashboard() {
               {activeTab === 'classProjectOverview' && '多维度查看全班项目进度'}
               {activeTab === 'teacherGuide' && '掌握监控、分析、引导、评价的完整教学流程'}
               {activeTab === 'courseSettings' && '配置实训任务截止时间与评分标准'}
+              {activeTab === 'courseResources' && '管理课程章节、知识点库与案例库'}
               {activeTab === 'evaluation' && '双维评价体系 · 项目完成 + 迭代增值'}
             </p>
+            </div>
           </div>
           <div className="flex items-center gap-3">
             <button className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors cursor-pointer relative">
@@ -578,7 +630,7 @@ export default function TeacherDashboard() {
         </header>
 
         {/* 主内容 */}
-        <main className="flex-1 overflow-y-auto p-6">
+        <main className="flex-1 overflow-y-auto py-6 px-6">
           {renderContent()}
         </main>
       </div>

@@ -8,12 +8,14 @@ import {
   isJwtLikelyValid,
   loginWithApi,
   parseJwtPayload,
+  refreshPortalAccessToken,
   saveLoginForm,
   setPortalToken,
   type PortalRole,
 } from '../../lib/authApi';
 import { studentHasPersonalClassEnrollmentWithToken } from '../../lib/studentPortalApi';
 import { useSiteBrand } from '../../lib/publicSite';
+import bg from '../../assets/images/bg.jpg';
 
 function getRequiredPortalRole(link: string): PortalRole | null {
   if (link.startsWith('/admin-dashboard')) return 'admin';
@@ -78,25 +80,37 @@ export default function Home() {
     setLoginRemember(saved.remember);
   }, [showLoginModal, loginRole]);
 
-  /** 从 Cookie / sessionStorage / 兼容的 localStorage 恢复登录态 */
+  /** 从 Cookie / sessionStorage 恢复登录态；access 过期时尝试 refresh */
   useEffect(() => {
-    const order: PortalRole[] = ['admin', 'teacher', 'student'];
-    for (const role of order) {
-      const t = getPortalToken(role);
-      if (!t) continue;
-      if (!isJwtLikelyValid(t)) {
-        clearPortalToken(role);
-        continue;
+    let cancelled = false;
+    void (async () => {
+      const order: PortalRole[] = ['admin', 'teacher', 'student'];
+      for (const role of order) {
+        let t = getPortalToken(role);
+        if (!t) continue;
+        if (!isJwtLikelyValid(t)) {
+          const refreshed = await refreshPortalAccessToken(role);
+          if (!refreshed) {
+            clearPortalToken(role);
+            continue;
+          }
+          t = getPortalToken(role);
+          if (!t) continue;
+        }
+        const p = parseJwtPayload(t);
+        if (!p || p.role !== role) {
+          clearPortalToken(role);
+          continue;
+        }
+        if (cancelled) return;
+        setUserInfo({ name: String(p.username || '用户'), role });
+        setIsLoggedIn(true);
+        return;
       }
-      const p = parseJwtPayload(t);
-      if (!p || p.role !== role) {
-        clearPortalToken(role);
-        continue;
-      }
-      setUserInfo({ name: String(p.username || '用户'), role });
-      setIsLoggedIn(true);
-      return;
-    }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -109,7 +123,7 @@ export default function Home() {
     const expected = loginRole as PortalRole;
     setLoginLoading(true);
     try {
-      const { token, user } = await loginWithApi(username, password);
+      const { token, refreshToken, user } = await loginWithApi(username, password);
       if (user.role !== expected) {
         if (expected === 'admin') throw new Error('该账号不是管理员，请使用管理员账号登录');
         if (expected === 'teacher') throw new Error('该账号不是教师，请使用教师账号登录');
@@ -122,7 +136,7 @@ export default function Home() {
         }
       }
       saveLoginForm(expected, { remember, username, password });
-      setPortalToken(expected, token, remember);
+      setPortalToken(expected, token, remember, refreshToken);
       setUserInfo({ name: user.username, role: expected });
       setIsLoggedIn(true);
       setShowLoginModal(false);
@@ -275,7 +289,7 @@ export default function Home() {
       {/* Hero Section */}
       <section className="relative h-screen flex items-center justify-center overflow-hidden">
         <img
-          src="https://readdy.ai/api/search-image?query=young%20Chinese%20college%20students%20group%20sitting%20around%20table%20in%20bright%20modern%20university%20library%20study%20room%2C%20Asian%20young%20men%20and%20women%20smiling%20discussing%20startup%20project%20together%2C%20notebooks%20laptops%20on%20desk%2C%20warm%20sunlight%20through%20windows%2C%20cheerful%20energetic%20campus%20atmosphere%2C%20shallow%20depth%20of%20field%20photography%20style%2C%20high%20resolution&width=1920&height=1080&seq=hero-bg-chinese-students-2025&orientation=landscape"
+          src={bg}
           alt="Hero Background"
           className="absolute inset-0 w-full h-full object-cover object-top"
         />
@@ -368,7 +382,7 @@ export default function Home() {
       </section>
 
       {/* Process Flow */}
-      <section id="process" className="py-20 px-6 bg-gradient-to-br from-teal-50 to-cyan-50">
+      {/* <section id="process" className="py-20 px-6 bg-gradient-to-br from-teal-50 to-cyan-50">
         <div className="max-w-7xl mx-auto">
           <div className="text-center mb-16">
             <h2 className="text-4xl font-bold text-gray-900 mb-4">实训流程</h2>
@@ -397,7 +411,7 @@ export default function Home() {
             </div>
           </div>
         </div>
-      </section>
+      </section> */}
 
       {/* Features Detail */}
       <section id="features" className="py-20 px-6 bg-white">

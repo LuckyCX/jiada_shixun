@@ -72,7 +72,7 @@ export default function VersionControl({
               <p className="text-sm text-gray-500">共 {versions.length} 个历史版本，点击版本卡片可回撤</p>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-6">
+            <div className="flex-1 overflow-y-auto py-1 px-6">
               {versions.length === 0 ? (
                 <div className="text-center py-12">
                   <i className="ri-history-line text-4xl text-gray-300 block mb-3"></i>

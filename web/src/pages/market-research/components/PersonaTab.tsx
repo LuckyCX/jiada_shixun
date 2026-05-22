@@ -52,7 +52,7 @@ function EditModal({ persona, onSave, onClose }: EditModalProps) {
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-6 space-y-5">
+        <div className="flex-1 overflow-y-auto py-1 px-6 space-y-5">
           {/* Basic Info */}
           <div className="grid grid-cols-2 gap-4">
             <div>
@@ -193,7 +193,7 @@ function CreateModal({ onSave, onClose }: { onSave: (p: UserPersona) => void; on
             <i className="ri-close-line text-xl"></i>
           </button>
         </div>
-        <div className="flex-1 overflow-y-auto p-6 space-y-5">
+        <div className="flex-1 overflow-y-auto py-1 px-6 space-y-5">
           <div className="grid grid-cols-2 gap-4">
             {[
               { label: '姓名', field: 'name' as const, type: 'text' },

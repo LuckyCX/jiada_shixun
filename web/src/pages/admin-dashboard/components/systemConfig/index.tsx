@@ -18,7 +18,12 @@ import {
   type TableColumnsType,
   type TabsProps,
 } from 'antd';
-import { getPortalToken, loginWithApi, redirectAdminSessionExpired, setPortalToken } from '../../../../lib/authApi';
+import {
+  getPortalToken,
+  loginWithApi,
+  portalAuthenticatedFetch,
+  setPortalToken,
+} from '../../../../lib/authApi';
 import { notifySiteBrandUpdated } from '../../../../lib/publicSite';
 import { resizeImageFileTo128Png } from '../../../../lib/resizeLogoTo128';
 
@@ -161,21 +166,9 @@ function apiBase() {
 }
 
 async function apiFetch(path: string, opts: RequestInit & { token?: string } = {}) {
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    ...(opts.headers as Record<string, string>),
-  };
-  if (opts.token) headers.Authorization = `Bearer ${opts.token}`;
-  const r = await fetch(`${apiBase()}${path}`, { ...opts, headers });
-  const j = await r.json().catch(() => ({ code: -1, message: '无效 JSON' }));
-  if (r.status === 401 || j.code === 40101 || j.code === 40102) {
-    redirectAdminSessionExpired();
-    throw new Error(typeof j.message === 'string' ? j.message : '登录已失效，请返回首页重新以管理员登录');
-  }
-  if (!r.ok || j.code !== 0) {
-    throw new Error(j.message || `HTTP ${r.status}`);
-  }
-  return j;
+  const { token: _token, ...rest } = opts;
+  const data = await portalAuthenticatedFetch('admin', `${apiBase()}${path}`, rest);
+  return { code: 0, message: 'OK', data };
 }
 
 export default function SystemConfigPanel() {
@@ -313,12 +306,12 @@ export default function SystemConfigPanel() {
 
   const handleLogin = async () => {
     try {
-      const { token: t, user } = await loginWithApi(loginUser, loginPass);
+      const { token: t, refreshToken, user } = await loginWithApi(loginUser, loginPass);
       if (user.role !== 'admin') {
         messageApi.error('该账号不是管理员');
         return;
       }
-      setPortalToken('admin', t, false);
+      setPortalToken('admin', t, false, refreshToken);
       setToken(t);
       setLoginPass('');
       messageApi.success('登录成功');
@@ -964,13 +957,13 @@ export default function SystemConfigPanel() {
     },
     {
       key: 'llm',
-      label: '大模型',
+      label: '模型配置',
       forceRender: true,
       children: (
         <div className="p-6 w-full max-w-[1280px] min-w-0 min-[1200px]:px-8 space-y-8">
           <div className="flex flex-wrap items-center justify-end gap-3">
             <Button type="primary" onClick={openLlmCreate}>
-              新增模型配置
+              新增模型
             </Button>
           </div>
           {(['multimodal', 'file_processing'] as const).map((cat) => (
@@ -991,7 +984,7 @@ export default function SystemConfigPanel() {
             </section>
           ))}
           <Modal
-            title={llmDraft.isNew ? '新增大模型配置' : '编辑大模型配置'}
+            title={llmDraft.isNew ? '新增模型配置' : '编辑模型配置'}
             open={llmModalOpen}
             onCancel={() => setLlmModalOpen(false)}
             onOk={() => saveLlmFromModal()}

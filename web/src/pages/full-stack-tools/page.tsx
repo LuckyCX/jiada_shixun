@@ -724,7 +724,7 @@ export default new UserAuthService();`;
               </button>
             </div>
             
-            <div className="flex-1 overflow-y-auto p-6">
+            <div className="flex-1 overflow-y-auto py-1 px-6">
               <div className="space-y-6">
                 {/* 输入区 */}
                 <div>
@@ -804,7 +804,7 @@ export default new UserAuthService();`;
               </button>
             </div>
             
-            <div className="flex-1 overflow-y-auto p-6">
+            <div className="flex-1 overflow-y-auto py-1 px-6">
               <div className="space-y-6">
                 {/* 输入区 */}
                 <div>
