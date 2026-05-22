@@ -80,7 +80,7 @@ export async function chatCompletion({ provider, system, user, jsonMode = false 
   }
 }
 
-function logPromptToConsole(provider, system, user) {
+export function logPromptToConsole(provider, system, user) {
   const sep = '─'.repeat(60);
   console.log(`\n[llmGateway] ${sep}`);
   console.log(`[llmGateway] model=${provider.modelId} url=${chatCompletionsUrl(provider.baseUrl)}`);
@@ -89,7 +89,21 @@ function logPromptToConsole(provider, system, user) {
     console.log(system.length > 8000 ? `${system.slice(0, 8000)}…` : system);
   }
   console.log('[llmGateway] --- user ---');
-  console.log(user.length > 12000 ? `${user.slice(0, 12000)}…` : user);
+  if (typeof user === 'string') {
+    console.log(user.length > 12000 ? `${user.slice(0, 12000)}…` : user);
+  } else if (Array.isArray(user)) {
+    console.log(
+      JSON.stringify(
+        user.map((p) =>
+          p?.type === 'video_url' || p?.type === 'image_url'
+            ? { ...p, video_url: '[media]', image_url: '[media]' }
+            : p
+        )
+      ).slice(0, 12000)
+    );
+  } else {
+    console.log('[non-string user content]');
+  }
   console.log(`[llmGateway] ${sep}\n`);
 }
 
@@ -184,8 +198,11 @@ export async function getPromptModules() {
   return {
     team_formation: {
       match_system:
-        '你是创业实训组队顾问。根据测评作答与视频转写，从角色定义中选择最匹配角色。仅输出 JSON：{"matchedRole":"ceo|product_rd|market_director|marketing_ops|sales|finance","confidence":0.9,"summary":"理由"}',
-      video_transcribe: '将自我介绍要点整理为中文书面稿，勿编造。',
+        '你是创业实训组队顾问。根据问卷客观作答为主、视频转写为辅评估三维度得分并匹配角色；勿因学生自述想当某职务而直接定角。最后一行输出 JSON。',
+      video_transcribe:
+        '转写自我介绍视频为中文书面稿，保留能力与经历事实；职位愿望表述照录即可，勿在转写中强化或认定某一角色。',
+      ai_group_system: '',
+      ai_group_user_template: '请为以下待组队学生划分小组（仅输出 JSON）：',
       role_definitions: [],
     },
   };

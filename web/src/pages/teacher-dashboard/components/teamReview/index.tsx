@@ -1,14 +1,24 @@
-import { useEffect, useState } from 'react';
-import { Alert, Tooltip } from 'antd';
+import { useCallback, useEffect, useState } from 'react';
+import { Alert, Button, Popover, Spin } from 'antd';
 import type { TeacherPersonalClassRow } from '../../teacherPortalApi';
-import { fetchTeacherPendingTeamStudents, fetchTeacherTeamQuestions } from '../../../../lib/teamFormationApi';
+import {
+  addTeamMember,
+  confirmTeacherGrouping,
+  fetchTeacherGrouping,
+  fetchTeacherTeamQuestions,
+  normalizeTeamDimensionProfile,
+  postTeacherAiGroupStream,
+  removeTeamMember,
+  setTeacherTeamLeader,
+  TEAM_DIMENSION_BARS,
+  type TeacherGroupingState,
+  type TeamDimensionProfile,
+} from '../../../../lib/teamFormationApi';
 
-// 学生能力画像类型
-type AbilityProfile = {
-  techGeek: number;
-  designAesthetic: number;
-  businessOperator: number;
-};
+const MIN_PENDING_FOR_AI = 5;
+const MAX_TEAM_SIZE = 6;
+
+type AbilityProfile = TeamDimensionProfile;
 
 // 学生信息类型
 type Student = {
@@ -24,6 +34,7 @@ type Student = {
   teamId?: string;
   aiMatchedRole?: string;
   aiMatchedRoleLabel?: string;
+  isTeamLeader?: boolean;
 };
 
 // 团队类型
@@ -36,7 +47,8 @@ type Team = {
 };
 
 // 已分组等演示数据（待组队走 API）
-const mockStudentsGrouped: Student[] = [
+const mockStudentsGrouped: Student[] = (
+[
   {
     id: 'stu-001',
     name: '张明',
@@ -169,7 +181,11 @@ const mockStudentsGrouped: Student[] = [
     skills: ['战略规划', '运营管理', '项目协调'],
     status: 'pending',
   },
-];
+] as Array<Omit<Student, 'profile'> & { profile: { techGeek: number; designAesthetic: number; businessOperator: number } }>
+).map((s) => ({
+  ...s,
+  profile: normalizeTeamDimensionProfile(s.profile),
+}));
 
 function showToast(message: string, type: 'success' | 'error' = 'success') {
   const div = document.createElement('div');
@@ -190,29 +206,77 @@ type TeamReviewProps = {
   questionsSavedTick?: number;
 };
 
+function mapGroupingToUi(data: TeacherGroupingState): { students: Student[]; teams: Team[] } {
+  const pending: Student[] = (data.pendingStudents || []).map((s) => ({
+    id: s.id,
+    name: s.name,
+    studentId: s.studentId,
+    major: '',
+    grade: '',
+    avatar: '',
+    profile: normalizeTeamDimensionProfile(s.profile),
+    skills: [] as string[],
+    status: 'pending' as const,
+    aiMatchedRole: s.aiMatchedRole,
+    aiMatchedRoleLabel: s.aiMatchedRoleLabel,
+  }));
+  const teams: Team[] = (data.teams || []).map((t) => {
+    const members: Student[] = (t.members || []).map((m) => ({
+      id: m.id,
+      name: m.name,
+      studentId: m.studentId,
+      major: '',
+      grade: '',
+      avatar: '',
+      profile: normalizeTeamDimensionProfile(m.profile),
+      skills: [] as string[],
+      status: (t.groupingStatus === 'confirmed' ? 'confirmed' : 'grouped') as 'grouped' | 'confirmed',
+      teamId: t.id,
+      aiMatchedRole: m.aiMatchedRole,
+      aiMatchedRoleLabel: m.aiMatchedRoleLabel,
+      isTeamLeader: Boolean(m.isTeamLeader),
+    }));
+    return {
+      id: t.id,
+      name: t.name,
+      members,
+      avgProfile: normalizeTeamDimensionProfile(t.avgProfile),
+      complementScore: t.complementScore ?? 0,
+    };
+  });
+  return { students: [...pending, ...teams.flatMap((t) => t.members)], teams };
+}
+
 export default function TeamReview({ personalClass, onOpenQuestionsPreset, questionsSavedTick = 0 }: TeamReviewProps) {
   const [students, setStudents] = useState<Student[]>([]);
   const [loadingStudents, setLoadingStudents] = useState(true);
+  const [aiGrouping, setAiGrouping] = useState(false);
+  const [aiGroupStep, setAiGroupStep] = useState('');
+  const [aiThinkingLines, setAiThinkingLines] = useState<string[]>([]);
+  const [joinTeamStudentId, setJoinTeamStudentId] = useState<string | null>(null);
+  const [joinTeamTargetId, setJoinTeamTargetId] = useState<string | null>(null);
   const [questionsChecked, setQuestionsChecked] = useState(false);
   const [questionsReady, setQuestionsReady] = useState(true);
   const [presetAlertClosed, setPresetAlertClosed] = useState(false);
 
-  useEffect(() => {
+  const reloadGrouping = useCallback(() => {
     setLoadingStudents(true);
-    fetchTeacherPendingTeamStudents(personalClass.id)
-      .then((list) => {
-        setStudents(
-          (list as Student[]).map((s) => ({
-            ...s,
-            status: 'pending' as const,
-            profile: s.profile || { techGeek: 0, designAesthetic: 0, businessOperator: 0 },
-            skills: s.skills || [],
-          }))
-        );
+    return fetchTeacherGrouping(personalClass.id)
+      .then((data) => {
+        const ui = mapGroupingToUi(data);
+        setStudents(ui.students);
+        setTeams(ui.teams);
       })
-      .catch(() => setStudents([]))
+      .catch(() => {
+        setStudents([]);
+        setTeams([]);
+      })
       .finally(() => setLoadingStudents(false));
   }, [personalClass.id]);
+
+  useEffect(() => {
+    void reloadGrouping();
+  }, [reloadGrouping]);
 
   useEffect(() => {
     setPresetAlertClosed(false);
@@ -234,163 +298,99 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
   const calculateComplementScore = (members: Student[]): number => {
     if (members.length === 0) return 0;
     
-    const avgTech = members.reduce((sum, m) => sum + m.profile.techGeek, 0) / members.length;
-    const avgDesign = members.reduce((sum, m) => sum + m.profile.designAesthetic, 0) / members.length;
-    const avgBusiness = members.reduce((sum, m) => sum + m.profile.businessOperator, 0) / members.length;
-    
-    // 计算方差（越小说明越不均衡，互补性越好）
-    const techVariance = members.reduce((sum, m) => sum + Math.pow(m.profile.techGeek - avgTech, 2), 0) / members.length;
-    const designVariance = members.reduce((sum, m) => sum + Math.pow(m.profile.designAesthetic - avgDesign, 2), 0) / members.length;
-    const businessVariance = members.reduce((sum, m) => sum + Math.pow(m.profile.businessOperator - avgBusiness, 2), 0) / members.length;
-    
-    // 方差越大，互补性越好
-    const complementScore = Math.min(100, (techVariance + designVariance + businessVariance) / 30);
+    const avgS = members.reduce((sum, m) => sum + m.profile.strategic, 0) / members.length;
+    const avgM = members.reduce((sum, m) => sum + m.profile.market, 0) / members.length;
+    const avgT = members.reduce((sum, m) => sum + m.profile.techRisk, 0) / members.length;
+
+    const varS = members.reduce((sum, m) => sum + Math.pow(m.profile.strategic - avgS, 2), 0) / members.length;
+    const varM = members.reduce((sum, m) => sum + Math.pow(m.profile.market - avgM, 2), 0) / members.length;
+    const varT = members.reduce((sum, m) => sum + Math.pow(m.profile.techRisk - avgT, 2), 0) / members.length;
+
+    const complementScore = Math.min(100, (varS + varM + varT) / 30);
     
     return Math.round(complementScore);
   };
 
-  // AI 智能组队
-  const handleAutoGroup = () => {
-    const pendingStudents = students.filter(s => s.status === 'pending');
-    
-    if (pendingStudents.length < 3) {
-      showToast('待组队学生不足3人，无法自动组队', 'error');
-      return;
-    }
-
-    // 简单的贪心算法：按能力互补性分组
-    const newTeams: Team[] = [];
-    const remaining = [...pendingStudents];
-    let teamCounter = 1;
-
-    while (remaining.length >= 3) {
-      // 找出技术、设计、商业能力最突出的三个学生
-      const sortedByTech = [...remaining].sort((a, b) => b.profile.techGeek - a.profile.techGeek);
-      const sortedByDesign = [...remaining].sort((a, b) => b.profile.designAesthetic - a.profile.designAesthetic);
-      const sortedByBusiness = [...remaining].sort((a, b) => b.profile.businessOperator - a.profile.businessOperator);
-
-      const techExpert = sortedByTech[0];
-      const designExpert = sortedByDesign.find(s => s.id !== techExpert.id) || sortedByDesign[1];
-      const businessExpert = sortedByBusiness.find(s => s.id !== techExpert.id && s.id !== designExpert.id) || sortedByBusiness[2];
-
-      const teamMembers = [techExpert, designExpert, businessExpert];
-      
-      // 如果还有剩余学生且团队未满，添加第4人
-      const remainingAfterCore = remaining.filter(s => !teamMembers.find(m => m.id === s.id));
-      if (remainingAfterCore.length > 0 && teamMembers.length < 5) {
-        teamMembers.push(remainingAfterCore[0]);
-      }
-
-      const avgProfile: AbilityProfile = {
-        techGeek: Math.round(teamMembers.reduce((sum, m) => sum + m.profile.techGeek, 0) / teamMembers.length),
-        designAesthetic: Math.round(teamMembers.reduce((sum, m) => sum + m.profile.designAesthetic, 0) / teamMembers.length),
-        businessOperator: Math.round(teamMembers.reduce((sum, m) => sum + m.profile.businessOperator, 0) / teamMembers.length),
-      };
-
-      const complementScore = calculateComplementScore(teamMembers);
-
-      newTeams.push({
-        id: `team-${Date.now()}-${teamCounter}`,
-        name: `团队 ${teamCounter}`,
-        members: teamMembers,
-        avgProfile,
-        complementScore,
-      });
-
-      // 从剩余列表中移除已分组的学生
-      teamMembers.forEach(member => {
-        const index = remaining.findIndex(s => s.id === member.id);
-        if (index > -1) remaining.splice(index, 1);
-      });
-
-      teamCounter++;
-    }
-
-    // 更新学生状态
-    const updatedStudents = students.map(s => {
-      const team = newTeams.find(t => t.members.some(m => m.id === s.id));
-      if (team) {
-        return { ...s, status: 'grouped' as const, teamId: team.id };
-      }
-      return s;
+  const appendAiThinking = (text: string) => {
+    setAiThinkingLines((prev) => {
+      const merged = (prev.join('\n') + text).split('\n').map((s) => s.trim()).filter(Boolean);
+      return merged.slice(-4);
     });
-
-    setStudents(updatedStudents);
-    setTeams(newTeams);
-    showToast(`AI 智能组队完成，共生成 ${newTeams.length} 个团队`);
   };
 
-  // 手动调整：从团队中移除学生
-  const handleRemoveFromTeam = (studentId: string, teamId: string) => {
-    const updatedStudents = students.map(s =>
-      s.id === studentId ? { ...s, status: 'pending' as const, teamId: undefined } : s
-    );
-    
-    const updatedTeams = teams.map(t => {
-      if (t.id === teamId) {
-        const newMembers = t.members.filter(m => m.id !== studentId);
-        if (newMembers.length === 0) return null;
-        
-        const avgProfile: AbilityProfile = {
-          techGeek: Math.round(newMembers.reduce((sum, m) => sum + m.profile.techGeek, 0) / newMembers.length),
-          designAesthetic: Math.round(newMembers.reduce((sum, m) => sum + m.profile.designAesthetic, 0) / newMembers.length),
-          businessOperator: Math.round(newMembers.reduce((sum, m) => sum + m.profile.businessOperator, 0) / newMembers.length),
-        };
-        
-        return {
-          ...t,
-          members: newMembers,
-          avgProfile,
-          complementScore: calculateComplementScore(newMembers),
-        };
-      }
-      return t;
-    }).filter(Boolean) as Team[];
-
-    setStudents(updatedStudents);
-    setTeams(updatedTeams);
-    showToast('已将学生移出团队');
-  };
-
-  // 手动调整：添加学生到团队
-  const handleAddToTeam = (studentId: string, teamId: string) => {
-    const student = students.find(s => s.id === studentId);
-    if (!student) return;
-
-    const team = teams.find(t => t.id === teamId);
-    if (!team) return;
-
-    if (team.members.length >= 5) {
-      showToast('团队人数已达上限（5人）', 'error');
+  const handleAutoGroup = async () => {
+    const pendingStudents = students.filter((s) => s.status === 'pending');
+    if (pendingStudents.length < MIN_PENDING_FOR_AI) {
+      showToast(`待组队学生至少 ${MIN_PENDING_FOR_AI} 人`, 'error');
       return;
     }
+    setAiGrouping(true);
+    setAiGroupStep('正在连接模型…');
+    setAiThinkingLines([]);
+    try {
+      await postTeacherAiGroupStream(personalClass.id, {
+        onStatus: (msg) => setAiGroupStep(msg),
+        onThinking: (t) => appendAiThinking(t),
+        onDone: (data) => {
+          const ui = mapGroupingToUi(data);
+          setStudents(ui.students);
+          setTeams(ui.teams);
+          showToast(`AI 智能组队完成，共 ${ui.teams.length} 个团队`);
+        },
+        onError: (message) => {
+          showToast(message, 'error');
+        },
+      });
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'AI 组队失败', 'error');
+    } finally {
+      setAiGrouping(false);
+      setAiGroupStep('');
+      setAiThinkingLines([]);
+    }
+  };
 
-    const updatedStudents = students.map(s =>
-      s.id === studentId ? { ...s, status: 'grouped' as const, teamId } : s
-    );
+  const handleSetTeamLeader = async (studentId: string, teamId: string) => {
+    try {
+      const data = await setTeacherTeamLeader(personalClass.id, teamId, studentId);
+      const ui = mapGroupingToUi(data);
+      setStudents(ui.students);
+      setTeams(ui.teams);
+      showToast('已指定队长');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : '操作失败', 'error');
+    }
+  };
 
-    const updatedTeams = teams.map(t => {
-      if (t.id === teamId) {
-        const newMembers = [...t.members, student];
-        const avgProfile: AbilityProfile = {
-          techGeek: Math.round(newMembers.reduce((sum, m) => sum + m.profile.techGeek, 0) / newMembers.length),
-          designAesthetic: Math.round(newMembers.reduce((sum, m) => sum + m.profile.designAesthetic, 0) / newMembers.length),
-          businessOperator: Math.round(newMembers.reduce((sum, m) => sum + m.profile.businessOperator, 0) / newMembers.length),
-        };
-        
-        return {
-          ...t,
-          members: newMembers,
-          avgProfile,
-          complementScore: calculateComplementScore(newMembers),
-        };
-      }
-      return t;
-    });
+  const handleRemoveFromTeam = async (studentId: string, teamId: string) => {
+    try {
+      const data = await removeTeamMember(personalClass.id, teamId, studentId);
+      const ui = mapGroupingToUi(data);
+      setStudents(ui.students);
+      setTeams(ui.teams);
+      showToast('已将学生移出团队');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : '操作失败', 'error');
+    }
+  };
 
-    setStudents(updatedStudents);
-    setTeams(updatedTeams);
-    showToast('已将学生添加到团队');
+  const handleAddToTeam = async (studentId: string, teamId: string) => {
+    const team = teams.find((t) => t.id === teamId);
+    if (team && team.members.length >= MAX_TEAM_SIZE) {
+      showToast(`团队人数已达上限（${MAX_TEAM_SIZE} 人）`, 'error');
+      return;
+    }
+    try {
+      const data = await addTeamMember(personalClass.id, teamId, studentId);
+      const ui = mapGroupingToUi(data);
+      setStudents(ui.students);
+      setTeams(ui.teams);
+      setJoinTeamStudentId(null);
+      setJoinTeamTargetId(null);
+      showToast('已将学生添加到团队');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : '操作失败', 'error');
+    }
   };
 
   // 拖拽开始
@@ -411,30 +411,21 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
     setDraggedStudent(null);
   };
 
-  // 确认组队并通知学生
-  const handleConfirmGrouping = () => {
+  const handleConfirmGrouping = async () => {
     if (teams.length === 0) {
       showToast('还没有任何团队，请先进行组队', 'error');
       return;
     }
-
-    const updatedStudents = students.map(s =>
-      s.status === 'grouped' ? { ...s, status: 'confirmed' as const } : s
-    );
-
-    setStudents(updatedStudents);
-    setShowConfirmModal(false);
-    showToast(`组队确认成功！已通知 ${teams.reduce((sum, t) => sum + t.members.length, 0)} 名学生`);
-  };
-
-  // 重置所有组队
-  const handleResetAll = () => {
-    if (!window.confirm('确定要重置所有组队吗？此操作不可撤销。')) return;
-    
-    const resetStudents = students.map(s => ({ ...s, status: 'pending' as const, teamId: undefined }));
-    setStudents(resetStudents);
-    setTeams([]);
-    showToast('已重置所有组队');
+    try {
+      const data = await confirmTeacherGrouping(personalClass.id);
+      const ui = mapGroupingToUi(data);
+      setStudents(ui.students);
+      setTeams(ui.teams);
+      setShowConfirmModal(false);
+      showToast(`组队确认成功！已通知 ${data.notifiedCount ?? 0} 名学生`);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : '确认失败', 'error');
+    }
   };
 
   // 筛选学生
@@ -445,6 +436,9 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
   });
 
   const pendingCount = students.filter(s => s.status === 'pending').length;
+  const draftTeams = teams.filter(
+    (t) => t.members.length > 0 && t.members.every((m) => m.status === 'grouped') && t.members.length < MAX_TEAM_SIZE
+  );
   const groupedCount = students.filter(s => s.status === 'grouped').length;
   const confirmedCount = students.filter(s => s.status === 'confirmed').length;
 
@@ -488,20 +482,23 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
               <i className="ri-questionnaire-line text-base"></i>
               组队问题预设
             </button>
-            <Tooltip title="下一步实现">
+            {teams.length === 0 ? (
               <button
                 type="button"
-                disabled
-                className="px-5 py-2.5 bg-white/50 text-teal-600/60 text-sm font-bold rounded-xl whitespace-nowrap flex items-center gap-2 opacity-60 cursor-not-allowed"
+                disabled={pendingCount < MIN_PENDING_FOR_AI || aiGrouping}
+                onClick={() => void handleAutoGroup()}
+                className={`px-5 py-2.5 bg-white text-teal-700 text-sm font-bold rounded-xl whitespace-nowrap flex items-center gap-2 cursor-pointer ${
+                  pendingCount < MIN_PENDING_FOR_AI || aiGrouping ? 'opacity-50 cursor-not-allowed' : 'hover:shadow-lg'
+                }`}
               >
-                <i className="ri-magic-line text-base"></i>
+                {aiGrouping ? <Spin size="small" /> : <i className="ri-magic-line text-base" />}
                 AI 智能组队
               </button>
-            </Tooltip>
-            {teams.length > 0 && (
+            ) : (
               <button
+                type="button"
                 onClick={() => setShowConfirmModal(true)}
-                className="px-5 py-2.5 bg-gradient-to-r from-amber-500 to-orange-500 text-white text-sm font-bold rounded-xl hover:shadow-lg transition-all whitespace-nowrap cursor-pointer flex items-center gap-2"
+                className="px-5 py-2.5 bg-white text-teal-700 text-sm font-bold rounded-xl hover:shadow-lg whitespace-nowrap flex items-center gap-2 cursor-pointer"
               >
                 <i className="ri-check-double-line text-base"></i>
                 确认组队并通知学生
@@ -560,17 +557,29 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
               ))}
             </div>
           </div>
-          {teams.length > 0 && (
-            <button
-              onClick={handleResetAll}
-              className="px-4 py-2 bg-red-50 text-red-600 text-sm font-medium rounded-xl hover:bg-red-100 transition-colors whitespace-nowrap cursor-pointer border border-red-200"
-            >
-              <i className="ri-restart-line mr-1.5"></i>
-              重置所有组队
-            </button>
-          )}
         </div>
       </div>
+
+      {aiGrouping && (
+        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 shadow-sm">
+          <div className="flex items-center gap-2 mb-2">
+            <Spin size="small" />
+            <span className="text-sm font-bold text-amber-900">{aiGroupStep || 'AI 正在智能分组…'}</span>
+          </div>
+          {aiThinkingLines.length > 0 ? (
+            <div className="border border-amber-100 bg-white/60 rounded-xl p-3">
+              <div className="text-[10px] font-semibold text-amber-800 mb-1.5">思考过程</div>
+              <div className="max-h-28 overflow-y-auto text-xs text-amber-950/90 whitespace-pre-wrap leading-relaxed space-y-1">
+                {aiThinkingLines.map((line, i) => (
+                  <p key={i}>{line}</p>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <p className="text-xs text-amber-800/80">等待模型输出思考内容…</p>
+          )}
+        </div>
+      )}
 
       <div className="grid lg:grid-cols-3 gap-6">
         {/* 左侧：待组队学生池 */}
@@ -597,28 +606,93 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
                     key={student.id}
                     draggable
                     onDragStart={() => handleDragStart(student)}
-                    className="bg-gray-50 border border-gray-200 rounded-xl p-3 hover:border-teal-300 hover:bg-teal-50/30 transition-all cursor-move"
+                    className="relative bg-gray-50 border border-gray-200 rounded-xl p-3 hover:border-teal-300 hover:bg-teal-50/30 transition-all cursor-move"
                   >
+                    {draftTeams.length > 0 && (
+                      <Popover
+                        trigger="click"
+                        open={joinTeamStudentId === student.id}
+                        onOpenChange={(open) => {
+                          if (!open) {
+                            setJoinTeamStudentId(null);
+                            setJoinTeamTargetId(null);
+                          } else {
+                            setJoinTeamStudentId(student.id);
+                          }
+                        }}
+                        content={
+                          <div className="w-52 space-y-2">
+                            <p className="text-xs font-bold text-gray-800">选择目标团队</p>
+                            {draftTeams.map((t) => (
+                              <label key={t.id} className="flex items-center gap-2 text-sm cursor-pointer">
+                                <input
+                                  type="radio"
+                                  name={`join-${student.id}`}
+                                  checked={joinTeamTargetId === t.id}
+                                  onChange={() => setJoinTeamTargetId(t.id)}
+                                />
+                                {t.name}（{t.members.length}人）
+                              </label>
+                            ))}
+                            <Button
+                              type="primary"
+                              size="small"
+                              block
+                              disabled={!joinTeamTargetId}
+                              onClick={() => {
+                                if (joinTeamTargetId) void handleAddToTeam(student.id, joinTeamTargetId);
+                              }}
+                            >
+                              确认加入
+                            </Button>
+                          </div>
+                        }
+                      >
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setJoinTeamStudentId(student.id);
+                            setJoinTeamTargetId(draftTeams[0]?.id ?? null);
+                          }}
+                          className="absolute top-2 right-2 z-10 px-2 py-0.5 text-[10px] font-medium bg-teal-600 text-white rounded-md hover:bg-teal-700 cursor-pointer"
+                        >
+                          加入团队
+                        </button>
+                      </Popover>
+                    )}
                     <div className="flex items-start gap-3">
-                      <img src={student.avatar} alt={student.name} className="w-12 h-12 rounded-full object-cover flex-shrink-0" />
+                      <div
+                        className="w-12 h-12 rounded-full flex-shrink-0 bg-teal-600 text-white flex items-center justify-center text-lg font-bold"
+                        aria-hidden
+                      >
+                        {(student.name || '?').trim().charAt(0) || '?'}
+                      </div>
                       <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-1">
-                          <h4 className="text-sm font-bold text-gray-900">{student.name}</h4>
-                          <span className="px-1.5 py-0.5 bg-gray-200 text-gray-600 text-xs rounded-full whitespace-nowrap">{student.studentId}</span>
+                        <h4 className="text-sm font-bold text-gray-900 leading-snug mb-1">{student.name}</h4>
+                        <div className="flex gap-1 mb-1.5">
+                          <span className="self-start px-1.5 py-0.5 bg-gray-200 text-gray-600 text-xs rounded-full">
+                            {student.studentId}
+                          </span>
+                          {student.aiMatchedRoleLabel ? (
+                            <span className="self-start px-1.5 py-0.5 bg-teal-100 text-teal-700 text-[10px] rounded-full leading-snug">
+                              {student.aiMatchedRoleLabel}
+                            </span>
+                          ) : null}
                         </div>
-                        <p className="text-xs text-gray-500 mb-2">{student.major} · {student.grade}</p>
                         <div className="space-y-1">
-                          {[
-                            { label: '技术', value: student.profile.techGeek, color: 'from-teal-500 to-cyan-500' },
-                            { label: '设计', value: student.profile.designAesthetic, color: 'from-orange-400 to-amber-400' },
-                            { label: '商业', value: student.profile.businessOperator, color: 'from-green-500 to-emerald-500' },
-                          ].map(item => (
-                            <div key={item.label} className="flex items-center gap-2">
-                              <span className="text-xs text-gray-500 w-8">{item.label}</span>
+                          {TEAM_DIMENSION_BARS.map((item) => (
+                            <div key={item.key} className="flex items-center gap-2">
+                              <span className="text-xs text-gray-500 w-14">{item.label}</span>
                               <div className="flex-1 h-1.5 bg-gray-200 rounded-full overflow-hidden">
-                                <div className={`h-full bg-gradient-to-r ${item.color} rounded-full`} style={{ width: `${item.value}%` }}></div>
+                                <div
+                                  className={`h-full bg-gradient-to-r ${item.color} rounded-full`}
+                                  style={{ width: `${student.profile[item.key]}%` }}
+                                />
                               </div>
-                              <span className="text-xs font-medium text-gray-700 w-8 text-right">{item.value}</span>
+                              <span className="text-xs font-medium text-gray-700 w-8 text-right">
+                                {student.profile[item.key]}
+                              </span>
                             </div>
                           ))}
                         </div>
@@ -640,15 +714,16 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
                   <i className="ri-team-line text-4xl text-gray-400"></i>
                 </div>
                 <h3 className="text-lg font-bold text-gray-900 mb-2">还没有组建团队</h3>
-                <p className="text-sm text-gray-500 mb-5">点击"AI 智能组队"自动分组，或手动拖拽学生到团队</p>
+                <p className="text-sm text-gray-500 mb-5">点击"AI 智能组队"自动分组 </p>
                 <button
-                  onClick={handleAutoGroup}
-                  disabled={pendingCount < 3}
+                  type="button"
+                  onClick={() => void handleAutoGroup()}
+                  disabled={pendingCount < MIN_PENDING_FOR_AI || aiGrouping}
                   className={`px-6 py-3 bg-gradient-to-r from-teal-500 to-cyan-500 text-white text-sm font-bold rounded-xl hover:shadow-lg transition-all whitespace-nowrap cursor-pointer ${
-                    pendingCount < 3 ? 'opacity-50 cursor-not-allowed' : ''
+                    pendingCount < MIN_PENDING_FOR_AI || aiGrouping ? 'opacity-50 cursor-not-allowed' : ''
                   }`}
                 >
-                  <i className="ri-magic-line mr-2"></i>
+                  {aiGrouping ? <Spin size="small" className="mr-2" /> : <i className="ri-magic-line mr-2" />}
                   AI 智能组队
                 </button>
               </div>
@@ -684,9 +759,9 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
                       <h4 className="text-xs font-bold text-gray-700 mb-3">团队平均能力</h4>
                       <div className="space-y-2">
                         {[
-                          { label: '技术极客', value: team.avgProfile.techGeek, color: 'from-teal-500 to-cyan-500' },
-                          { label: '设计美学', value: team.avgProfile.designAesthetic, color: 'from-orange-400 to-amber-400' },
-                          { label: '商业操盘', value: team.avgProfile.businessOperator, color: 'from-green-500 to-emerald-500' },
+                          { label: '战略统筹', value: team.avgProfile.strategic, color: 'from-violet-500 to-purple-500' },
+                          { label: '市场运营', value: team.avgProfile.market, color: 'from-orange-400 to-amber-400' },
+                          { label: '技术风控', value: team.avgProfile.techRisk, color: 'from-teal-500 to-cyan-500' },
                         ].map(item => (
                           <div key={item.label} className="flex items-center gap-3">
                             <span className="text-xs text-gray-600 w-16">{item.label}</span>
@@ -704,36 +779,68 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
                       {team.members.map(member => (
                         <div key={member.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl hover:bg-teal-50/30 transition-colors">
                           <div className="flex items-center gap-3">
-                            <img src={member.avatar} alt={member.name} className="w-10 h-10 rounded-full object-cover" />
+                            <div
+                              className="w-10 h-10 rounded-full flex-shrink-0 bg-teal-600 text-white flex items-center justify-center text-sm font-bold"
+                              aria-hidden
+                            >
+                              {[...(member.name || '?').trim()][0] || '?'}
+                            </div>
                             <div>
-                              <div className="flex items-center gap-2 mb-0.5">
+                              <div className="flex items-center gap-2 mb-0.5 flex-wrap">
                                 <span className="text-sm font-bold text-gray-900">{member.name}</span>
-                                <span className="px-1.5 py-0.5 bg-gray-200 text-gray-600 text-xs rounded-full whitespace-nowrap">{member.studentId}</span>
-                              </div>
-                              <div className="flex gap-1.5">
-                                {member.skills.slice(0, 2).map(skill => (
-                                  <span key={skill} className="px-1.5 py-0.5 bg-white border border-gray-200 text-gray-600 text-xs rounded-full whitespace-nowrap">
-                                    {skill}
+                                <span className="px-1.5 py-0.5 bg-gray-200 text-gray-600 text-xs rounded-full whitespace-nowrap">
+                                  {member.studentId}
+                                </span>
+                                {member.aiMatchedRoleLabel ? (
+                                  <span className="inline-block px-1.5 py-0.5 bg-teal-100 text-teal-700 text-xs rounded-full whitespace-nowrap">
+                                    {member.aiMatchedRoleLabel}
                                   </span>
-                                ))}
+                                ) : (
+                                  <span className="text-xs text-gray-400">未分配角色</span>
+                                )}
+                                {member.isTeamLeader && (
+                                  <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-amber-100 text-amber-800 text-xs font-medium rounded-full whitespace-nowrap">
+                                    <i className="ri-vip-crown-fill text-[10px]"></i>
+                                    队长
+                                  </span>
+                                )}
                               </div>
                             </div>
                           </div>
-                          <button
-                            onClick={() => handleRemoveFromTeam(member.id, team.id)}
-                            className="px-3 py-1.5 bg-red-50 text-red-600 text-xs font-medium rounded-lg hover:bg-red-100 transition-colors whitespace-nowrap cursor-pointer border border-red-200"
-                          >
-                            <i className="ri-close-line mr-1"></i>
-                            移出
-                          </button>
+                          <div className="flex items-center gap-2 flex-shrink-0">
+                            {team.members[0]?.status === 'grouped' && (
+                              <button
+                                type="button"
+                                onClick={() => void handleSetTeamLeader(member.id, team.id)}
+                                disabled={member.isTeamLeader}
+                                className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors whitespace-nowrap cursor-pointer border ${
+                                  member.isTeamLeader
+                                    ? 'bg-amber-50 text-amber-400 border-amber-100 cursor-default'
+                                    : 'bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100'
+                                }`}
+                              >
+                                <i className="ri-vip-crown-line mr-1"></i>
+                                指定队长
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => void handleRemoveFromTeam(member.id, team.id)}
+                              disabled={member.status === 'confirmed'}
+                              className="px-3 py-1.5 bg-red-50 text-red-600 text-xs font-medium rounded-lg hover:bg-red-100 transition-colors whitespace-nowrap cursor-pointer border border-red-200 disabled:opacity-40"
+                            >
+                              <i className="ri-close-line mr-1"></i>
+                              移出
+                            </button>
+                          </div>
                         </div>
                       ))}
                     </div>
 
-                    {team.members.length < 5 && (
+                    {team.members.length < MAX_TEAM_SIZE && team.members[0]?.status === 'grouped' && (
                       <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 flex items-center gap-2">
                         <i className="ri-information-line"></i>
-                        <span>拖拽左侧学生到此区域可添加成员（最多5人）</span>
+                        <span>拖拽左侧学生到此区域可添加成员（最多 {MAX_TEAM_SIZE} 人）</span>
                       </div>
                     )}
                   </div>
@@ -786,7 +893,7 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
                 取消
               </button>
               <button
-                onClick={handleConfirmGrouping}
+                onClick={() => void handleConfirmGrouping()}
                 className="flex-1 px-5 py-3 bg-gradient-to-r from-teal-500 to-cyan-500 text-white text-sm font-bold rounded-xl hover:shadow-lg transition-all whitespace-nowrap cursor-pointer"
               >
                 <i className="ri-send-plane-line mr-2"></i>

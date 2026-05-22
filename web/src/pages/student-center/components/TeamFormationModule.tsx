@@ -1,11 +1,73 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import VersionControl, { Version } from '../../../components/feature/VersionControl';
 import TeamFormationAssessmentPanel from './TeamFormationAssessmentPanel';
+import { getPortalToken, parseJwtPayload } from '../../../lib/authApi';
+import {
+  fetchStudentMyTeam,
+  fetchStudentTeamSquare,
+  fetchTeamSubmission,
+  isTeamFormationDone,
+  TEAM_DIMENSION_BARS,
+  normalizeTeamDimensionProfile,
+  updateStudentMyTeamProfile,
+  type GroupingTeam,
+  type TeamDimensionProfile,
+} from '../../../lib/teamFormationApi';
 
 type TeamFormationModuleProps = {
   classId: string;
   className: string;
+  initialSubTab?: 'assessment' | 'waiting' | 'myteam' | 'square';
 };
+
+function memberAvatarChar(name: string): string {
+  const ch = [...(name || '?').trim()][0];
+  return ch || '?';
+}
+
+function MemberTextAvatar({ name, size = 'md' }: { name: string; size?: 'sm' | 'md' }) {
+  const cls =
+    size === 'sm'
+      ? 'w-8 h-8 text-xs border-2 border-white'
+      : 'w-10 h-10 text-sm flex-shrink-0';
+  return (
+    <div
+      className={`rounded-full bg-teal-600 text-white flex items-center justify-center font-bold ${cls}`}
+      aria-hidden
+    >
+      {memberAvatarChar(name)}
+    </div>
+  );
+}
+
+function apiTeamToMyTeam(t: GroupingTeam): MyTeam {
+  const members = (t.members || []).map((m) => {
+    const roleKey = String(m.aiMatchedRole || '').toLowerCase();
+    const roleLabel = m.aiMatchedRoleLabel || m.aiMatchedRole || '成员';
+    const isLeader = Boolean(m.isTeamLeader);
+    return {
+      id: m.id,
+      name: m.name,
+      studentId: m.studentId || '',
+      role: isLeader ? '队长' : '',
+      aiMatchedRole: roleLabel as AIMatchedRole,
+      skills: [] as string[],
+      profile: normalizeTeamDimensionProfile(m.profile) as unknown as AbilityProfile,
+      avatar: '',
+      major: '',
+      grade: '',
+      isLeader,
+    };
+  });
+  return {
+    id: t.id,
+    name: t.name,
+    introduction: t.introduction || '',
+    createdAt: t.createdAt || '',
+    status: 'active',
+    members,
+  };
+}
 
 type AbilityProfile = {
   techGeek: number;
@@ -18,6 +80,7 @@ type AIMatchedRole = '团队负责人' | '运营负责人' | '技术负责人' |
 type TeamMember = {
   id: string;
   name: string;
+  studentId?: string;
   role: string;
   aiMatchedRole: AIMatchedRole;
   skills: string[];
@@ -265,8 +328,10 @@ function showToast(message: string, type: 'success' | 'error' = 'success') {
   setTimeout(() => div.remove(), 3000);
 }
 
-export default function TeamFormationModule({ classId, className }: TeamFormationModuleProps) {
-  const [activeTab, setActiveTab] = useState<'assessment' | 'waiting' | 'myteam' | 'square'>('assessment');
+export default function TeamFormationModule({ classId, className, initialSubTab }: TeamFormationModuleProps) {
+  const [activeTab, setActiveTab] = useState<'assessment' | 'waiting' | 'myteam' | 'square'>(
+    initialSubTab || 'assessment'
+  );
   
   // 测评相关
   const [currentQuestion, setCurrentQuestion] = useState(0);
@@ -282,16 +347,95 @@ export default function TeamFormationModule({ classId, className }: TeamFormatio
   
   // 等待组队
   const [waitingForTeam, setWaitingForTeam] = useState(false);
-  
-  // 我的团队
+  const [submissionStatus, setSubmissionStatus] = useState<string | null>(null);
+  const [waitingRoleLabel, setWaitingRoleLabel] = useState<string | null>(null);
+  const [waitingDimensionProfile, setWaitingDimensionProfile] = useState<TeamDimensionProfile>({
+    strategic: 0,
+    market: 0,
+    techRisk: 0,
+  });
+
+  const loadWaitingSummary = useCallback(async () => {
+    try {
+      const sub = await fetchTeamSubmission(classId);
+      setSubmissionStatus(sub.status || null);
+      if (sub.status && sub.status !== 'draft') setAssessmentCompleted(true);
+      if (sub.aiMatchedRole || isTeamFormationDone(sub.status)) {
+        setWaitingRoleLabel(sub.aiMatchedRoleLabel || sub.aiMatchedRole);
+        setWaitingDimensionProfile(normalizeTeamDimensionProfile(sub.dimensionProfile || {}));
+      }
+      setWaitingForTeam(sub.status === 'pending_teacher');
+    } catch {
+      /* ignore */
+    }
+  }, [classId]);
+
+  useEffect(() => {
+    void loadWaitingSummary();
+  }, [loadWaitingSummary]);
+
+  useEffect(() => {
+    if (initialSubTab) setActiveTab(initialSubTab);
+  }, [initialSubTab]);
+
   const [myTeam, setMyTeam] = useState<MyTeam | null>(null);
+  const [currentStudentId, setCurrentStudentId] = useState('');
+
+  useEffect(() => {
+    const token = getPortalToken('student');
+    const sub = token ? parseJwtPayload(token)?.sub : null;
+    if (sub) setCurrentStudentId(String(sub));
+  }, []);
+
+  const isCurrentUserLeader = Boolean(
+    myTeam?.members.some((m) => m.id === currentStudentId && m.isLeader)
+  );
   const [editingTeamInfo, setEditingTeamInfo] = useState(false);
+  const [savingTeamInfo, setSavingTeamInfo] = useState(false);
   const [teamInfoForm, setTeamInfoForm] = useState({ name: '', introduction: '' });
   const [editingMemberRole, setEditingMemberRole] = useState<string | null>(null);
   const [memberRoleInput, setMemberRoleInput] = useState('');
-  
-  // 匹配团队广场
-  const [matchedTeams] = useState<MyTeam[]>(mockMatchedTeams);
+  const [matchedTeams, setMatchedTeams] = useState<MyTeam[]>([]);
+
+  const loadTeamsFromApi = useCallback(async () => {
+    try {
+      const [mine, square, sub] = await Promise.all([
+        fetchStudentMyTeam(classId),
+        fetchStudentTeamSquare(classId),
+        fetchTeamSubmission(classId).catch(() => null),
+      ]);
+      setMyTeam(mine ? apiTeamToMyTeam(mine as GroupingTeam) : null);
+      setMatchedTeams(Array.isArray(square) ? (square as GroupingTeam[]).map(apiTeamToMyTeam) : []);
+      if (sub?.status) {
+        setSubmissionStatus(sub.status);
+        setWaitingForTeam(sub.status === 'pending_teacher');
+        if (sub.status !== 'draft') setAssessmentCompleted(true);
+      }
+    } catch {
+      setMyTeam(null);
+      setMatchedTeams([]);
+    }
+  }, [classId]);
+
+  useEffect(() => {
+    void loadTeamsFromApi();
+  }, [loadTeamsFromApi]);
+
+  useEffect(() => {
+    if (myTeam && (activeTab === 'assessment' || activeTab === 'waiting')) {
+      setActiveTab('myteam');
+    }
+  }, [myTeam, activeTab]);
+
+  const handleTabClick = (key: 'assessment' | 'waiting' | 'myteam' | 'square') => {
+    if (myTeam && (key === 'assessment' || key === 'waiting')) {
+      setActiveTab('myteam');
+      return;
+    }
+    setActiveTab(key);
+  };
+
+  const showWaitingBadge = submissionStatus === 'pending_teacher' && !myTeam;
 
   // 版本控制
   const [versions, setVersions] = useState<Version[]>([]);
@@ -485,30 +629,35 @@ export default function TeamFormationModule({ classId, className }: TeamFormatio
     }
   };
 
-  // 保存团队信息
-  const handleSaveTeamInfo = () => {
-    if (!teamInfoForm.name || !teamInfoForm.introduction) {
-      showToast('请填写完整的团队信息', 'error');
+  const handleSaveTeamInfo = async () => {
+    if (!teamInfoForm.name.trim()) {
+      showToast('请填写团队名称', 'error');
       return;
     }
-    
-    if (!myTeam) return;
-    
-    const hasLeader = myTeam.members.some(m => m.isLeader);
-    if (!hasLeader) {
-      showToast('请先设置队长', 'error');
+    if (!myTeam || !isCurrentUserLeader) {
+      showToast('仅队长可修改团队信息', 'error');
       return;
     }
-    
-    setMyTeam({
-      ...myTeam,
-      name: teamInfoForm.name,
-      introduction: teamInfoForm.introduction,
-      status: 'active',
-    });
-    
-    setEditingTeamInfo(false);
-    showToast('团队信息已保存');
+    setSavingTeamInfo(true);
+    try {
+      const updated = await updateStudentMyTeamProfile(classId, {
+        name: teamInfoForm.name.trim(),
+        introduction: teamInfoForm.introduction.trim(),
+      });
+      if (updated) setMyTeam(apiTeamToMyTeam(updated));
+      else
+        setMyTeam({
+          ...myTeam,
+          name: teamInfoForm.name.trim(),
+          introduction: teamInfoForm.introduction.trim(),
+        });
+      setEditingTeamInfo(false);
+      showToast('团队信息已保存');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : '保存失败', 'error');
+    } finally {
+      setSavingTeamInfo(false);
+    }
   };
 
   // 编辑成员角色
@@ -530,7 +679,7 @@ export default function TeamFormationModule({ classId, className }: TeamFormatio
 
   const tabs = [
     { key: 'assessment' as const, label: '能力测评', icon: 'ri-file-list-3-line', badge: assessmentCompleted ? '✓' : null },
-    { key: 'waiting' as const, label: '等待组队', icon: 'ri-time-line', badge: waitingForTeam ? '进行中' : null },
+    { key: 'waiting' as const, label: '等待组队', icon: 'ri-time-line', badge: showWaitingBadge ? '进行中' : null },
     { key: 'myteam' as const, label: '我的团队', icon: 'ri-team-line', badge: myTeam ? '✓' : null },
     { key: 'square' as const, label: '团队广场', icon: 'ri-community-line', badge: null },
   ];
@@ -563,7 +712,7 @@ export default function TeamFormationModule({ classId, className }: TeamFormatio
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100">
         <div className="flex border-b border-gray-100">
           {tabs.map(tab => (
-            <button key={tab.key} onClick={() => setActiveTab(tab.key)}
+            <button key={tab.key} type="button" onClick={() => handleTabClick(tab.key)}
               className={`flex-1 px-4 py-3.5 text-sm font-medium transition-colors whitespace-nowrap cursor-pointer flex items-center justify-center gap-1.5 ${
                 activeTab === tab.key ? 'text-teal-600 border-b-2 border-teal-600 bg-teal-50/30' : 'text-gray-500 hover:text-gray-800 hover:bg-gray-50'
               }`}>
@@ -586,6 +735,8 @@ export default function TeamFormationModule({ classId, className }: TeamFormatio
               onSubmitted={() => {
                 setActiveTab('waiting');
                 setWaitingForTeam(true);
+                void loadWaitingSummary();
+                void loadTeamsFromApi();
               }}
             />
           )}
@@ -608,22 +759,21 @@ export default function TeamFormationModule({ classId, className }: TeamFormatio
                           <i className="ri-user-star-line text-lg text-white"></i>
                         </div>
                         <div className="text-left">
-                          <p className="text-sm font-bold text-gray-900">你的AI匹配角色</p>
-                          <p className="text-xs text-gray-600">{aiMatchedRole}</p>
+                          <p className="text-sm font-bold text-gray-900">你的 AI 匹配角色</p>
+                          <p className="text-xs text-gray-600">{waitingRoleLabel || aiMatchedRole || '—'}</p>
                         </div>
                       </div>
                       
                       <div className="grid grid-cols-3 gap-2">
-                        {[
-                          { label: '技术', value: abilityProfile.techGeek, color: 'from-teal-500 to-cyan-500' },
-                          { label: '设计', value: abilityProfile.designAesthetic, color: 'from-orange-400 to-amber-400' },
-                          { label: '商业', value: abilityProfile.businessOperator, color: 'from-green-500 to-emerald-500' },
-                        ].map(item => (
-                          <div key={item.label} className="bg-white rounded-lg p-2.5">
+                        {TEAM_DIMENSION_BARS.map((item) => (
+                          <div key={item.key} className="bg-white rounded-lg p-2.5">
                             <p className="text-xs text-gray-500 mb-1">{item.label}</p>
-                            <p className="text-sm font-bold text-gray-900 mb-1.5">{Math.round(item.value)}</p>
+                            <p className="text-sm font-bold text-gray-900 mb-1.5">{waitingDimensionProfile[item.key]}</p>
                             <div className="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                              <div className={`h-full bg-gradient-to-r ${item.color} rounded-full`} style={{ width: `${item.value}%` }}></div>
+                              <div
+                                className={`h-full bg-gradient-to-r ${item.color} rounded-full`}
+                                style={{ width: `${Math.min(100, waitingDimensionProfile[item.key])}%` }}
+                              />
                             </div>
                           </div>
                         ))}
@@ -688,22 +838,25 @@ export default function TeamFormationModule({ classId, className }: TeamFormatio
                       <div className="flex-1">
                         <h2 className="text-base font-bold mb-1">{myTeam.name || '待设置团队名称'}</h2>
                         <p className="text-white/80 text-xs">{myTeam.introduction || '待完善团队介绍'}</p>
+                        {myTeam.createdAt ? (
+                          <p className="text-white/60 text-[10px] mt-1">创建于 {myTeam.createdAt}</p>
+                        ) : null}
                       </div>
-                      {myTeam.status === 'forming' && (
-                        <button 
+                      {isCurrentUserLeader && (
+                        <button
+                          type="button"
                           onClick={() => {
                             setEditingTeamInfo(true);
                             setTeamInfoForm({ name: myTeam.name, introduction: myTeam.introduction });
                           }}
-                          className="px-3 py-1.5 bg-white/20 border border-white/30 text-white text-xs font-medium rounded-lg hover:bg-white/30 transition-colors whitespace-nowrap cursor-pointer">
-                          <i className="ri-edit-line mr-1"></i>编辑
+                          className="px-3 py-1.5 bg-white/20 border border-white/30 text-white text-xs font-medium rounded-lg hover:bg-white/30 transition-colors whitespace-nowrap cursor-pointer"
+                        >
+                          <i className="ri-edit-line mr-1"></i>
+                          编辑
                         </button>
                       )}
                     </div>
                     <div className="flex items-center gap-2">
-                      <span className={`px-2.5 py-1 rounded-full text-xs font-medium border border-white/30 whitespace-nowrap ${myTeam.status === 'active' ? 'bg-green-500/20 text-white' : 'bg-orange-500/20 text-white'}`}>
-                        {myTeam.status === 'active' ? '已激活' : '待完善'}
-                      </span>
                       <span className="text-xs text-white/70">成员 {myTeam.members.length} 人</span>
                     </div>
                   </div>
@@ -730,7 +883,7 @@ export default function TeamFormationModule({ classId, className }: TeamFormatio
                             />
                           </div>
                           <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-1.5">团队介绍 *</label>
+                            <label className="block text-sm font-medium text-gray-700 mb-1.5">团队介绍</label>
                             <textarea 
                               value={teamInfoForm.introduction} 
                               onChange={e => setTeamInfoForm({ ...teamInfoForm, introduction: e.target.value })} 
@@ -743,8 +896,14 @@ export default function TeamFormationModule({ classId, className }: TeamFormatio
                         </div>
                         <div className="flex gap-3 mt-5">
                           <button onClick={() => setEditingTeamInfo(false)} className="flex-1 px-5 py-2.5 bg-gray-100 text-gray-700 text-sm font-medium rounded-xl hover:bg-gray-200 transition-colors whitespace-nowrap cursor-pointer">取消</button>
-                          <button onClick={handleSaveTeamInfo} className="flex-1 px-5 py-2.5 bg-gradient-to-r from-teal-500 to-cyan-500 text-white text-sm font-medium rounded-xl hover:shadow-lg transition-all whitespace-nowrap cursor-pointer">
-                            <i className="ri-check-line mr-1.5"></i>保存
+                          <button
+                            type="button"
+                            disabled={savingTeamInfo}
+                            onClick={() => void handleSaveTeamInfo()}
+                            className="flex-1 px-5 py-2.5 bg-gradient-to-r from-teal-500 to-cyan-500 text-white text-sm font-medium rounded-xl hover:shadow-lg transition-all whitespace-nowrap cursor-pointer disabled:opacity-60"
+                          >
+                            <i className="ri-check-line mr-1.5"></i>
+                            {savingTeamInfo ? '保存中…' : '保存'}
                           </button>
                         </div>
                       </div>
@@ -756,81 +915,30 @@ export default function TeamFormationModule({ classId, className }: TeamFormatio
                     <h3 className="text-sm font-bold text-gray-900 mb-3 flex items-center gap-2">
                       <i className="ri-group-line text-teal-600"></i>
                       团队成员
-                      {myTeam.status === 'forming' && <span className="text-xs text-orange-600">（请设置队长）</span>}
+                      <span className="text-xs font-normal text-gray-400">共 {myTeam.members.length} 人</span>
                     </h3>
-                    <div className="space-y-2">
-                      {myTeam.members.map(member => (
-                        <div key={member.id} className="bg-gray-50 rounded-xl p-3 hover:bg-teal-50/50 transition-colors">
-                          <div className="flex items-center justify-between mb-2">
-                            <div className="flex items-center gap-2.5">
-                              <img src={member.avatar} alt={member.name} className="w-10 h-10 rounded-full object-cover flex-shrink-0" />
-                              <div>
-                                <div className="flex items-center gap-1.5 mb-0.5">
-                                  <span className="text-sm font-bold text-gray-900">{member.name}</span>
-                                  {member.isLeader && (
-                                    <span className="px-1.5 py-0.5 bg-amber-100 text-amber-700 text-xs font-medium rounded-full whitespace-nowrap flex items-center gap-0.5">
-                                      <i className="ri-vip-crown-fill text-xs"></i>队长
-                                    </span>
-                                  )}
-                                </div>
-                                <p className="text-xs text-gray-400">{member.major} · {member.grade}</p>
-                              </div>
-                            </div>
-                            {myTeam.status === 'forming' && (
-                              <button 
-                                onClick={() => handleToggleLeader(member.id)}
-                                className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all whitespace-nowrap cursor-pointer ${
-                                  member.isLeader 
-                                    ? 'bg-amber-100 text-amber-700 border border-amber-200 hover:bg-amber-200' 
-                                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                                }`}>
-                                {member.isLeader ? '取消队长' : '设为队长'}
-                              </button>
+                    <div className="grid grid-cols-[repeat(auto-fill,minmax(7.5rem,1fr))] gap-3">
+                      {myTeam.members.map((member) => (
+                        <div
+                          key={member.id}
+                          className="bg-gray-50 border border-gray-100 rounded-xl p-3 flex flex-col items-center text-center hover:border-teal-200 hover:bg-teal-50/40 transition-colors"
+                        >
+                          <MemberTextAvatar name={member.name} />
+                          <div className="mt-2 flex flex-wrap items-center justify-center gap-1 w-full">
+                            <span className="text-sm font-bold text-gray-900 truncate max-w-full">{member.name}</span>
+                            {member.isLeader && (
+                              <span className="px-1 py-0.5 bg-amber-100 text-amber-700 text-[10px] font-medium rounded-full whitespace-nowrap inline-flex items-center gap-0.5">
+                                <i className="ri-vip-crown-fill"></i>
+                                队长
+                              </span>
                             )}
                           </div>
-                          
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                              <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs font-medium rounded-full whitespace-nowrap">
-                                {member.aiMatchedRole}
-                              </span>
-                              {editingMemberRole === member.id ? (
-                                <div className="flex items-center gap-1">
-                                  <input 
-                                    type="text" 
-                                    value={memberRoleInput} 
-                                    onChange={e => setMemberRoleInput(e.target.value)} 
-                                    placeholder="输入角色" 
-                                    className="w-24 px-2 py-0.5 border border-gray-200 rounded text-xs outline-none focus:ring-1 focus:ring-teal-500" 
-                                  />
-                                  <button onClick={() => handleSaveMemberRole(member.id)} className="w-6 h-6 flex items-center justify-center bg-teal-500 text-white rounded hover:bg-teal-600 cursor-pointer">
-                                    <i className="ri-check-line text-xs"></i>
-                                  </button>
-                                  <button onClick={() => { setEditingMemberRole(null); setMemberRoleInput(''); }} className="w-6 h-6 flex items-center justify-center bg-gray-200 text-gray-600 rounded hover:bg-gray-300 cursor-pointer">
-                                    <i className="ri-close-line text-xs"></i>
-                                  </button>
-                                </div>
-                              ) : (
-                                <>
-                                  {member.role && (
-                                    <span className="px-2 py-0.5 bg-white border border-gray-200 text-gray-600 text-xs rounded-full whitespace-nowrap">
-                                      {member.role}
-                                    </span>
-                                  )}
-                                  {myTeam.status === 'forming' && (
-                                    <button 
-                                      onClick={() => {
-                                        setEditingMemberRole(member.id);
-                                        setMemberRoleInput(member.role);
-                                      }}
-                                      className="text-xs text-teal-600 hover:text-teal-700 cursor-pointer">
-                                      <i className="ri-edit-line"></i>
-                                    </button>
-                                  )}
-                                </>
-                              )}
-                            </div>
-                          </div>
+                          <p className="mt-1.5 text-[11px] text-gray-500 w-full truncate">
+                            {member.studentId || '—'}
+                          </p>
+                          <p className="text-[11px] text-teal-700 font-medium w-full truncate leading-snug">
+                            {member.aiMatchedRole}
+                          </p>
                         </div>
                       ))}
                     </div>
@@ -870,7 +978,7 @@ export default function TeamFormationModule({ classId, className }: TeamFormatio
                 <p className="text-sm text-gray-500">共 <span className="font-bold text-gray-900">{matchedTeams.length}</span> 支已匹配团队</p>
               </div>
 
-              <div className="space-y-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {matchedTeams.map(team => (
                   <div key={team.id} className={`border-2 rounded-xl p-4 transition-all ${myTeam?.id === team.id ? 'border-teal-300 bg-teal-50/30' : 'border-gray-100 hover:border-teal-200 hover:shadow-sm bg-white'}`}>
                     <div className="flex items-start justify-between mb-3">
@@ -892,7 +1000,7 @@ export default function TeamFormationModule({ classId, className }: TeamFormatio
                     <div className="flex items-center gap-2 mb-3">
                       {team.members.slice(0, 4).map(member => (
                         <div key={member.id} className="relative group">
-                          <img src={member.avatar} alt={member.name} className="w-8 h-8 rounded-full object-cover border-2 border-white" />
+                          <MemberTextAvatar name={member.name} size="sm" />
                           {member.isLeader && (
                             <i className="ri-vip-crown-fill absolute -top-1 -right-1 text-xs text-amber-500 bg-white rounded-full"></i>
                           )}
@@ -907,7 +1015,9 @@ export default function TeamFormationModule({ classId, className }: TeamFormatio
                     </div>
 
                     <div className="flex items-center justify-between pt-3 border-t border-gray-100">
-                      <span className="text-xs text-gray-400">创建于 {team.createdAt}</span>
+                      <span className="text-xs text-gray-400">
+                        {team.createdAt ? `创建于 ${team.createdAt}` : '创建时间待定'}
+                      </span>
                       {myTeam?.id === team.id && (
                         <button 
                           onClick={() => setActiveTab('myteam')}

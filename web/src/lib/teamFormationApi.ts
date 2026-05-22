@@ -11,6 +11,39 @@ export type TeamQuestion = {
   required: boolean;
 };
 
+export type TeamDimensionProfile = {
+  strategic: number;
+  market: number;
+  techRisk: number;
+};
+
+export const TEAM_DIMENSION_BARS = [
+  { key: 'strategic' as const, label: '战略统筹', color: 'from-violet-500 to-purple-500' },
+  { key: 'market' as const, label: '市场运营', color: 'from-orange-400 to-amber-400' },
+  { key: 'techRisk' as const, label: '技术风控', color: 'from-teal-500 to-cyan-500' },
+];
+
+export function normalizeTeamDimensionProfile(
+  p: Partial<TeamDimensionProfile> & { techGeek?: number; designAesthetic?: number; businessOperator?: number }
+): TeamDimensionProfile {
+  if (
+    typeof p.strategic === 'number' ||
+    typeof p.market === 'number' ||
+    typeof p.techRisk === 'number'
+  ) {
+    return {
+      strategic: Math.round(Number(p.strategic) || 0),
+      market: Math.round(Number(p.market) || 0),
+      techRisk: Math.round(Number(p.techRisk) || 0),
+    };
+  }
+  return {
+    strategic: Math.round(Number(p.businessOperator) || 0),
+    market: Math.round(Number(p.designAesthetic) || 0),
+    techRisk: Math.round(Number(p.techGeek) || 0),
+  };
+}
+
 export type TeamFormationSubmission = {
   status: string | null;
   answers: Record<string, string | string[]>;
@@ -18,6 +51,8 @@ export type TeamFormationSubmission = {
   videoTranscript: string | null;
   aiMatchedRole: string | null;
   aiMatchedRoleLabel: string | null;
+  dimensionProfile?: TeamDimensionProfile;
+  analysisText?: string | null;
   submittedAt: string | null;
 };
 
@@ -86,8 +121,21 @@ export type TeamAnalyzeResult = {
   aiMatchedRoleLabel: string;
   videoTranscript: string;
   summary: string;
+  /** 去掉末尾 JSON 后的分析正文，用于页面展示 */
+  analysisText?: string;
   confidence?: number;
+  dimensionProfile?: TeamDimensionProfile;
 };
+
+/** 流式拼接结果展示：去掉尾部 JSON 行 */
+export function stripTeamAnalysisStreamDisplay(text: string): string {
+  const t = String(text || '').trim();
+  const idx = t.search(/\n\s*\{/);
+  if (idx >= 0 && /dimensionScores|matchedRole/i.test(t.slice(idx))) {
+    return t.slice(0, idx).trim();
+  }
+  return t.replace(/\n\{[\s\S]*"dimensionScores"[\s\S]*$/i, '').trim() || t;
+}
 
 export type TeamAnalyzeStreamHandlers = {
   onStatus?: (message: string) => void;
@@ -208,4 +256,209 @@ export async function fetchTeacherPendingTeamStudents(classId: string) {
     `/api/teacher/personal-classes/${encodeURIComponent(classId)}/team-formation/pending-students`
   );
   return Array.isArray(data) ? data : [];
+}
+
+export type GroupingTeamMember = {
+  id: string;
+  name: string;
+  studentId: string;
+  aiMatchedRole?: string;
+  aiMatchedRoleLabel?: string;
+  isTeamLeader?: boolean;
+  profile: TeamDimensionProfile;
+  status: string;
+};
+
+export type GroupingTeam = {
+  id: string;
+  name: string;
+  introduction?: string;
+  groupingStatus?: string;
+  complementScore: number;
+  aiRationale?: string;
+  createdAt?: string;
+  members: GroupingTeamMember[];
+  avgProfile: TeamDimensionProfile;
+};
+
+export async function updateStudentMyTeamProfile(
+  classId: string,
+  payload: { name: string; introduction: string }
+) {
+  return portalAuthenticatedFetch('student', '/api/student/team-formation/my-team', {
+    method: 'PATCH',
+    body: JSON.stringify({ classId, ...payload }),
+  }) as Promise<GroupingTeam | null>;
+}
+
+export type TeacherGroupingState = {
+  pendingStudents: GroupingTeamMember[];
+  teams: GroupingTeam[];
+  minPendingForAi?: number;
+};
+
+export async function fetchTeacherGrouping(classId: string): Promise<TeacherGroupingState> {
+  const data = await portalAuthenticatedFetch(
+    'teacher',
+    `/api/teacher/personal-classes/${encodeURIComponent(classId)}/team-formation/grouping`
+  );
+  return data as TeacherGroupingState;
+}
+
+export type TeacherAiGroupStreamHandlers = {
+  onStatus?: (message: string) => void;
+  onThinking?: (text: string) => void;
+  onContent?: (text: string) => void;
+  onDone?: (data: TeacherGroupingState) => void;
+  onError?: (message: string) => void;
+};
+
+/** 流式 AI 智能组队（思考过程经 SSE 推送，页面通常仅展示最终分组结果） */
+export async function postTeacherAiGroupStream(classId: string, handlers: TeacherAiGroupStreamHandlers) {
+  const { getPortalToken, redirectTeacherSessionExpired } = await import('./authApi');
+  const token = getPortalToken('teacher') || '';
+  const r = await fetch(
+    `/api/teacher/personal-classes/${encodeURIComponent(classId)}/team-formation/ai-group`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'text/event-stream',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ stream: true }),
+    }
+  );
+
+  if (r.status === 401) {
+    redirectTeacherSessionExpired();
+    throw new Error('登录已失效');
+  }
+  if (!r.ok) {
+    const j = await r.json().catch(() => ({ message: '' }));
+    throw new Error((j as { message?: string }).message || `HTTP ${r.status}`);
+  }
+
+  const reader = r.body?.getReader();
+  if (!reader) throw new Error('无法读取组队流');
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let currentEvent = 'message';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+    for (const line of lines) {
+      if (line.startsWith('event:')) {
+        currentEvent = line.slice(6).trim();
+        continue;
+      }
+      if (!line.startsWith('data:')) continue;
+      const raw = line.slice(5).trim();
+      if (!raw) continue;
+      let data: Record<string, unknown>;
+      try {
+        data = JSON.parse(raw) as Record<string, unknown>;
+      } catch {
+        continue;
+      }
+      if (currentEvent === 'status' && typeof data.message === 'string') {
+        handlers.onStatus?.(data.message);
+      } else if (currentEvent === 'thinking' && typeof data.text === 'string') {
+        handlers.onThinking?.(data.text);
+      } else if (currentEvent === 'content' && typeof data.text === 'string') {
+        handlers.onContent?.(data.text);
+      } else if (currentEvent === 'done') {
+        handlers.onDone?.(data as unknown as TeacherGroupingState);
+      } else if (currentEvent === 'error') {
+        const msg = typeof data.message === 'string' ? data.message : 'AI 组队失败';
+        handlers.onError?.(msg);
+        throw new Error(msg);
+      }
+    }
+  }
+}
+
+/** @deprecated 请使用 postTeacherAiGroupStream */
+export async function postTeacherAiGroup(classId: string) {
+  return new Promise<TeacherGroupingState>((resolve, reject) => {
+    void postTeacherAiGroupStream(classId, {
+      onDone: resolve,
+      onError: reject,
+    }).catch(reject);
+  });
+}
+
+export async function setTeacherTeamLeader(classId: string, teamId: string, studentId: string) {
+  return portalAuthenticatedFetch(
+    'teacher',
+    `/api/teacher/personal-classes/${encodeURIComponent(classId)}/team-formation/teams/${encodeURIComponent(teamId)}/leader`,
+    { method: 'PUT', body: JSON.stringify({ studentId }) }
+  ) as Promise<TeacherGroupingState>;
+}
+
+export async function removeTeamMember(classId: string, teamId: string, studentId: string) {
+  return portalAuthenticatedFetch(
+    'teacher',
+    `/api/teacher/personal-classes/${encodeURIComponent(classId)}/team-formation/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(studentId)}`,
+    { method: 'DELETE' }
+  ) as Promise<TeacherGroupingState>;
+}
+
+export async function addTeamMember(classId: string, teamId: string, studentId: string) {
+  return portalAuthenticatedFetch(
+    'teacher',
+    `/api/teacher/personal-classes/${encodeURIComponent(classId)}/team-formation/teams/${encodeURIComponent(teamId)}/members`,
+    { method: 'POST', body: JSON.stringify({ studentId }) }
+  ) as Promise<TeacherGroupingState>;
+}
+
+export async function confirmTeacherGrouping(classId: string) {
+  return portalAuthenticatedFetch(
+    'teacher',
+    `/api/teacher/personal-classes/${encodeURIComponent(classId)}/team-formation/confirm`,
+    { method: 'POST', body: JSON.stringify({}) }
+  ) as Promise<TeacherGroupingState & { notifiedCount?: number }>;
+}
+
+export async function fetchStudentMyTeam(classId: string) {
+  return portalAuthenticatedFetch(
+    'student',
+    `/api/student/team-formation/my-team?classId=${encodeURIComponent(classId)}`
+  );
+}
+
+export async function fetchStudentTeamSquare(classId: string) {
+  const data = await portalAuthenticatedFetch(
+    'student',
+    `/api/student/team-formation/team-square?classId=${encodeURIComponent(classId)}`
+  );
+  return Array.isArray(data) ? data : [];
+}
+
+export type StudentNotificationRow = {
+  id: string;
+  type: string;
+  title: string;
+  content: string;
+  relatedModule: string;
+  relatedLink: string;
+  isRead: boolean;
+  timestamp: string;
+  sender: { name: string };
+};
+
+export async function fetchStudentNotifications(): Promise<StudentNotificationRow[]> {
+  const data = await portalAuthenticatedFetch('student', '/api/student/notifications');
+  return Array.isArray(data) ? (data as StudentNotificationRow[]) : [];
+}
+
+export async function markStudentNotificationRead(id: string) {
+  return portalAuthenticatedFetch('student', `/api/student/notifications/${encodeURIComponent(id)}/read`, {
+    method: 'PATCH',
+  });
 }

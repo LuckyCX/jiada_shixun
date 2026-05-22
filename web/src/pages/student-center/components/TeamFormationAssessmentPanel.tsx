@@ -11,6 +11,10 @@ import {
   submitTeamFormation,
   uploadTeamVideo,
   type TeamQuestion,
+  TEAM_DIMENSION_BARS,
+  normalizeTeamDimensionProfile,
+  stripTeamAnalysisStreamDisplay,
+  type TeamDimensionProfile,
 } from '../../../lib/teamFormationApi';
 
 const MAX_VIDEO = 50 * 1024 * 1024;
@@ -40,12 +44,19 @@ export default function TeamFormationAssessmentPanel({ classId, onSubmitted }: P
   const [aiAnalyzing, setAiAnalyzing] = useState(false);
   const [analyzeStep, setAnalyzeStep] = useState('');
   const [aiMatchedRoleLabel, setAiMatchedRoleLabel] = useState<string | null>(null);
+  const [dimensionProfile, setDimensionProfile] = useState<TeamDimensionProfile>({
+    strategic: 0,
+    market: 0,
+    techRisk: 0,
+  });
   const [analysisSummary, setAnalysisSummary] = useState('');
+  const [analysisBody, setAnalysisBody] = useState('');
   const [thinkingLines, setThinkingLines] = useState<string[]>([]);
   const [streamPreview, setStreamPreview] = useState('');
   const [waitingForTeacher, setWaitingForTeacher] = useState(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingAnswersRef = useRef<Record<string, string | string[]>>({});
+  const streamAccumRef = useRef('');
 
   const loadAll = useCallback(async () => {
     setLoading(true);
@@ -54,6 +65,12 @@ export default function TeamFormationAssessmentPanel({ classId, onSubmitted }: P
       setQuestions(qs);
       setAnswers((sub.answers || {}) as Record<string, string | string[]>);
       setAiMatchedRoleLabel(sub.aiMatchedRoleLabel);
+      setDimensionProfile(normalizeTeamDimensionProfile(sub.dimensionProfile || {}));
+      const savedBody = sub.analysisText?.trim();
+      if (savedBody) {
+        setAnalysisBody(savedBody);
+        setAnalysisSummary(savedBody.slice(0, 280));
+      }
       setServerVideoName(sub.videoStorageKey ? sub.videoStorageKey.split('/').pop() || '已上传视频' : null);
       setVideoUploaded(Boolean(sub.videoStorageKey && sub.aiMatchedRole));
       setAssessmentCompleted(qs.length > 0 && Object.keys(sub.answers || {}).length >= qs.length);
@@ -208,6 +225,8 @@ export default function TeamFormationAssessmentPanel({ classId, onSubmitted }: P
     setThinkingLines([]);
     setStreamPreview('');
     setAnalysisSummary('');
+    setAnalysisBody('');
+    streamAccumRef.current = '';
     try {
       if (videoFile) {
         await uploadTeamVideo(classId, videoFile);
@@ -219,13 +238,23 @@ export default function TeamFormationAssessmentPanel({ classId, onSubmitted }: P
       await analyzeTeamFormationStream(classId, {
         onStatus: (msg) => setAnalyzeStep(msg),
         onThinking: (t) => appendThinking(t),
-        onContent: (t) => setStreamPreview((p) => p + t),
+        onContent: (t) => {
+          streamAccumRef.current += t;
+          setStreamPreview((p) => p + t);
+        },
         onError: (msg) => {
           throw new Error(msg);
         },
         onDone: (result) => {
           setAiMatchedRoleLabel(result.aiMatchedRoleLabel);
-          setAnalysisSummary(result.summary || '');
+          const body =
+            (result.analysisText && result.analysisText.trim()) ||
+            stripTeamAnalysisStreamDisplay(streamAccumRef.current);
+          setAnalysisBody(body);
+          setAnalysisSummary(result.summary?.trim() || body.slice(0, 280));
+          if (result.dimensionProfile) {
+            setDimensionProfile(normalizeTeamDimensionProfile(result.dimensionProfile));
+          }
           setVideoUploaded(true);
           showToast('AI 分析完成');
         },
@@ -260,10 +289,27 @@ export default function TeamFormationAssessmentPanel({ classId, onSubmitted }: P
   if (questions.length < 3) {
     return (
       <div className="py-12 text-center text-gray-500 text-sm">
-        教师尚未为本班配置组队测评题（至少 3 道），请联系任课教师。
+        教师尚未为本班配置组队测评题，请联系任课教师。
       </div>
     );
   }
+
+  const dimensionBars = (
+    <div className="grid grid-cols-3 gap-2 mt-4 max-w-md mx-auto text-left">
+      {TEAM_DIMENSION_BARS.map((item) => (
+        <div key={item.key} className="bg-white rounded-lg p-2.5 border border-orange-100">
+          <p className="text-xs text-gray-500 mb-1">{item.label}</p>
+          <p className="text-sm font-bold text-gray-900 mb-1.5">{dimensionProfile[item.key]}</p>
+          <div className="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden">
+            <div
+              className={`h-full bg-gradient-to-r ${item.color} rounded-full`}
+              style={{ width: `${Math.min(100, dimensionProfile[item.key])}%` }}
+            />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
 
   if (waitingForTeacher) {
     return (
@@ -273,6 +319,7 @@ export default function TeamFormationAssessmentPanel({ classId, onSubmitted }: P
         <p className="text-sm text-gray-600">
           {aiMatchedRoleLabel ? `AI 匹配角色：${aiMatchedRoleLabel}` : ''}
         </p>
+        {dimensionBars}
       </div>
     );
   }
@@ -389,7 +436,7 @@ export default function TeamFormationAssessmentPanel({ classId, onSubmitted }: P
             )}
             {aiAnalyzing && thinkingLines.length > 0 && (
               <div className="mb-4 border border-amber-200 bg-amber-50 rounded-xl p-3 overflow-hidden">
-                <div className="text-[10px] font-semibold text-amber-800 mb-1.5">思考过程（仅展示最近 3 行）</div>
+                <div className="text-[10px] font-semibold text-amber-800 mb-1.5">思考中...</div>
                 <div className="h-[3.75rem] overflow-hidden flex flex-col justify-end text-xs text-amber-900/90 space-y-0.5">
                   {thinkingLines.map((line, i) => (
                     <p key={i} className="truncate leading-snug">
@@ -427,12 +474,14 @@ export default function TeamFormationAssessmentPanel({ classId, onSubmitted }: P
             <h3 className="text-base font-bold">AI 分析完成</h3>
             <p className="text-sm mt-2">匹配角色：{aiMatchedRoleLabel || '—'}</p>
           </div>
-          {analysisSummary ? (
-            <div className="bg-white border border-teal-100 rounded-xl p-4 shadow-sm">
-              <h4 className="text-sm font-bold text-gray-900 mb-2">综合分析</h4>
-              <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{analysisSummary}</p>
+          {(analysisBody || analysisSummary) ? (
+            <div className="bg-white border border-teal-100 rounded-xl p-4 shadow-sm max-h-64 overflow-y-auto">
+              <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">
+                {analysisBody || analysisSummary}
+              </p>
             </div>
           ) : null}
+          {dimensionBars}
           <div className="flex gap-3">
             <button
               type="button"

@@ -12,6 +12,7 @@ import collegesRoutes from './routes/colleges.js';
 import teacherPersonalClassesRoutes from './routes/teacherPersonalClasses.js';
 import studentPortalRoutes from './routes/studentPortal.js';
 import teamFormationRoutes from './routes/teamFormation.js';
+import studentNotificationsRoutes from './routes/studentNotifications.js';
 
 const app = express();
 
@@ -52,6 +53,7 @@ app.use('/api', adminUsersRoutes);
 app.use('/api', teacherPersonalClassesRoutes);
 app.use('/api', studentPortalRoutes);
 app.use('/api', teamFormationRoutes);
+app.use('/api', studentNotificationsRoutes);
 
 app.use((err, req, res, _next) => {
   logError(`express errorHandler traceId=${req.traceId}`, err);

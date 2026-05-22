@@ -1,12 +1,16 @@
-import { useState, useMemo, useEffect, useRef } from 'react';
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { Modal, notification } from 'antd';
 import { clearPortalToken, getPortalToken, parseJwtPayload } from '../../lib/authApi';
-import { Link, useSearchParams, useNavigate } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useSiteBrand } from '../../lib/publicSite';
 import LearningDetail from '../knowledge-system/components/LearningDetail';
 import QuizModal from './components/QuizModal';
 import { quizBank } from '../../mocks/quizBank';
-import { notifications } from '../../mocks/notifications';
+import {
+  fetchStudentNotifications,
+  markStudentNotificationRead,
+  type StudentNotificationRow,
+} from '../../lib/teamFormationApi';
 import StudentClassSwitcher from './components/StudentClassSwitcher';
 import TeamFormationModule from './components/TeamFormationModule';
 import IdeationModule from './components/IdeationModule';
@@ -21,7 +25,33 @@ import {
   type StudentPersonalEnrollment,
   type StudentProfile,
 } from '../../lib/studentPortalApi';
-import { fetchTeamSubmission, isTeamFormationDone } from '../../lib/teamFormationApi';
+import {
+  fetchStudentMyTeam,
+  fetchTeamSubmission,
+  isTeamFormationDone,
+} from '../../lib/teamFormationApi';
+
+const TRAINING_MODULE_ORDER = ['team', 'ideation', 'market', 'product', 'business', 'simulation', 'plan'] as const;
+
+const MODULE_COMPLETE_THRESHOLD: Record<string, number> = {
+  team: 4,
+  ideation: 6,
+  market: 8,
+  product: 7,
+  business: 9,
+  simulation: 4,
+  plan: 4,
+};
+
+const TAB_TO_MODULE_ID: Record<string, string> = {
+  'module-team': 'team',
+  'module-ideation': 'ideation',
+  'module-market': 'market',
+  'module-product': 'product',
+  'module-business': 'business',
+  'module-simulation': 'simulation',
+  'module-plan': 'plan',
+};
 
 type TabType =
   | 'overview'
@@ -79,11 +109,18 @@ export default function StudentCenterPage() {
   const [quizStates, setQuizStates] = useState<KnowledgeQuizState>({});
   const [completedKnowledgeIds, setCompletedKnowledgeIds] = useState<Set<string>>(new Set(['k_ideation_1']));
   const [moduleProgressState, setModuleProgressState] = useState<Record<string, number>>({
-    team: 4, ideation: 5, market: 6, product: 3, business: 2, simulation: 1, plan: 0,
+    team: 0,
+    ideation: 0,
+    market: 0,
+    product: 0,
+    business: 0,
+    simulation: 0,
+    plan: 0,
   });
+  const [teamFormationComplete, setTeamFormationComplete] = useState(false);
   const [notificationFilter, setNotificationFilter] = useState<'all' | 'guidance' | 'reminder' | 'evaluation'>('all');
   const [notificationReadFilter, setNotificationReadFilter] = useState<'all' | 'unread' | 'read'>('all');
-  const [notificationList, setNotificationList] = useState(notifications);
+  const [notificationList, setNotificationList] = useState<StudentNotificationRow[]>([]);
   const [expandedNotificationId, setExpandedNotificationId] = useState<string | null>(null);
   const [logoutModalOpen, setLogoutModalOpen] = useState(false);
   const [studentProfile, setStudentProfile] = useState<StudentProfile | null>(null);
@@ -115,6 +152,25 @@ export default function StudentCenterPage() {
       })
       .catch(() => setEnrollments([]));
   }, []);
+
+  const refreshTeamFormationComplete = useCallback(() => {
+    if (!selectedClassId) {
+      setTeamFormationComplete(false);
+      return;
+    }
+    void Promise.all([
+      fetchTeamSubmission(selectedClassId),
+      fetchStudentMyTeam(selectedClassId).catch(() => null),
+    ])
+      .then(([sub, team]) => {
+        setTeamFormationComplete(sub.status === 'confirmed' || Boolean(team));
+      })
+      .catch(() => setTeamFormationComplete(false));
+  }, [selectedClassId]);
+
+  useEffect(() => {
+    refreshTeamFormationComplete();
+  }, [refreshTeamFormationComplete]);
 
   useEffect(() => {
     if (!selectedClassId || teamGuideShownRef.current) return;
@@ -155,11 +211,52 @@ export default function StudentCenterPage() {
     const name = realName || studentNo || loginUsername || '学生';
     return { studentDisplayName: name, studentAvatarChar: [...name][0] || '学' };
   }, [studentProfile]);
-  const getModuleUnlockStatus = (moduleId: string): 'locked' | 'in_progress' | 'completed' => {
-    const thresholds: Record<string, number> = { team: 4, ideation: 6, market: 8, product: 7, business: 9, simulation: 4, plan: 4 };
+  const isModuleCompletedByProgress = (moduleId: string) => {
+    if (moduleId === 'team') return teamFormationComplete;
     const val = moduleProgressState[moduleId] || 0;
-    const threshold = thresholds[moduleId] || 99;
-    return val >= threshold ? 'completed' : 'in_progress';
+    return val >= (MODULE_COMPLETE_THRESHOLD[moduleId] ?? 99);
+  };
+
+  const getModuleProgressPercent = (moduleId: string): number => {
+    const val = moduleProgressState[moduleId as keyof typeof moduleProgressState] ?? 0;
+    const th = MODULE_COMPLETE_THRESHOLD[moduleId] ?? 99;
+    return Math.min(100, Math.round((val / th) * 100));
+  };
+
+  const getSidebarModuleUi = (moduleId: string) => {
+    const idx = TRAINING_MODULE_ORDER.indexOf(moduleId as (typeof TRAINING_MODULE_ORDER)[number]);
+    if (idx < 0) {
+      return { locked: true, status: 'locked' as const, displayPercent: 0, isTeam: false };
+    }
+    const isTeam = moduleId === 'team';
+    if (isTeam) {
+      if (teamFormationComplete) {
+        return { locked: false, status: 'completed' as const, displayPercent: null, isTeam: true };
+      }
+      return { locked: false, status: 'in_progress' as const, displayPercent: null, isTeam: true };
+    }
+    if (!teamFormationComplete) {
+      return { locked: true, status: 'locked' as const, displayPercent: 0, isTeam: false };
+    }
+    if (idx > 0) {
+      const prevId = TRAINING_MODULE_ORDER[idx - 1];
+      if (!isModuleCompletedByProgress(prevId)) {
+        return { locked: true, status: 'locked' as const, displayPercent: 0, isTeam: false };
+      }
+    }
+    if (isModuleCompletedByProgress(moduleId)) {
+      return { locked: false, status: 'completed' as const, displayPercent: 100, isTeam: false };
+    }
+    return {
+      locked: false,
+      status: 'in_progress' as const,
+      displayPercent: getModuleProgressPercent(moduleId),
+      isTeam: false,
+    };
+  };
+
+  const getModuleUnlockStatus = (moduleId: string): 'locked' | 'in_progress' | 'completed' => {
+    return getSidebarModuleUi(moduleId).status;
   };
 
   const trainingModuleMenuItems = [
@@ -231,8 +328,35 @@ export default function StudentCenterPage() {
   const completedCount = moduleProgress.filter(m => m.status === 'completed').length;
   const inProgressCount = moduleProgress.filter(m => m.status === 'in_progress').length;
 
-  const markAsRead = (id: string) => setNotificationList(prev => prev.map(n => n.id === id ? { ...n, isRead: true } : n));
-  const markAllAsRead = () => setNotificationList(prev => prev.map(n => ({ ...n, isRead: true })));
+  const markAsRead = (id: string) => {
+    setNotificationList((prev) => {
+      const target = prev.find((n) => n.id === id);
+      if (!target || target.isRead) return prev;
+      void markStudentNotificationRead(id).catch(() => {});
+      return prev.map((n) => (n.id === id ? { ...n, isRead: true } : n));
+    });
+  };
+  const markAllAsRead = () => {
+    const unreadIds = notificationList.filter((n) => !n.isRead).map((n) => n.id);
+    setNotificationList((prev) => prev.map((n) => ({ ...n, isRead: true })));
+    unreadIds.forEach((id) => void markStudentNotificationRead(id).catch(() => {}));
+  };
+
+  const loadNotifications = useCallback(() => {
+    return fetchStudentNotifications()
+      .then(setNotificationList)
+      .catch(() => setNotificationList([]));
+  }, []);
+
+  const goFromNotificationLink = (rawLink: string) => {
+    const path = rawLink.startsWith('/') ? rawLink : `/student-center?${rawLink}`;
+    const qIdx = path.indexOf('?');
+    const pathname = qIdx >= 0 ? path.slice(0, qIdx) : path;
+    const params = new URLSearchParams(qIdx >= 0 ? path.slice(qIdx + 1) : '');
+    const tab = params.get('tab');
+    if (tab) setActiveTab(tab as TabType);
+    navigate({ pathname: pathname || '/student-center', search: params.toString() ? `?${params.toString()}` : '' });
+  };
 
   const filteredNotifications = notificationList.filter(n => {
     if (notificationFilter !== 'all' && n.type !== notificationFilter) return false;
@@ -241,11 +365,25 @@ export default function StudentCenterPage() {
     return true;
   });
 
+  useEffect(() => {
+    void loadNotifications();
+  }, [loadNotifications]);
+
+  useEffect(() => {
+    if (activeTab === 'notifications') void loadNotifications();
+  }, [activeTab, loadNotifications]);
+
+  useEffect(() => {
+    const tab = searchParams.get('tab');
+    if (tab) setActiveTab(tab as TabType);
+  }, [searchParams]);
+
   const getNotificationTypeStyle = (type: string) => {
     switch (type) {
       case 'guidance': return 'bg-teal-100 text-teal-700';
       case 'reminder': return 'bg-orange-100 text-orange-700';
       case 'evaluation': return 'bg-purple-100 text-purple-700';
+      case 'team_join': return 'bg-cyan-100 text-cyan-800';
       default: return 'bg-gray-100 text-gray-700';
     }
   };
@@ -255,6 +393,7 @@ export default function StudentCenterPage() {
       case 'guidance': return '引导意见';
       case 'reminder': return '督促通知';
       case 'evaluation': return '评价反馈';
+      case 'team_join': return '加入团队';
       default: return '消息';
     }
   };
@@ -267,13 +406,7 @@ export default function StudentCenterPage() {
     { key: 'notifications' as TabType, label: '消息通知', icon: 'ri-notification-line' },
   ];
 
-  const getModuleProgress = (moduleId: string): number => {
-    const mod = moduleProgress.find(m => m.moduleId === moduleId);
-    if (!mod) return 0;
-    const kp = mod.totalKnowledge > 0 ? (mod.completedKnowledge / mod.totalKnowledge) * 100 : 0;
-    const tp = mod.totalTasks > 0 ? (mod.completedTasks / mod.totalTasks) * 100 : 0;
-    return Math.round((kp + tp) / 2);
-  };
+  const getModuleProgress = (moduleId: string): number => getModuleProgressPercent(moduleId);
 
   const getCurrentLabel = (): string => {
     const allItems = [...learningMenuItems, ...trainingModuleMenuItems];
@@ -342,7 +475,26 @@ export default function StudentCenterPage() {
   }
 
   const handleModuleClick = (moduleKey: TabType) => {
+    const moduleId = TAB_TO_MODULE_ID[moduleKey];
+    if (!moduleId) {
+      setActiveTab(moduleKey);
+      return;
+    }
+    const ui = getSidebarModuleUi(moduleId);
+    if (ui.locked) {
+      notification.warning({
+        message: '模块未解锁',
+        description: !teamFormationComplete
+          ? '请先完成组队与团队管理（教师确认组队后解锁下一环节）'
+          : '请先完成上一实训模块（进度需达到 100%）',
+        placement: 'topRight',
+      });
+      return;
+    }
     setActiveTab(moduleKey);
+    if (moduleKey === 'module-team') {
+      refreshTeamFormationComplete();
+    }
   };
 
   const renderModuleContent = () => {
@@ -356,6 +508,9 @@ export default function StudentCenterPage() {
             key={selectedEnrollment.classId}
             classId={selectedEnrollment.classId}
             className={selectedEnrollment.className}
+            initialSubTab={
+              (searchParams.get('teamTab') as 'assessment' | 'waiting' | 'myteam' | 'square' | null) || undefined
+            }
           />
         );
       case 'module-ideation':
@@ -437,25 +592,51 @@ export default function StudentCenterPage() {
 
           <div className="px-2 space-y-0.5">
             {trainingModuleMenuItems.map((item, index) => {
-              const modIdMap: Record<string, string> = { 'module-team': 'team', 'module-ideation': 'ideation', 'module-market': 'market', 'module-product': 'product', 'module-business': 'business', 'module-simulation': 'simulation', 'module-plan': 'plan' };
-              const status = getModuleUnlockStatus(modIdMap[item.key]);
-              const prog = getModuleProgress(modIdMap[item.key]);
+              const moduleId = TAB_TO_MODULE_ID[item.key];
+              const ui = getSidebarModuleUi(moduleId);
               const isActive = activeTab === item.key;
+              const statusIconClass = isActive ? 'text-white' : ui.locked ? 'text-gray-300' : 'text-teal-500';
               return (
-                <button 
-                  key={item.key} 
-                  onClick={() => handleModuleClick(item.key)} 
-                  title={sidebarCollapsed ? item.label : undefined}
-                  className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl transition-all cursor-pointer ${isActive ? 'bg-gradient-to-r from-teal-500 to-cyan-600 text-white shadow-sm' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'} ${sidebarCollapsed ? 'justify-center' : ''}`}
+                <button
+                  key={item.key}
+                  type="button"
+                  disabled={ui.locked}
+                  onClick={() => handleModuleClick(item.key)}
+                  title={
+                    sidebarCollapsed
+                      ? item.label
+                      : ui.locked
+                        ? !teamFormationComplete && moduleId !== 'team'
+                          ? '请先完成组队'
+                          : '请先完成上一模块'
+                        : item.label
+                  }
+                  className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl transition-all ${ui.locked ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'} ${isActive ? 'bg-gradient-to-r from-teal-500 to-cyan-600 text-white shadow-sm' : ui.locked ? 'text-gray-400' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'} ${sidebarCollapsed ? 'justify-center' : ''}`}
                 >
-                  {!sidebarCollapsed && <span className={`text-xs font-bold w-4 flex-shrink-0 ${isActive ? 'text-white/70' : 'text-gray-400'}`}>{index + 1}</span>}
-                  <div className="w-5 h-5 flex items-center justify-center flex-shrink-0"><i className={`${item.icon} text-base`}></i></div>
+                  {!sidebarCollapsed && (
+                    <span className={`text-xs font-bold w-4 flex-shrink-0 ${isActive ? 'text-white/70' : 'text-gray-400'}`}>
+                      {index + 1}
+                    </span>
+                  )}
+                  <div className="w-5 h-5 flex items-center justify-center flex-shrink-0">
+                    <i className={`${item.icon} text-base`}></i>
+                  </div>
                   {!sidebarCollapsed && (
                     <>
                       <span className="text-xs font-medium flex-1 text-left leading-tight">{item.label}</span>
-                      <span className="flex-shrink-0">
-                        {status === 'completed' && <i className="ri-checkbox-circle-fill text-green-400 text-sm"></i>}
-                        {status === 'in_progress' && <span className="text-xs font-bold text-teal-400">{prog}%</span>}
+                      <span className={`flex-shrink-0 ${statusIconClass}`}>
+                        {ui.status === 'completed' && (
+                          <i className={`ri-checkbox-circle-fill text-sm ${isActive ? 'text-green-200' : 'text-green-500'}`}></i>
+                        )}
+                        {ui.status === 'in_progress' && ui.isTeam && (
+                          <i className={`ri-time-line text-sm ${isActive ? 'text-white/90' : ''}`}></i>
+                        )}
+                        {ui.status === 'in_progress' && !ui.isTeam && (
+                          <span className={`text-xs font-bold ${isActive ? 'text-white/90' : 'text-teal-500'}`}>
+                            {ui.displayPercent ?? 0}%
+                          </span>
+                        )}
+                        {ui.status === 'locked' && <i className="ri-lock-line text-sm"></i>}
                       </span>
                     </>
                   )}
@@ -585,18 +766,33 @@ export default function StudentCenterPage() {
                 </div>
                 <div className="flex items-start gap-0">
                   {moduleProgress.map((mod, index) => {
-                    const isCompleted = mod.status === 'completed';
-                    const isCurrent = mod.moduleId === 'market';
-                    const prog = getModuleProgress(mod.moduleId);
+                    const ui = getSidebarModuleUi(mod.moduleId);
+                    const isCompleted = ui.status === 'completed';
+                    const isCurrent = ui.status === 'in_progress';
                     const tabMap: Record<string, TabType> = { team: 'module-team', ideation: 'module-ideation', market: 'module-market', product: 'module-product', business: 'module-business', simulation: 'module-simulation', plan: 'module-plan' };
                     const icons = ['ri-team-line', 'ri-lightbulb-line', 'ri-search-line', 'ri-pencil-ruler-line', 'ri-pie-chart-line', 'ri-robot-line', 'ri-file-text-line'];
+                    const stepLabel =
+                      mod.moduleId === 'team'
+                        ? isCompleted
+                          ? '✓ 完成'
+                          : '进行中'
+                        : isCompleted
+                          ? '✓ 完成'
+                          : ui.locked
+                            ? '0%'
+                            : isCurrent
+                              ? `${ui.displayPercent ?? 0}%`
+                              : '未开始';
                     return (
                       <div key={mod.moduleId} className="flex-1 flex flex-col items-center relative">
                         {index < moduleProgress.length - 1 && (
                           <div className={`absolute top-5 left-1/2 w-full h-0.5 z-0 ${isCompleted ? 'bg-teal-400' : 'bg-gray-200'}`}></div>
                         )}
-                        <button onClick={() => setActiveTab(tabMap[mod.moduleId])}
-                          className={`relative z-10 w-10 h-10 rounded-full flex items-center justify-center mb-2 transition-all cursor-pointer shadow-sm ${isCompleted ? 'bg-teal-500 text-white' : isCurrent ? 'bg-white border-2 border-teal-500 text-teal-600 ring-4 ring-teal-100' : 'bg-white border-2 border-gray-200 text-gray-400'}`}
+                        <button
+                          type="button"
+                          disabled={ui.locked}
+                          onClick={() => handleModuleClick(tabMap[mod.moduleId])}
+                          className={`relative z-10 w-10 h-10 rounded-full flex items-center justify-center mb-2 transition-all shadow-sm ${ui.locked ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'} ${isCompleted ? 'bg-teal-500 text-white' : isCurrent ? 'bg-white border-2 border-teal-500 text-teal-600 ring-4 ring-teal-100' : 'bg-white border-2 border-gray-200 text-gray-400'}`}
                         >
                           {isCompleted ? <i className="ri-check-line text-sm font-bold"></i> : <i className={`${icons[index]} text-sm`}></i>}
                         </button>
@@ -605,7 +801,7 @@ export default function StudentCenterPage() {
                             {mod.moduleName.length > 6 ? mod.moduleName.slice(0, 6) + '…' : mod.moduleName}
                           </div>
                           <div style={{ fontSize: '10px' }} className={`${isCompleted ? 'text-teal-500' : isCurrent ? 'text-teal-500 font-bold' : 'text-gray-300'}`}>
-                            {isCompleted ? '✓ 完成' : isCurrent ? `${prog}%` : '未开始'}
+                            {stepLabel}
                           </div>
                         </div>
                       </div>
@@ -1111,38 +1307,83 @@ export default function StudentCenterPage() {
                     {filteredNotifications.map((notification) => {
                       const isExpanded = expandedNotificationId === notification.id;
                       return (
-                        <div key={notification.id}
-                          className={`p-5 transition-all cursor-pointer hover:bg-gray-50 ${!notification.isRead ? 'bg-teal-50/30 border-l-4 border-l-teal-500' : ''}`}
-                          onClick={() => { if (!notification.isRead) markAsRead(notification.id); setExpandedNotificationId(isExpanded ? null : notification.id); }}
+                        <div
+                          key={notification.id}
+                          className={`relative p-5 transition-all cursor-pointer hover:bg-gray-50 ${!notification.isRead ? 'bg-teal-50/30 border-l-4 border-l-teal-500' : ''}`}
+                          onClick={() => setExpandedNotificationId(isExpanded ? null : notification.id)}
                         >
+                          {!notification.isRead && (
+                            <div className="absolute top-3 right-3 z-10 flex items-center gap-2">
+                              <span className="px-1.5 py-0.5 bg-red-500 text-white text-[10px] font-bold rounded-md shadow-sm">
+                                未读
+                              </span>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  markAsRead(notification.id);
+                                }}
+                                className="px-2.5 py-1 bg-white border border-teal-300 text-teal-700 text-xs font-medium rounded-lg hover:bg-teal-50 shadow-sm cursor-pointer whitespace-nowrap"
+                              >
+                                确认已读
+                              </button>
+                            </div>
+                          )}
                           <div className="flex items-start gap-4">
-                            <img src={notification.sender.avatar} alt={notification.sender.name} className="w-12 h-12 rounded-full object-cover flex-shrink-0" />
+                            <div className="w-12 h-12 rounded-full flex-shrink-0 bg-teal-600 text-white flex items-center justify-center font-bold">
+                              {(notification.sender?.name || '系').charAt(0)}
+                            </div>
                             <div className="flex-1 min-w-0">
                               <div className="flex items-start justify-between mb-2">
                                 <div className="flex items-center gap-2 flex-wrap">
                                   <span className="font-bold text-gray-900">{notification.sender.name}</span>
                                   <span className={`px-2 py-0.5 rounded-lg text-xs font-medium ${getNotificationTypeStyle(notification.type)}`}>{getNotificationTypeText(notification.type)}</span>
-                                  {notification.type === 'evaluation' && notification.score && (
-                                    <span className="flex items-center gap-1 px-2 py-0.5 bg-green-100 text-green-700 rounded-lg text-xs font-medium"><i className="ri-trophy-line"></i>{notification.score}分</span>
+                                  {notification.type === 'evaluation' && 'score' in notification && (notification as { score?: number }).score != null && (
+                                    <span className="flex items-center gap-1 px-2 py-0.5 bg-green-100 text-green-700 rounded-lg text-xs font-medium"><i className="ri-trophy-line"></i>{(notification as { score: number }).score}分</span>
                                   )}
                                 </div>
-                                <div className="flex items-center gap-2 flex-shrink-0">
+                                <div className="flex items-center gap-2 flex-shrink-0 pr-28">
                                   <span className="text-xs text-gray-400">{notification.timestamp}</span>
-                                  {!notification.isRead && <span className="w-2 h-2 bg-teal-500 rounded-full"></span>}
                                 </div>
                               </div>
                               <h4 className="font-semibold text-gray-900 mb-2">{notification.title}</h4>
                               <p className={`text-sm text-gray-600 ${isExpanded ? '' : 'line-clamp-2'}`}>{notification.content}</p>
                               {isExpanded && (
-                                <div className="mt-4 pt-4 border-t border-gray-100 flex items-center gap-3">
-                                  <Link to={notification.moduleLink} className="px-4 py-2 bg-gradient-to-r from-teal-500 to-cyan-600 text-white rounded-lg text-sm font-medium hover:shadow-md transition-all whitespace-nowrap cursor-pointer" onClick={(e) => e.stopPropagation()}>
-                                    <i className="ri-arrow-right-line mr-1.5"></i>前往{notification.moduleName}
-                                  </Link>
-                                  <button onClick={(e) => { e.stopPropagation(); setExpandedNotificationId(null); }} className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-sm font-medium transition-all whitespace-nowrap cursor-pointer">收起</button>
+                                <div className="mt-4 pt-4 border-t border-gray-100 flex flex-wrap items-center gap-3">
+                                  <button
+                                    type="button"
+                                    className="px-4 py-2 bg-gradient-to-r from-teal-500 to-cyan-600 text-white rounded-lg text-sm font-medium hover:shadow-md transition-all whitespace-nowrap cursor-pointer"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      goFromNotificationLink(
+                                        notification.relatedLink || '/student-center?tab=module-team&teamTab=myteam'
+                                      );
+                                    }}
+                                  >
+                                    <i className="ri-arrow-right-line mr-1.5"></i>
+                                    {notification.type === 'team_join' ? '查看我的团队' : '查看详情'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setExpandedNotificationId(null);
+                                    }}
+                                    className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-sm font-medium transition-all whitespace-nowrap cursor-pointer"
+                                  >
+                                    收起
+                                  </button>
                                 </div>
                               )}
                               {!isExpanded && (
-                                <button onClick={(e) => { e.stopPropagation(); setExpandedNotificationId(notification.id); if (!notification.isRead) markAsRead(notification.id); }} className="mt-2 text-sm text-teal-600 hover:text-teal-700 font-medium">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setExpandedNotificationId(notification.id);
+                                  }}
+                                  className="mt-2 text-sm text-teal-600 hover:text-teal-700 font-medium cursor-pointer"
+                                >
                                   查看详情 <i className="ri-arrow-down-s-line"></i>
                                 </button>
                               )}
