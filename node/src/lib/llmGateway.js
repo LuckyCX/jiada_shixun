@@ -27,11 +27,17 @@ export async function getEnabledProvider(category = 'multimodal') {
   return list.find((p) => p.category === category) || list.find((p) => p.category === 'multimodal') || null;
 }
 
-/** baseUrl 可能已带 /v1（如 https://api.example.com/v1），避免拼成 /v1/v1/chat/completions */
+/**
+ * 拼 chat/completions 地址。
+ * - OpenAI 类：https://api.openai.com 或 …/v1 → …/v1/chat/completions
+ * - 火山方舟等：https://ark…/api/v3 → …/api/v3/chat/completions（勿再拼 /v1）
+ */
 function chatCompletionsUrl(baseUrl) {
   const base = String(baseUrl || '').trim().replace(/\/$/, '');
   if (!base) return '/v1/chat/completions';
+  if (/\/chat\/completions$/i.test(base)) return base;
   if (/\/v1$/i.test(base)) return `${base}/chat/completions`;
+  if (/\/api\/v\d+$/i.test(base)) return `${base}/chat/completions`;
   return `${base}/v1/chat/completions`;
 }
 
@@ -111,6 +117,39 @@ export function logPromptToConsole(provider, system, user) {
  * OpenAI 兼容流式 Chat Completions
  * onEvent: { kind: 'thinking'|'content', text: string }
  */
+function aggregateLlmErrorText(err) {
+  const parts = [];
+  const seen = new Set();
+  for (let e = err; e; e = e.cause) {
+    for (const piece of [e?.code, e?.message, e?.syscall, e?.hostname]) {
+      const s = String(piece || '').trim();
+      if (!s || seen.has(s)) continue;
+      seen.add(s);
+      parts.push(s);
+    }
+  }
+  return parts.join(' | ');
+}
+
+/** 将上游/网关错误转为更易排查的提示 */
+export function friendlyLlmErrorMessage(err) {
+  const msg = aggregateLlmErrorText(err) || String(err?.message || err || '').trim();
+  if (!msg) return '模型调用失败';
+  if (/fetch failed|failed to fetch|UND_ERR|ECONNREFUSED|ENOTFOUND|ECONNRESET|ETIMEDOUT|EAI_AGAIN|certificate|UNABLE_TO_VERIFY|self[- ]signed/i.test(msg)) {
+    return '无法连接大模型服务：请检查管理后台「系统配置」中的 API 地址（需可公网/本机访问的 https 地址）、API Key、模型 ID，以及本机网络或代理；连接成功前不会出现流式思考内容。';
+  }
+  if (/upstream|do request failed|connection/i.test(msg)) {
+    return '大模型服务请求失败：请检查管理后台「系统配置」中的 API 地址、API Key、模型 ID 是否正确，账户余额/配额是否充足，或稍后重试。';
+  }
+  if (/abort|timeout|timed out/i.test(msg)) {
+    return '大模型请求超时，请稍后重试，或在系统配置中适当增大超时时间。';
+  }
+  if (/401|403|unauthorized|invalid.*key/i.test(msg)) {
+    return '大模型鉴权失败，请检查 API Key 是否有效。';
+  }
+  return msg;
+}
+
 export async function chatCompletionStream({ provider, system, user, onEvent }) {
   if (!provider) throw new Error('未配置已启用的 LLM 服务，请在管理后台「系统配置」中配置并启用多模态模型');
   const url = chatCompletionsUrl(provider.baseUrl);
@@ -185,8 +224,8 @@ export async function chatCompletionStream({ provider, system, user, onEvent }) 
     }
     return fullContent.trim();
   } catch (e) {
-    logError('llmGateway.chatCompletionStream', e);
-    throw e;
+    logError(`llmGateway.chatCompletionStream url=${url}`, e);
+    throw new Error(friendlyLlmErrorMessage(e));
   } finally {
     clearTimeout(timer);
   }

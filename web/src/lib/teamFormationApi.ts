@@ -204,7 +204,9 @@ export async function analyzeTeamFormationStream(classId: string, handlers: Team
       } else if (currentEvent === 'done') {
         handlers.onDone?.(data as unknown as TeamAnalyzeResult);
       } else if (currentEvent === 'error') {
-        handlers.onError?.(typeof data.message === 'string' ? data.message : '分析失败');
+        const msg = typeof data.message === 'string' ? data.message : '分析失败';
+        handlers.onError?.(msg);
+        throw new Error(msg);
       }
     }
   }
@@ -295,6 +297,14 @@ export type TeacherGroupingState = {
   pendingStudents: GroupingTeamMember[];
   teams: GroupingTeam[];
   minPendingForAi?: number;
+  needsRandomConfirm?: boolean;
+  remainderCount?: number;
+  remainderStudents?: Array<{
+    id: string;
+    name: string;
+    aiMatchedRole?: string;
+    aiMatchedRoleLabel?: string;
+  }>;
 };
 
 export async function fetchTeacherGrouping(classId: string): Promise<TeacherGroupingState> {
@@ -381,6 +391,14 @@ export async function postTeacherAiGroupStream(classId: string, handlers: Teache
       }
     }
   }
+}
+
+export async function confirmTeacherAiGroupRandom(classId: string): Promise<TeacherGroupingState> {
+  return portalAuthenticatedFetch(
+    'teacher',
+    `/api/teacher/personal-classes/${encodeURIComponent(classId)}/team-formation/ai-group/confirm-random`,
+    { method: 'POST', body: JSON.stringify({}) }
+  ) as Promise<TeacherGroupingState>;
 }
 
 /** @deprecated 请使用 postTeacherAiGroupStream */

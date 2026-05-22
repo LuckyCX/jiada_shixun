@@ -51,12 +51,14 @@ export default function TeamFormationAssessmentPanel({ classId, onSubmitted }: P
   });
   const [analysisSummary, setAnalysisSummary] = useState('');
   const [analysisBody, setAnalysisBody] = useState('');
-  const [thinkingLines, setThinkingLines] = useState<string[]>([]);
-  const [streamPreview, setStreamPreview] = useState('');
+  const [liveStreamText, setLiveStreamText] = useState('');
+  const [analyzeError, setAnalyzeError] = useState('');
   const [waitingForTeacher, setWaitingForTeacher] = useState(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingAnswersRef = useRef<Record<string, string | string[]>>({});
   const streamAccumRef = useRef('');
+  const liveStreamRef = useRef('');
+  const streamBoxRef = useRef<HTMLDivElement | null>(null);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
@@ -157,12 +159,17 @@ export default function TeamFormationAssessmentPanel({ classId, onSubmitted }: P
     setVideoFile(file);
   };
 
-  const appendThinking = (text: string) => {
-    setThinkingLines((prev) => {
-      const merged = (prev.join('\n') + text).split('\n').map((s) => s.trim()).filter(Boolean);
-      return merged.slice(-3);
-    });
+  const appendLiveStream = (text: string) => {
+    if (!text) return;
+    liveStreamRef.current += text;
+    const tail = liveStreamRef.current.slice(-8000);
+    setLiveStreamText(tail);
   };
+
+  useEffect(() => {
+    if (!aiAnalyzing || !streamBoxRef.current) return;
+    streamBoxRef.current.scrollTop = streamBoxRef.current.scrollHeight;
+  }, [liveStreamText, aiAnalyzing]);
 
   const handleRemoveVideo = () => {
     Modal.confirm({
@@ -205,8 +212,9 @@ export default function TeamFormationAssessmentPanel({ classId, onSubmitted }: P
           setVideoUploaded(false);
           setAiMatchedRoleLabel(null);
           setAnalysisSummary('');
-          setThinkingLines([]);
-          setStreamPreview('');
+          setLiveStreamText('');
+          liveStreamRef.current = '';
+          setAnalyzeError('');
           showToast('已重置，请重新答题');
         } catch (e) {
           showToast(e instanceof Error ? e.message : '重置失败', 'error');
@@ -222,8 +230,9 @@ export default function TeamFormationAssessmentPanel({ classId, onSubmitted }: P
     }
     setAiAnalyzing(true);
     setAnalyzeStep('正在上传视频…');
-    setThinkingLines([]);
-    setStreamPreview('');
+    setLiveStreamText('');
+    liveStreamRef.current = '';
+    setAnalyzeError('');
     setAnalysisSummary('');
     setAnalysisBody('');
     streamAccumRef.current = '';
@@ -234,16 +243,17 @@ export default function TeamFormationAssessmentPanel({ classId, onSubmitted }: P
         setServerVideoName(name);
         setVideoFile(null);
       }
-      setAnalyzeStep('正在综合问卷与视频分析…');
+      setAnalyzeStep('正在分析测评结果…');
       await analyzeTeamFormationStream(classId, {
         onStatus: (msg) => setAnalyzeStep(msg),
-        onThinking: (t) => appendThinking(t),
+        onThinking: (t) => appendLiveStream(t),
         onContent: (t) => {
           streamAccumRef.current += t;
-          setStreamPreview((p) => p + t);
+          appendLiveStream(t);
         },
         onError: (msg) => {
-          throw new Error(msg);
+          setAnalyzeError(msg);
+          setLiveStreamText((prev) => (prev ? prev : msg));
         },
         onDone: (result) => {
           setAiMatchedRoleLabel(result.aiMatchedRoleLabel);
@@ -260,7 +270,9 @@ export default function TeamFormationAssessmentPanel({ classId, onSubmitted }: P
         },
       });
     } catch (e) {
-      showToast(e instanceof Error ? e.message : '分析失败', 'error');
+      const msg = e instanceof Error ? e.message : '分析失败';
+      setAnalyzeError(msg);
+      showToast(msg, 'error');
     } finally {
       setAiAnalyzing(false);
       setAnalyzeStep('');
@@ -404,7 +416,7 @@ export default function TeamFormationAssessmentPanel({ classId, onSubmitted }: P
         <div className="space-y-4">
           <div className="bg-gradient-to-br from-teal-500 to-cyan-500 rounded-xl p-5 text-white">
             <h3 className="text-base font-bold">答题完成</h3>
-            <p className="text-white/80 text-xs mt-1">请上传自我介绍视频（≤50MB），将进行 AI 分析</p>
+            <p className="text-white/80 text-xs mt-1">请上传自我介绍视频（≤50MB）</p>
           </div>
           <div className="bg-white border-2 border-gray-100 rounded-xl p-5">
             <div className="bg-gradient-to-br from-blue-50 to-indigo-50 border-2 border-dashed border-blue-300 rounded-xl p-6 text-center mb-4">
@@ -434,21 +446,30 @@ export default function TeamFormationAssessmentPanel({ classId, onSubmitted }: P
                 </button>
               </div>
             )}
-            {aiAnalyzing && thinkingLines.length > 0 && (
-              <div className="mb-4 border border-amber-200 bg-amber-50 rounded-xl p-3 overflow-hidden">
-                <div className="text-[10px] font-semibold text-amber-800 mb-1.5">思考中...</div>
-                <div className="h-[3.75rem] overflow-hidden flex flex-col justify-end text-xs text-amber-900/90 space-y-0.5">
-                  {thinkingLines.map((line, i) => (
-                    <p key={i} className="truncate leading-snug">
-                      {line}
-                    </p>
-                  ))}
-                </div>
+            {analyzeError && !aiAnalyzing && (
+              <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+                <i className="ri-error-warning-line mr-1.5"></i>
+                {analyzeError}
               </div>
             )}
-            {aiAnalyzing && streamPreview && (
-              <div className="mb-4 max-h-32 overflow-y-auto text-xs text-gray-600 whitespace-pre-wrap border border-gray-100 rounded-lg p-3 bg-gray-50">
-                {streamPreview}
+            {aiAnalyzing && (
+              <div className="mb-4 rounded-xl border border-teal-200 bg-gradient-to-b from-white to-teal-50/40 overflow-hidden shadow-sm">
+                <div className="flex items-center gap-2 px-4 py-2.5 border-b border-teal-100 bg-teal-50/80">
+                  <Spin size="small" />
+                  <span className="text-sm font-medium text-teal-900">{analyzeStep || 'AI 分析中…'}</span>
+                </div>
+                <div
+                  ref={streamBoxRef}
+                  className="min-h-[10rem] max-h-56 overflow-y-auto px-4 py-3"
+                >
+                  {liveStreamText ? (
+                    <p className="text-xs text-gray-700 whitespace-pre-wrap leading-relaxed">{liveStreamText}</p>
+                  ) : (
+                    <p className="text-xs text-gray-500 animate-pulse">
+                      正在连接大模型，思考过程将在此实时显示…
+                    </p>
+                  )}
+                </div>
               </div>
             )}
             <button
@@ -463,7 +484,7 @@ export default function TeamFormationAssessmentPanel({ classId, onSubmitted }: P
                   {analyzeStep || 'AI 分析中…'}
                 </span>
               ) : (
-                '提交视频并开始 AI 分析'
+                '提交并开始分析'
               )}
             </button>
           </div>

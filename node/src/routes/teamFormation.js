@@ -7,7 +7,12 @@ import multer from 'multer';
 import { getPool } from '../lib/db.js';
 import { logError } from '../lib/logError.js';
 import { requireAuth, requireTeacher, requireStudent } from '../middleware/auth.js';
-import { getEnabledProvider, chatCompletionStream, getPromptModules } from '../lib/llmGateway.js';
+import {
+  getEnabledProvider,
+  chatCompletionStream,
+  getPromptModules,
+  friendlyLlmErrorMessage,
+} from '../lib/llmGateway.js';
 import { normalizeMatchedRole, TEAM_ROLE_LABELS } from '../lib/teamFormationConstants.js';
 import {
   DIMENSION_SCORING_PROMPT,
@@ -18,12 +23,8 @@ import {
   narrativeBeforeJson,
   scoresArePlausible,
   estimateDimensionScoresFromQa,
+  computeComplementScore,
 } from '../lib/teamFormationDimension.js';
-import {
-  resolveTeamVideoAbsPath,
-  transcribeIntroductionVideo,
-  MAX_INLINE_VIDEO_BYTES,
-} from '../lib/teamFormationVideo.js';
 import {
   runAiTeamGroupingStream,
   pickDefaultLeaderStudentId,
@@ -31,6 +32,12 @@ import {
   MAX_TEAM_SIZE,
   MIN_TEAM_SIZE,
 } from '../lib/teamFormationAiGroup.js';
+import {
+  tryAssignPendingToExistingTeams,
+  randomPlaceRemainder,
+  persistPlacements,
+  refreshTeamComplementScore,
+} from '../lib/teamFormationIncrementalGroup.js';
 
 const router = Router();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -108,18 +115,6 @@ function validateQuestionsPayload(questions) {
     }
   }
   return null;
-}
-
-function computeComplementScore(profiles) {
-  if (!profiles?.length) return 0;
-  const n = profiles.length;
-  const avgS = profiles.reduce((s, p) => s + (p.strategic || 0), 0) / n;
-  const avgM = profiles.reduce((s, p) => s + (p.market || 0), 0) / n;
-  const avgT = profiles.reduce((s, p) => s + (p.techRisk || 0), 0) / n;
-  const varS = profiles.reduce((s, p) => s + (p.strategic - avgS) ** 2, 0) / n;
-  const varM = profiles.reduce((s, p) => s + (p.market - avgM) ** 2, 0) / n;
-  const varT = profiles.reduce((s, p) => s + (p.techRisk - avgT) ** 2, 0) / n;
-  return Math.round(Math.min(100, (varS + varM + varT) / 30));
 }
 
 async function listPendingStudentsForClass(pool, classId) {
@@ -210,6 +205,71 @@ async function persistAiTeamsToDb(pool, classId, pending, aiTeams) {
   }
 }
 
+/** 增量 AI：仅 INSERT 新 draft 团队，不删除已有 draft */
+async function persistNewAiTeamsOnly(pool, classId, pending, aiTeams, existingDraftTeams) {
+  const pendingMap = new Map(pending.map((s) => [s.id, s]));
+  let nextSort =
+    existingDraftTeams.reduce((m, t) => Math.max(m, t.sortOrder ?? 0), -1) + 1;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (const t of aiTeams) {
+      const profiles = t.memberIds.map((id) => pendingMap.get(id)?.profile).filter(Boolean);
+      const complementScore = computeComplementScore(profiles);
+      const { rows: ins } = await client.query(
+        `INSERT INTO teacher_personal_class_teams
+           (teacher_personal_class_id, name, grouping_status, complement_score, ai_rationale, sort_order)
+         VALUES ($1, $2, 'draft', $3, $4, $5)
+         RETURNING id`,
+        [classId, t.name, complementScore, t.rationale || null, t.sortOrder ?? nextSort++]
+      );
+      const teamId = ins[0].id;
+      for (const sid of t.memberIds) {
+        const st = pendingMap.get(sid);
+        if (!st) continue;
+        await client.query(
+          `INSERT INTO teacher_personal_class_team_members
+             (team_id, student_id, ai_matched_role, dimension_profile)
+           VALUES ($1, $2, $3, $4::jsonb)`,
+          [teamId, sid, st.aiMatchedRole || null, JSON.stringify(st.profile)]
+        );
+        await client.query(
+          `UPDATE student_team_formation_submissions SET status = 'grouped', updated_at = now()
+           WHERE teacher_personal_class_id = $1 AND student_id = $2`,
+          [classId, sid]
+        );
+      }
+      const leaderId = pickDefaultLeaderStudentId(t.memberIds, pending);
+      if (leaderId) {
+        await client.query(
+          `UPDATE teacher_personal_class_teams SET leader_student_id = $1 WHERE id = $2`,
+          [leaderId, teamId]
+        );
+      }
+    }
+    await client.query('COMMIT');
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+async function teacherGroupingPayload(pool, classId) {
+  const pendingStudents = await listPendingStudentsForClass(pool, classId);
+  const teams = await loadTeamsWithMembers(pool, classId, ['draft', 'confirmed']);
+  return { pendingStudents, teams, minPendingForAi: MIN_PENDING_FOR_AI };
+}
+
+function existingTeamsWithMembers(allTeams) {
+  return (allTeams || []).filter(
+    (t) =>
+      (t.groupingStatus === 'draft' || t.groupingStatus === 'confirmed') &&
+      (t.members || []).length > 0
+  );
+}
+
 async function loadTeamsWithMembers(pool, classId, statuses = ['draft', 'confirmed']) {
   const { rows: teamRows } = await pool.query(
     `SELECT id, name, COALESCE(introduction, '') AS introduction, grouping_status AS "groupingStatus",
@@ -228,13 +288,14 @@ async function loadTeamsWithMembers(pool, classId, statuses = ['draft', 'confirm
             u.real_name AS name, u.student_no AS "studentNo", u.email
      FROM teacher_personal_class_team_members m
      JOIN users u ON u.id = m.student_id
-     WHERE m.team_id = ANY($1::bigint[])`,
+     WHERE m.team_id = ANY($1::bigint[])
+     ORDER BY m.team_id, m.id ASC`,
     [teamIds]
   );
   const byTeam = new Map(teamIds.map((id) => [String(id), []]));
   for (const m of memRows) {
     const prof = m.dimensionProfile && typeof m.dimensionProfile === 'object' ? m.dimensionProfile : {};
-    const profile = parseDimensionScores({ dimensionScores: prof });
+    const profile = parseDimensionScores(prof);
     byTeam.get(String(m.teamId))?.push({
       id: String(m.studentId),
       name: m.name || m.email || '',
@@ -248,11 +309,15 @@ async function loadTeamsWithMembers(pool, classId, statuses = ['draft', 'confirm
   return teamRows.map((t) => {
     const members = byTeam.get(String(t.id)) || [];
     const leaderId = t.leaderStudentId != null ? String(t.leaderStudentId) : null;
+    const fallbackLeaderId =
+      leaderId ||
+      (() => {
+        const ceo = members.find((m) => String(m.aiMatchedRole || '').toLowerCase() === 'ceo');
+        return ceo?.id ?? members[0]?.id ?? null;
+      })();
     const membersWithLeader = members.map((m) => ({
       ...m,
-      isTeamLeader: leaderId
-        ? m.id === leaderId
-        : String(m.aiMatchedRole || '').toLowerCase() === 'ceo',
+      isTeamLeader: fallbackLeaderId ? m.id === fallbackLeaderId : false,
     }));
     const profiles = membersWithLeader.map((m) => m.profile);
     const createdAt = t.createdAt ? new Date(t.createdAt).toLocaleString('zh-CN', { dateStyle: 'medium' }) : '';
@@ -262,7 +327,8 @@ async function loadTeamsWithMembers(pool, classId, statuses = ['draft', 'confirm
       introduction: String(t.introduction || ''),
       leaderStudentId: leaderId,
       groupingStatus: t.groupingStatus,
-      complementScore: t.complementScore != null ? Number(t.complementScore) : computeComplementScore(profiles),
+      sortOrder: t.sortOrder != null ? Number(t.sortOrder) : 0,
+      complementScore: computeComplementScore(profiles),
       aiRationale: t.aiRationale || '',
       createdAt,
       members: membersWithLeader,
@@ -672,8 +738,6 @@ router.post('/student/team-formation/analyze', requireAuth(), requireStudent(), 
 
     const answers = sub.answers || {};
     const qaText = formatAnswersForLlm(questions, answers);
-    const videoKey = String(sub.video_storage_key || '');
-    const videoFileName = path.basename(videoKey);
 
     const prompts = await getPromptModules();
     const tf = prompts.team_formation || {};
@@ -687,20 +751,16 @@ router.post('/student/team-formation/analyze', requireAuth(), requireStudent(), 
 可选角色定义：
 ${roleDefs}
 
-你必须同时综合以下材料，缺一不可：
-1）下方全部问卷题目与学生的每道题作答；
-2）下方【视频转写稿】（系统已将学生上传的自我介绍视频提交至多模态模型生成，请视为已观看视频）。
+评分材料：仅依据下方「问卷题目与作答」，不要引用、推测或提及任何视频或音视频内容。
 
 分析要求：
-- 三维得分与角色：以问卷单选/多选等客观题的倾向为主；简答题与视频仅作辅助，不得因学生自称想当某职务而直接定角（见下方规则）。
-- 须结合视频转写稿中的能力与经历描述，但勿采信无问卷支撑的职位自称或套话。
-- 禁止在回复中声称「无法读取视频/音频二进制」「未获取转写」等——转写稿已在用户消息中给出。
+- 三维得分与角色：以问卷单选/多选等客观题的倾向为主；简答题仅作辅助，不得因学生自称想当某职务而直接定角（见下方规则）。
 - dimensionScores 必须体现真实能力倾向，禁止三维全 0 或完全相同。
 ${DIMENSION_SCORING_PROMPT}
 - 最后一行 JSON 字段（单行、无 markdown）：
   dimensionScores: { strategic, market, techRisk } 必填整数
   marketFocus、techFocus（按维度最高规则）
-  matchedRole、confidence、summary（100字内结论含三维分数）、videoTranscript（视频+问卷综合摘要）`;
+  matchedRole、confidence、summary（100字内结论含三维分数）、videoTranscript（可据问卷写简短能力摘要，勿写视频）`;
 
     if (!wantStream) {
       return bad(req, res, 400, 40012, '请使用流式分析（stream: true）');
@@ -713,37 +773,9 @@ ${DIMENSION_SCORING_PROMPT}
     res.setHeader('X-Accel-Buffering', 'no');
     if (typeof res.flushHeaders === 'function') res.flushHeaders();
 
-    const absVideo = resolveTeamVideoAbsPath(NODE_ROOT, videoKey);
-    let prefilledTranscript = '';
-    sseWrite(res, 'status', { message: '正在将视频提交多模态模型转写…' });
-    try {
-      const tr = await transcribeIntroductionVideo(
-        provider,
-        absVideo,
-        String(tf.video_transcribe || '').trim()
-      );
-      if (tr.skipped && tr.reason === 'VIDEO_TOO_LARGE') {
-        sseWrite(res, 'status', {
-          message: `视频较大（>${Math.round(MAX_INLINE_VIDEO_BYTES / 1024 / 1024)}MB），未内联至模型，将主要依据问卷分析`,
-        });
-      } else if (tr.transcript) {
-        prefilledTranscript = tr.transcript;
-        sseWrite(res, 'status', { message: '视频转写完成，正在综合问卷分析…' });
-      }
-    } catch (e) {
-      logError(`video transcribe traceId=${req.traceId}`, e);
-      sseWrite(res, 'status', {
-        message: `视频转写失败（${e.message || '未知'}），将结合问卷继续分析`,
-      });
-    }
+    const userMsg = `【问卷题目与作答】\n${qaText}`;
 
-    const videoBlock = prefilledTranscript
-      ? `【视频转写稿】\n${prefilledTranscript}\n\n（说明：转写仅供提取能力与经历；勿因口述中的职位自称如 CEO/销售总监等直接定角，须与下方问卷客观题一致）`
-      : `【视频转写稿】\n（未能自动生成：请主要依据问卷客观作答评估）`;
-
-    const userMsg = `【问卷题目与作答 — 评分主依据】\n${qaText}\n\n${videoBlock}`;
-
-    sseWrite(res, 'status', { message: '正在连接模型，综合问卷与视频转写分析…' });
+    sseWrite(res, 'status', { message: '正在连接模型进行分析…' });
 
     let inThinkingTag = false;
     const onEvent = ({ kind, text }) => {
@@ -781,7 +813,7 @@ ${DIMENSION_SCORING_PROMPT}
         onEvent,
       });
     } catch (e) {
-      sseWrite(res, 'error', { message: e.message || '模型调用失败' });
+      sseWrite(res, 'error', { message: friendlyLlmErrorMessage(e) });
       res.end();
       return;
     }
@@ -805,11 +837,10 @@ ${DIMENSION_SCORING_PROMPT}
     const analysisText = narrativeBeforeJson(fullText);
     const transcript =
       String(parsed.videoTranscript || '').trim() ||
-      prefilledTranscript ||
       (analysisText.length > 20 ? analysisText.slice(0, 800) : '');
     const summary =
       String(parsed.summary || '').trim() ||
-      (analysisText.length > 20 ? analysisText.slice(0, 280) : '已根据问卷与视频完成综合评估。');
+      (analysisText.length > 20 ? analysisText.slice(0, 280) : '已根据问卷作答完成评估。');
     const matchPayload = {
       ...parsed,
       dimensionScores,
@@ -818,7 +849,6 @@ ${DIMENSION_SCORING_PROMPT}
       techFocus: parsed.techFocus,
       analysisText,
       summary,
-      prefilledTranscript,
     };
 
     await pool.query(
@@ -853,7 +883,7 @@ ${DIMENSION_SCORING_PROMPT}
       return bad(req, res, 500, 50000, e.message);
     }
     try {
-      sseWrite(res, 'error', { message: e.message || '分析失败' });
+      sseWrite(res, 'error', { message: friendlyLlmErrorMessage(e) });
       res.end();
     } catch {
       /* ignore */
@@ -1019,9 +1049,17 @@ router.post(
         return bad(req, res, 404, 40402, '班级不存在或无权操作');
       }
       const pending = await listPendingStudentsForClass(pool, classId);
-      if (pending.length < MIN_PENDING_FOR_AI) {
-        return bad(req, res, 400, 40013, `待组队学生至少 ${MIN_PENDING_FOR_AI} 人`);
+      const allTeams = await loadTeamsWithMembers(pool, classId, ['draft', 'confirmed']);
+      const existingTeams = existingTeamsWithMembers(allTeams);
+
+      if (existingTeams.length === 0) {
+        if (pending.length < MIN_PENDING_FOR_AI) {
+          return bad(req, res, 400, 40013, `待组队学生至少 ${MIN_PENDING_FOR_AI} 人`);
+        }
+      } else if (pending.length < 1) {
+        return bad(req, res, 400, 40015, '暂无待组队学生');
       }
+
       const provider = await getEnabledProvider('multimodal');
       if (!provider) return bad(req, res, 400, 40011, '未配置已启用的多模态模型');
 
@@ -1036,24 +1074,102 @@ router.post(
       res.setHeader('X-Accel-Buffering', 'no');
       if (typeof res.flushHeaders === 'function') res.flushHeaders();
 
-      const aiTeams = await runAiTeamGroupingStream(provider, pending, {
+      const streamHandlers = {
         onStatus: (message) => sseWrite(res, 'status', { message }),
         onThinking: (text) => sseWrite(res, 'thinking', { text }),
         onContent: (text) => sseWrite(res, 'content', { text }),
-      });
+      };
 
-      await persistAiTeamsToDb(pool, classId, pending, aiTeams);
-      const teams = await loadTeamsWithMembers(pool, classId, ['draft', 'confirmed']);
-      const pendingStudents = await listPendingStudentsForClass(pool, classId);
-      sseWrite(res, 'done', { teams, pendingStudents });
+      if (existingTeams.length === 0) {
+        const aiTeams = await runAiTeamGroupingStream(provider, pending, streamHandlers);
+        await persistAiTeamsToDb(pool, classId, pending, aiTeams);
+        sseWrite(res, 'done', await teacherGroupingPayload(pool, classId));
+        res.end();
+        return;
+      }
+
+      sseWrite(res, 'status', { message: '正在按角色向现有团队补位…' });
+      const pendingMap = new Map(pending.map((s) => [String(s.id), s]));
+      const { placements, remainder } = tryAssignPendingToExistingTeams(pending, existingTeams);
+      await persistPlacements(pool, classId, placements, pendingMap);
+
+      if (remainder.length === 0) {
+        sseWrite(res, 'done', await teacherGroupingPayload(pool, classId));
+        res.end();
+        return;
+      }
+
+      if (remainder.length <= 2) {
+        const payload = await teacherGroupingPayload(pool, classId);
+        sseWrite(res, 'done', {
+          ...payload,
+          needsRandomConfirm: true,
+          remainderCount: remainder.length,
+          remainderStudents: remainder.map((s) => ({
+            id: s.id,
+            name: s.name,
+            aiMatchedRole: s.aiMatchedRole,
+            aiMatchedRoleLabel: s.aiMatchedRoleLabel,
+          })),
+        });
+        res.end();
+        return;
+      }
+
+      const aiTeams = await runAiTeamGroupingStream(provider, remainder, streamHandlers, {
+        minPending: MIN_TEAM_SIZE,
+        incrementalOnly: true,
+      });
+      const draftAfter = (await loadTeamsWithMembers(pool, classId, ['draft'])).filter(
+        (t) => t.groupingStatus === 'draft'
+      );
+      await persistNewAiTeamsOnly(pool, classId, remainder, aiTeams, draftAfter);
+      sseWrite(res, 'done', await teacherGroupingPayload(pool, classId));
       res.end();
     } catch (e) {
       logError(`POST ai-group traceId=${req.traceId}`, e);
       if (res.headersSent) {
-        sseWrite(res, 'error', { message: e.message || 'AI 组队失败' });
+        sseWrite(res, 'error', { message: friendlyLlmErrorMessage(e) });
         res.end();
         return;
       }
+      return bad(req, res, 500, 50000, e.message);
+    }
+  }
+);
+
+router.post(
+  '/teacher/personal-classes/:classId/team-formation/ai-group/confirm-random',
+  requireAuth(),
+  requireTeacher(),
+  async (req, res) => {
+    try {
+      const tid = teacherIdFromReq(req);
+      const classId = parseClassId(req.params.classId);
+      if (!tid || !classId) return bad(req, res, 400, 40003, '参数无效');
+      const pool = getPool();
+      if (!(await ownsPersonalClass(pool, tid, classId))) {
+        return bad(req, res, 404, 40402, '班级不存在或无权操作');
+      }
+      const pending = await listPendingStudentsForClass(pool, classId);
+      const allTeams = await loadTeamsWithMembers(pool, classId, ['draft', 'confirmed']);
+      const existingTeams = existingTeamsWithMembers(allTeams);
+      if (!existingTeams.length) {
+        return bad(req, res, 400, 40016, '暂无已有团队，请先完成分组');
+      }
+      const pendingMap = new Map(pending.map((s) => [String(s.id), s]));
+      const { remainder } = tryAssignPendingToExistingTeams(pending, existingTeams);
+      if (remainder.length === 0) {
+        return ok(req, res, await teacherGroupingPayload(pool, classId));
+      }
+      if (remainder.length > 2) {
+        return bad(req, res, 400, 40017, '剩余待组队人数较多，请再次使用 AI 智能组队');
+      }
+      const placements = randomPlaceRemainder(remainder, existingTeams);
+      await persistPlacements(pool, classId, placements, pendingMap);
+      return ok(req, res, await teacherGroupingPayload(pool, classId));
+    } catch (e) {
+      logError(`POST ai-group/confirm-random traceId=${req.traceId}`, e);
       return bad(req, res, 500, 50000, e.message);
     }
   }
@@ -1080,9 +1196,6 @@ router.delete(
         [teamId, classId]
       );
       if (!tr.length) return bad(req, res, 404, 40403, '团队不存在');
-      if (tr[0].grouping_status !== 'draft') {
-        return bad(req, res, 400, 40014, '已确认的团队不可调整');
-      }
       await pool.query(
         `DELETE FROM teacher_personal_class_team_members WHERE team_id = $1 AND student_id = $2`,
         [teamId, studentId]
@@ -1113,6 +1226,7 @@ router.delete(
             [nextLeader, teamId]
           );
         }
+        await refreshTeamComplementScore(pool, teamId);
       }
       await pool.query(
         `UPDATE student_team_formation_submissions SET status = 'pending_teacher', updated_at = now()
@@ -1150,9 +1264,6 @@ router.put(
         [teamId, classId]
       );
       if (!tr.length) return bad(req, res, 404, 40403, '团队不存在');
-      if (tr[0].grouping_status !== 'draft') {
-        return bad(req, res, 400, 40014, '已确认的团队不可调整');
-      }
       const { rows: mem } = await pool.query(
         `SELECT 1 FROM teacher_personal_class_team_members WHERE team_id = $1 AND student_id = $2`,
         [teamId, studentId]
@@ -1193,9 +1304,7 @@ router.post(
         [teamId, classId]
       );
       if (!tr.length) return bad(req, res, 404, 40403, '团队不存在');
-      if (tr[0].grouping_status !== 'draft') {
-        return bad(req, res, 400, 40014, '已确认的团队不可调整');
-      }
+      const teamConfirmed = tr[0].grouping_status === 'confirmed';
       const { rows: cnt } = await pool.query(
         `SELECT COUNT(*)::int AS c FROM teacher_personal_class_team_members WHERE team_id = $1`,
         [teamId]
@@ -1221,20 +1330,11 @@ router.post(
         [teamId, studentId, sub[0].aiMatchedRole, JSON.stringify(profile)]
       );
       await pool.query(
-        `UPDATE student_team_formation_submissions SET status = 'grouped', updated_at = now()
+        `UPDATE student_team_formation_submissions SET status = $3, updated_at = now()
          WHERE teacher_personal_class_id = $1 AND student_id = $2`,
-        [classId, studentId]
+        [classId, studentId, teamConfirmed ? 'confirmed' : 'grouped']
       );
-      const { rows: memCnt } = await pool.query(
-        `SELECT dimension_profile FROM teacher_personal_class_team_members WHERE team_id = $1`,
-        [teamId]
-      );
-      const profiles = memCnt.map((r) => parseDimensionScores({ dimensionScores: r.dimension_profile }));
-      const complementScore = computeComplementScore(profiles);
-      await pool.query(
-        `UPDATE teacher_personal_class_teams SET complement_score = $2, updated_at = now() WHERE id = $1`,
-        [teamId, complementScore]
-      );
+      await refreshTeamComplementScore(pool, teamId);
       const pendingStudents = await listPendingStudentsForClass(pool, classId);
       const teams = await loadTeamsWithMembers(pool, classId, ['draft', 'confirmed']);
       return ok(req, res, { pendingStudents, teams });
@@ -1258,9 +1358,13 @@ router.post(
       if (!(await ownsPersonalClass(pool, tid, classId))) {
         return bad(req, res, 404, 40402, '班级不存在或无权操作');
       }
-      const teams = await loadTeamsWithMembers(pool, classId, ['draft']);
-      if (!teams.length) return bad(req, res, 400, 40017, '没有待确认的 draft 团队');
-      for (const t of teams) {
+      const draftTeams = await loadTeamsWithMembers(pool, classId, ['draft']);
+      const allTeams = await loadTeamsWithMembers(pool, classId, ['draft', 'confirmed']);
+      const teamsToNotify = existingTeamsWithMembers(allTeams);
+      if (!draftTeams.length && !teamsToNotify.length) {
+        return bad(req, res, 400, 40017, '还没有任何团队，请先进行组队');
+      }
+      for (const t of draftTeams) {
         if (t.members.length < MIN_TEAM_SIZE) {
           return bad(req, res, 400, 40018, `「${t.name}」人数不足 ${MIN_TEAM_SIZE} 人`);
         }
@@ -1274,20 +1378,27 @@ router.post(
       const teacherName = teacherRow[0]?.real_name || '任课教师';
 
       const client = await pool.connect();
+      let notifiedCount = 0;
       try {
         await client.query('BEGIN');
-        await client.query(
-          `UPDATE teacher_personal_class_teams SET grouping_status = 'confirmed', updated_at = now()
-           WHERE teacher_personal_class_id = $1 AND grouping_status = 'draft'`,
-          [classId]
-        );
-        for (const team of teams) {
+        if (draftTeams.length) {
+          await client.query(
+            `UPDATE teacher_personal_class_teams SET grouping_status = 'confirmed', updated_at = now()
+             WHERE teacher_personal_class_id = $1 AND grouping_status = 'draft'`,
+            [classId]
+          );
+          for (const team of draftTeams) {
+            for (const m of team.members) {
+              await client.query(
+                `UPDATE student_team_formation_submissions SET status = 'confirmed', updated_at = now()
+                 WHERE teacher_personal_class_id = $1 AND student_id = $2`,
+                [classId, m.id]
+              );
+            }
+          }
+        }
+        for (const team of teamsToNotify) {
           for (const m of team.members) {
-            await client.query(
-              `UPDATE student_team_formation_submissions SET status = 'confirmed', updated_at = now()
-               WHERE teacher_personal_class_id = $1 AND student_id = $2`,
-              [classId, m.id]
-            );
             await client.query(
               `INSERT INTO notifications (receiver_id, sender_id, type, title, content, related_module, related_link, is_read)
                VALUES ($1, $2, 'team_join', $3, $4, 'team_formation', $5, false)`,
@@ -1295,10 +1406,11 @@ router.post(
                 m.id,
                 tid,
                 '你已被编入创业团队',
-                `${teacherName} 已将你编入「${team.name}」（${className}），请进入「组队与团队管理」查看我的团队。`,
+                `${teacherName} 已将你编入「${team.name}」（${className}），请进入「组队与团队管理」查看最新团队信息。`,
                 '/student-center?tab=module-team&teamTab=myteam',
               ]
             );
+            notifiedCount += 1;
           }
         }
         await client.query('COMMIT');
@@ -1313,7 +1425,7 @@ router.post(
       return ok(req, res, {
         teams: outTeams,
         pendingStudents,
-        notifiedCount: teams.reduce((s, t) => s + t.members.length, 0),
+        notifiedCount,
       });
     } catch (e) {
       logError(`POST confirm traceId=${req.traceId}`, e);

@@ -14,7 +14,8 @@ export const DEFAULT_AI_GROUP_SYSTEM = `你是创业实训平台的组队编排�
 - 每个小组 3～6 人。
 - 必须覆盖输入中的每一名待组队学生，且每人恰好属于一个小组。
 - 每个小组内 aiMatchedRole 必须互不相同，禁止同一小组出现两名相同角色（如两个 CEO）。
-- 若因人数或角色分布导致无法完全避免重复，优先在组间调配；仍无法消重时，将多出的同角色学生随机并入尚有空位且该角色尚未占满的小组。
+- 若因人数或角色分布导致无法完全避免重复，优先在组间调配；仍无法消重时，允许同角色并入同一小组。
+- 待分组人数在 3～6 人时，优先合并为 1 个小组（不要拆成多个不足 3 人的小组）。人数为 4、5 时通常只建 1 组。
 - 优先保证组内角色互补，三维得分（战略统筹 strategic、市场运营 market、技术风控 techRisk）组内应有差异以形成互补。
 - 不要依据学生姓名猜测，只使用提供的角色与分数。
 - 不要输出团队平均能力或互补得分，仅输出分组 JSON。
@@ -114,6 +115,214 @@ function shuffleInPlace(arr) {
   return arr;
 }
 
+function roleKeyOf(studentById, studentId) {
+  return String(studentById.get(String(studentId))?.aiMatchedRole || '').trim().toLowerCase();
+}
+
+function teamHasRole(team, role, studentById) {
+  if (!role) return false;
+  return team.memberIds.some((id) => roleKeyOf(studentById, id) === role);
+}
+
+/** 将 AI 分组结果修补为合法：每组 3～6 人、全员入组；优先角色不重复，不足时随机并入（允许重复） */
+export function repairAiTeamsToValidShape(teamList, pendingStudents) {
+  const allIds = pendingStudents.map((s) => String(s.id));
+  const studentById = new Map(pendingStudents.map((s) => [String(s.id), s]));
+  const idSet = new Set(allIds);
+  const assigned = new Set();
+
+  const teams = [];
+  for (let i = 0; i < (teamList || []).length; i++) {
+    const t = teamList[i];
+    const memberIds = [];
+    for (const raw of t.memberIds || t.memberStudentIds || []) {
+      const id = String(raw);
+      if (!idSet.has(id) || assigned.has(id)) continue;
+      assigned.add(id);
+      memberIds.push(id);
+    }
+    if (memberIds.length) {
+      teams.push({
+        name: String(t.name || `团队 ${teams.length + 1}`).trim() || `团队 ${teams.length + 1}`,
+        rationale: String(t.rationale || '').trim(),
+        sortOrder: teams.length,
+        memberIds,
+      });
+    }
+  }
+
+  let pool = allIds.filter((id) => !assigned.has(id));
+
+  const trimOverflow = () => {
+    for (const team of teams) {
+      while (team.memberIds.length > MAX_TEAM_SIZE) {
+        pool.push(team.memberIds.pop());
+      }
+    }
+  };
+
+  const disbandSmallTeams = () => {
+    const kept = [];
+    for (const team of teams) {
+      if (team.memberIds.length >= MIN_TEAM_SIZE) kept.push(team);
+      else pool.push(...team.memberIds);
+    }
+    teams.length = 0;
+    teams.push(...kept);
+  };
+
+  const placePool = (preferUniqueRole) => {
+    shuffleInPlace(pool);
+    for (let i = 0; i < pool.length; ) {
+      const id = pool[i];
+      const role = roleKeyOf(studentById, id);
+      const candidates = shuffleInPlace([...teams]).filter((t) => t.memberIds.length < MAX_TEAM_SIZE);
+      let placed = false;
+      for (const team of candidates) {
+        if (preferUniqueRole && role && teamHasRole(team, role, studentById)) continue;
+        team.memberIds.push(id);
+        pool.splice(i, 1);
+        placed = true;
+        break;
+      }
+      if (!placed) i++;
+    }
+  };
+
+  const formNewTeamsFromPool = () => {
+    while (pool.length >= MIN_TEAM_SIZE) {
+      const memberIds = [];
+      shuffleInPlace(pool);
+      while (memberIds.length < MIN_TEAM_SIZE && pool.length) {
+        let idx = pool.findIndex((id) => {
+          const r = roleKeyOf(studentById, id);
+          return !r || !memberIds.some((mid) => roleKeyOf(studentById, mid) === r);
+        });
+        if (idx < 0) idx = 0;
+        memberIds.push(pool.splice(idx, 1)[0]);
+      }
+      while (memberIds.length < MAX_TEAM_SIZE && pool.length) {
+        let idx = pool.findIndex((id) => {
+          const r = roleKeyOf(studentById, id);
+          return !r || !memberIds.some((mid) => roleKeyOf(studentById, mid) === r);
+        });
+        if (idx < 0) break;
+        memberIds.push(pool.splice(idx, 1)[0]);
+      }
+      teams.push({
+        name: `团队 ${teams.length + 1}`,
+        rationale: '',
+        sortOrder: teams.length,
+        memberIds,
+      });
+    }
+  };
+
+  trimOverflow();
+  disbandSmallTeams();
+  placePool(true);
+  placePool(false);
+  formNewTeamsFromPool();
+  placePool(true);
+  placePool(false);
+  trimOverflow();
+  disbandSmallTeams();
+
+  const everyone = [...new Set([...teams.flatMap((t) => t.memberIds), ...pool])];
+  if (everyone.length !== allIds.length) {
+    pool = allIds.filter((id) => !teams.flatMap((t) => t.memberIds).includes(id));
+  }
+
+  if (
+    pool.length &&
+    teams.length &&
+    everyone.length <= MAX_TEAM_SIZE * Math.max(teams.length, 1)
+  ) {
+    placePool(false);
+  }
+
+  if (everyone.length >= MIN_TEAM_SIZE && everyone.length <= MAX_TEAM_SIZE) {
+    const single = {
+      name: teams[0]?.name || '新建团队',
+      rationale: teams[0]?.rationale || '',
+      sortOrder: 0,
+      memberIds: [...allIds],
+    };
+    return [single];
+  }
+
+  if (!teams.length && pool.length >= MIN_TEAM_SIZE) {
+    formNewTeamsFromPool();
+  }
+
+  if (pool.length) {
+    placePool(false);
+    if (pool.length >= MIN_TEAM_SIZE) formNewTeamsFromPool();
+    else if (pool.length && teams.length) {
+      for (const id of [...pool]) {
+        const t = teams.find((x) => x.memberIds.length < MAX_TEAM_SIZE);
+        if (t) {
+          t.memberIds.push(id);
+          pool = pool.filter((x) => x !== id);
+        }
+      }
+    }
+  }
+
+  disbandSmallTeams();
+  if (teams.some((t) => t.memberIds.length < MIN_TEAM_SIZE) || pool.length) {
+    return buildTeamsGreedyFromIds(allIds, studentById, teams[0]?.name);
+  }
+
+  return teams.map((t, i) => ({ ...t, sortOrder: i }));
+}
+
+function buildTeamsGreedyFromIds(allIds, studentById, preferredName) {
+  const teams = [];
+  let pool = shuffleInPlace([...allIds]);
+  while (pool.length >= MIN_TEAM_SIZE) {
+    const memberIds = [];
+    while (memberIds.length < MIN_TEAM_SIZE && pool.length) {
+      let idx = pool.findIndex((id) => {
+        const r = roleKeyOf(studentById, id);
+        return !r || !memberIds.some((mid) => roleKeyOf(studentById, mid) === r);
+      });
+      if (idx < 0) idx = 0;
+      memberIds.push(pool.splice(idx, 1)[0]);
+    }
+    while (memberIds.length < MAX_TEAM_SIZE && pool.length) {
+      let idx = pool.findIndex((id) => {
+        const r = roleKeyOf(studentById, id);
+        return !r || !memberIds.some((mid) => roleKeyOf(studentById, mid) === r);
+      });
+      if (idx < 0) idx = 0;
+      memberIds.push(pool.splice(idx, 1)[0]);
+    }
+    teams.push({
+      name: teams.length === 0 && preferredName ? preferredName : `团队 ${teams.length + 1}`,
+      rationale: '',
+      sortOrder: teams.length,
+      memberIds,
+    });
+  }
+  if (pool.length && teams.length) {
+    for (const id of pool) {
+      const t = teams.find((x) => x.memberIds.length < MAX_TEAM_SIZE) || teams[teams.length - 1];
+      t.memberIds.push(id);
+    }
+  } else if (pool.length && allIds.length >= MIN_TEAM_SIZE && allIds.length <= MAX_TEAM_SIZE) {
+    return [
+      {
+        name: preferredName || '新建团队',
+        rationale: '',
+        sortOrder: 0,
+        memberIds: [...allIds],
+      },
+    ];
+  }
+  return teams.map((t, i) => ({ ...t, sortOrder: i }));
+}
+
 /** 组内角色去重；溢出成员随机插入仍有空位的组 */
 export function enforceUniqueRolesPerTeam(teamList, pendingStudents) {
   const studentById = new Map(pendingStudents.map((s) => [String(s.id), s]));
@@ -204,15 +413,25 @@ function forwardStreamChunk(text, handlers, state) {
 /**
  * 流式调用模型分组；团队平均三维由业务侧按成员 dimensionScores 求均，不由 AI 计算。
  */
-export async function runAiTeamGroupingStream(provider, pendingStudents, handlers = {}) {
-  if (pendingStudents.length < MIN_PENDING_FOR_AI) {
-    throw new Error(`待组队学生至少 ${MIN_PENDING_FOR_AI} 人`);
+export async function runAiTeamGroupingStream(provider, pendingStudents, handlers = {}, options = {}) {
+  const minPending = options.minPending ?? MIN_PENDING_FOR_AI;
+  if (pendingStudents.length < minPending) {
+    throw new Error(`待组队学生至少 ${minPending} 人`);
   }
   const prompts = await getPromptModules();
   const tf = prompts.team_formation || {};
   const system = String(tf.ai_group_system || DEFAULT_AI_GROUP_SYSTEM).trim();
   const payload = buildStudentsPayloadForAi(pendingStudents);
-  const user = `${String(tf.ai_group_user_template || '请为以下待组队学生划分小组（JSON 输出）：').trim()}\n\n${JSON.stringify({ students: payload, rules: { minPerTeam: MIN_TEAM_SIZE, maxPerTeam: MAX_TEAM_SIZE } }, null, 2)}`;
+  const n = pendingStudents.length;
+  const incrementalNote = options.incrementalOnly
+    ? `\n\n说明：仅为以下 ${n} 名剩余待组队学生新建小组，勿涉及或修改已有团队。` +
+      ` 每人必须且仅能出现一次。每组必须 3～6 人：` +
+      (n <= MAX_TEAM_SIZE
+        ? `当前 ${n} 人请优先输出 1 个小组（memberStudentIds 包含全部 ${n} 人），不要拆成多个不足 3 人的小组。`
+        : `请拆成若干组且每组 3～6 人。`) +
+      ` 组内角色尽量互不相同；若无法避免重复，也须满足人数规则。`
+    : '';
+  const user = `${String(tf.ai_group_user_template || '请为以下待组队学生划分小组（JSON 输出）：').trim()}${incrementalNote}\n\n${JSON.stringify({ students: payload, rules: { minPerTeam: MIN_TEAM_SIZE, maxPerTeam: MAX_TEAM_SIZE } }, null, 2)}`;
 
   logPromptToConsole(provider, system, user);
   handlers.onStatus?.('正在连接模型进行智能分组…');
@@ -240,7 +459,9 @@ export async function runAiTeamGroupingStream(provider, pendingStudents, handler
   }
 
   handlers.onStatus?.('正在解析分组结果…');
-  return parseAiGroupingFromText(fullText, pendingStudents);
+  const teams = parseAiGroupingFromText(fullText, pendingStudents);
+  handlers.onStatus?.('分组结果已校验并自动调剂完成');
+  return teams;
 }
 
 function parseAiGroupingFromText(raw, pendingStudents) {
@@ -259,30 +480,25 @@ function parseAiGroupingFromText(raw, pendingStudents) {
   }));
 
   const allIds = pendingStudents.map((s) => String(s.id));
-  const flatCheck = validateAiTeams(
-    resolvedTeams.map((t) => ({ name: t.name, memberStudentIds: t.memberIds, rationale: t.rationale })),
-    allIds
-  );
-  if (!flatCheck.ok) throw new Error(flatCheck.message);
+  let mapped = repairAiTeamsToValidShape(resolvedTeams, pendingStudents);
+  mapped = enforceUniqueRolesPerTeam(mapped, pendingStudents);
+  mapped = repairAiTeamsToValidShape(mapped, pendingStudents);
 
-  const mapped = flatCheck.teams.map((t, idx) => ({
-    name: t.name,
-    rationale: t.rationale,
-    memberIds: resolveMemberIds(t.memberStudentIds, studentsById, studentsByNo),
-    sortOrder: idx,
-  }));
-
-  const balanced = enforceUniqueRolesPerTeam(mapped, pendingStudents);
   const recheck = validateAiTeams(
-    balanced.map((t) => ({
+    mapped.map((t) => ({
       name: t.name,
       memberStudentIds: t.memberIds,
       rationale: t.rationale,
     })),
     allIds
   );
-  if (!recheck.ok) throw new Error(recheck.message || '分组结果校验失败');
-  return balanced;
+  if (!recheck.ok) {
+    mapped = repairAiTeamsToValidShape(
+      mapped.map((t) => ({ name: t.name, memberIds: t.memberIds, rationale: t.rationale })),
+      pendingStudents
+    );
+  }
+  return mapped;
 }
 
 /** @deprecated 请使用 runAiTeamGroupingStream */

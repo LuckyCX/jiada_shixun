@@ -171,6 +171,19 @@ export function parseDimensionScores(parsed) {
   };
 }
 
+/** 团队互补得分：三维能力组内方差越大得分越高（0～100） */
+export function computeComplementScore(profiles) {
+  if (!profiles?.length) return 0;
+  const n = profiles.length;
+  const avgS = profiles.reduce((s, p) => s + (p.strategic || 0), 0) / n;
+  const avgM = profiles.reduce((s, p) => s + (p.market || 0), 0) / n;
+  const avgT = profiles.reduce((s, p) => s + (p.techRisk || 0), 0) / n;
+  const varS = profiles.reduce((s, p) => s + (p.strategic - avgS) ** 2, 0) / n;
+  const varM = profiles.reduce((s, p) => s + (p.market - avgM) ** 2, 0) / n;
+  const varT = profiles.reduce((s, p) => s + (p.techRisk - avgT) ** 2, 0) / n;
+  return Math.round(Math.min(100, (varS + varM + varT) / 30));
+}
+
 const VALID_MARKET_FOCUS = new Set(['strategy', 'promotion', 'sales']);
 const VALID_TECH_FOCUS = new Set(['product', 'finance']);
 

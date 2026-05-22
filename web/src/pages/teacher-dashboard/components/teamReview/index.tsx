@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, Button, Popover, Spin } from 'antd';
+import { Alert, Button, Modal, Popover, Spin } from 'antd';
 import type { TeacherPersonalClassRow } from '../../teacherPortalApi';
 import {
   addTeamMember,
+  confirmTeacherAiGroupRandom,
   confirmTeacherGrouping,
   fetchTeacherGrouping,
   fetchTeacherTeamQuestions,
@@ -41,6 +42,7 @@ type Student = {
 type Team = {
   id: string;
   name: string;
+  groupingStatus?: 'draft' | 'confirmed';
   members: Student[];
   avgProfile: AbilityProfile;
   complementScore: number;
@@ -236,9 +238,11 @@ function mapGroupingToUi(data: TeacherGroupingState): { students: Student[]; tea
       aiMatchedRoleLabel: m.aiMatchedRoleLabel,
       isTeamLeader: Boolean(m.isTeamLeader),
     }));
+    const gs = t.groupingStatus === 'confirmed' ? 'confirmed' : 'draft';
     return {
       id: t.id,
       name: t.name,
+      groupingStatus: gs,
       members,
       avgProfile: normalizeTeamDimensionProfile(t.avgProfile),
       complementScore: t.complementScore ?? 0,
@@ -318,24 +322,53 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
     });
   };
 
+  const hasDraftTeams = teams.some((t) => t.groupingStatus === 'draft');
+  const hasExistingTeams = teams.some((t) => t.members.length > 0);
+  const minPendingForAiClick = hasExistingTeams ? 1 : MIN_PENDING_FOR_AI;
+  const teamCanEdit = (t: Team) => t.groupingStatus === 'draft' || t.groupingStatus === 'confirmed';
+
+  const applyGroupingDone = (data: TeacherGroupingState, toastMsg?: string) => {
+    const ui = mapGroupingToUi(data);
+    setStudents(ui.students);
+    setTeams(ui.teams);
+    if (toastMsg) showToast(toastMsg);
+  };
+
   const handleAutoGroup = async () => {
     const pendingStudents = students.filter((s) => s.status === 'pending');
-    if (pendingStudents.length < MIN_PENDING_FOR_AI) {
-      showToast(`待组队学生至少 ${MIN_PENDING_FOR_AI} 人`, 'error');
+    if (pendingStudents.length < minPendingForAiClick) {
+      showToast(
+        hasExistingTeams
+          ? '暂无待组队学生'
+          : `首次 AI 组队需至少 ${MIN_PENDING_FOR_AI} 人（无已有团队时由 AI 一次性划分，且每组至少 3 人）`,
+        'error'
+      );
       return;
     }
     setAiGrouping(true);
-    setAiGroupStep('正在连接模型…');
+    setAiGroupStep(hasExistingTeams ? '正在按角色补位…' : '正在连接模型…');
     setAiThinkingLines([]);
     try {
       await postTeacherAiGroupStream(personalClass.id, {
         onStatus: (msg) => setAiGroupStep(msg),
         onThinking: (t) => appendAiThinking(t),
         onDone: (data) => {
-          const ui = mapGroupingToUi(data);
-          setStudents(ui.students);
-          setTeams(ui.teams);
-          showToast(`AI 智能组队完成，共 ${ui.teams.length} 个团队`);
+          if (data.needsRandomConfirm) {
+            const n = data.remainderCount ?? data.remainderStudents?.length ?? 0;
+            applyGroupingDone(data);
+            Modal.confirm({
+              title: '随机插入剩余学生',
+              content: `待分组学生仅剩 ${n} 人，将随机插入已分好的团队，组内角色可能重复。是否继续？`,
+              okText: '确认插入',
+              cancelText: '取消',
+              onOk: async () => {
+                const next = await confirmTeacherAiGroupRandom(personalClass.id);
+                applyGroupingDone(next, '已随机插入剩余学生');
+              },
+            });
+            return;
+          }
+          applyGroupingDone(data, `AI 智能组队完成，共 ${mapGroupingToUi(data).teams.length} 个团队`);
         },
         onError: (message) => {
           showToast(message, 'error');
@@ -412,7 +445,7 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
   };
 
   const handleConfirmGrouping = async () => {
-    if (teams.length === 0) {
+    if (!teams.some((t) => t.members.length > 0)) {
       showToast('还没有任何团队，请先进行组队', 'error');
       return;
     }
@@ -422,7 +455,12 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
       setStudents(ui.students);
       setTeams(ui.teams);
       setShowConfirmModal(false);
-      showToast(`组队确认成功！已通知 ${data.notifiedCount ?? 0} 名学生`);
+      const n = data.notifiedCount ?? 0;
+      showToast(
+        hasDraftTeams
+          ? `已确认组队，并向 ${n} 名已入队学生发送通知`
+          : `已向 ${n} 名已入队学生发送组队通知`
+      );
     } catch (e) {
       showToast(e instanceof Error ? e.message : '确认失败', 'error');
     }
@@ -436,8 +474,8 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
   });
 
   const pendingCount = students.filter(s => s.status === 'pending').length;
-  const draftTeams = teams.filter(
-    (t) => t.members.length > 0 && t.members.every((m) => m.status === 'grouped') && t.members.length < MAX_TEAM_SIZE
+  const editableTeams = teams.filter(
+    (t) => teamCanEdit(t) && t.members.length > 0 && t.members.length < MAX_TEAM_SIZE
   );
   const groupedCount = students.filter(s => s.status === 'grouped').length;
   const confirmedCount = students.filter(s => s.status === 'confirmed').length;
@@ -485,24 +523,39 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
             {teams.length === 0 ? (
               <button
                 type="button"
-                disabled={pendingCount < MIN_PENDING_FOR_AI || aiGrouping}
+                disabled={pendingCount < minPendingForAiClick || aiGrouping}
                 onClick={() => void handleAutoGroup()}
                 className={`px-5 py-2.5 bg-white text-teal-700 text-sm font-bold rounded-xl whitespace-nowrap flex items-center gap-2 cursor-pointer ${
-                  pendingCount < MIN_PENDING_FOR_AI || aiGrouping ? 'opacity-50 cursor-not-allowed' : 'hover:shadow-lg'
+                  pendingCount < minPendingForAiClick || aiGrouping ? 'opacity-50 cursor-not-allowed' : 'hover:shadow-lg'
                 }`}
               >
                 {aiGrouping ? <Spin size="small" /> : <i className="ri-magic-line text-base" />}
                 AI 智能组队
               </button>
             ) : (
-              <button
-                type="button"
-                onClick={() => setShowConfirmModal(true)}
-                className="px-5 py-2.5 bg-white text-teal-700 text-sm font-bold rounded-xl hover:shadow-lg whitespace-nowrap flex items-center gap-2 cursor-pointer"
-              >
-                <i className="ri-check-double-line text-base"></i>
-                确认组队并通知学生
-              </button>
+              <>
+                {pendingCount >= minPendingForAiClick ? (
+                  <button
+                    type="button"
+                    disabled={aiGrouping}
+                    onClick={() => void handleAutoGroup()}
+                    className={`px-5 py-2.5 bg-white text-teal-700 text-sm font-bold rounded-xl whitespace-nowrap flex items-center gap-2 cursor-pointer ${
+                      aiGrouping ? 'opacity-50 cursor-not-allowed' : 'hover:shadow-lg'
+                    }`}
+                  >
+                    {aiGrouping ? <Spin size="small" /> : <i className="ri-magic-line text-base" />}
+                    AI 智能组队
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => setShowConfirmModal(true)}
+                  className="px-5 py-2.5 bg-white text-teal-700 text-sm font-bold rounded-xl hover:shadow-lg whitespace-nowrap flex items-center gap-2 cursor-pointer"
+                >
+                  <i className="ri-check-double-line text-base"></i>
+                  确认组队并通知学生
+                </button>
+              </>
             )}
           </div>
         </div>
@@ -524,41 +577,7 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
           ))}
         </div>
       </div>
-
-      {/* 操作栏 */}
-      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="relative">
-              <i className="ri-search-line absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm"></i>
-              <input
-                type="text"
-                value={searchKeyword}
-                onChange={e => setSearchKeyword(e.target.value)}
-                placeholder="搜索学生姓名或学号..."
-                className="pl-9 pr-4 py-2 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 bg-gray-50 w-64"
-              />
-            </div>
-            <div className="flex items-center gap-1 bg-gray-100 rounded-xl p-1">
-              {[
-                { key: 'all' as const, label: '全部' },
-                { key: 'pending' as const, label: '待组队' },
-                { key: 'grouped' as const, label: '已分组' },
-              ].map(f => (
-                <button
-                  key={f.key}
-                  onClick={() => setFilterStatus(f.key)}
-                  className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all whitespace-nowrap cursor-pointer ${
-                    filterStatus === f.key ? 'bg-white text-teal-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'
-                  }`}
-                >
-                  {f.label}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      </div>
+ 
 
       {aiGrouping && (
         <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 shadow-sm">
@@ -608,7 +627,7 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
                     onDragStart={() => handleDragStart(student)}
                     className="relative bg-gray-50 border border-gray-200 rounded-xl p-3 hover:border-teal-300 hover:bg-teal-50/30 transition-all cursor-move"
                   >
-                    {draftTeams.length > 0 && (
+                    {editableTeams.length > 0 && (
                       <Popover
                         trigger="click"
                         open={joinTeamStudentId === student.id}
@@ -623,7 +642,7 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
                         content={
                           <div className="w-52 space-y-2">
                             <p className="text-xs font-bold text-gray-800">选择目标团队</p>
-                            {draftTeams.map((t) => (
+                            {editableTeams.map((t) => (
                               <label key={t.id} className="flex items-center gap-2 text-sm cursor-pointer">
                                 <input
                                   type="radio"
@@ -653,7 +672,7 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
                           onClick={(e) => {
                             e.stopPropagation();
                             setJoinTeamStudentId(student.id);
-                            setJoinTeamTargetId(draftTeams[0]?.id ?? null);
+                            setJoinTeamTargetId(editableTeams[0]?.id ?? null);
                           }}
                           className="absolute top-2 right-2 z-10 px-2 py-0.5 text-[10px] font-medium bg-teal-600 text-white rounded-md hover:bg-teal-700 cursor-pointer"
                         >
@@ -718,9 +737,9 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
                 <button
                   type="button"
                   onClick={() => void handleAutoGroup()}
-                  disabled={pendingCount < MIN_PENDING_FOR_AI || aiGrouping}
+                  disabled={pendingCount < minPendingForAiClick || aiGrouping}
                   className={`px-6 py-3 bg-gradient-to-r from-teal-500 to-cyan-500 text-white text-sm font-bold rounded-xl hover:shadow-lg transition-all whitespace-nowrap cursor-pointer ${
-                    pendingCount < MIN_PENDING_FOR_AI || aiGrouping ? 'opacity-50 cursor-not-allowed' : ''
+                    pendingCount < minPendingForAiClick || aiGrouping ? 'opacity-50 cursor-not-allowed' : ''
                   }`}
                 >
                   {aiGrouping ? <Spin size="small" className="mr-2" /> : <i className="ri-magic-line mr-2" />}
@@ -808,7 +827,7 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
                             </div>
                           </div>
                           <div className="flex items-center gap-2 flex-shrink-0">
-                            {team.members[0]?.status === 'grouped' && (
+                            {teamCanEdit(team) && (
                               <button
                                 type="button"
                                 onClick={() => void handleSetTeamLeader(member.id, team.id)}
@@ -826,8 +845,8 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
                             <button
                               type="button"
                               onClick={() => void handleRemoveFromTeam(member.id, team.id)}
-                              disabled={member.status === 'confirmed'}
-                              className="px-3 py-1.5 bg-red-50 text-red-600 text-xs font-medium rounded-lg hover:bg-red-100 transition-colors whitespace-nowrap cursor-pointer border border-red-200 disabled:opacity-40"
+                              disabled={!teamCanEdit(team)}
+                              className="px-3 py-1.5 bg-red-50 text-red-600 text-xs font-medium rounded-lg hover:bg-red-100 transition-colors whitespace-nowrap cursor-pointer border border-red-200 disabled:opacity-40 disabled:cursor-not-allowed"
                             >
                               <i className="ri-close-line mr-1"></i>
                               移出
@@ -837,7 +856,7 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
                       ))}
                     </div>
 
-                    {team.members.length < MAX_TEAM_SIZE && team.members[0]?.status === 'grouped' && (
+                    {teamCanEdit(team) && team.members.length < MAX_TEAM_SIZE && (
                       <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 flex items-center gap-2">
                         <i className="ri-information-line"></i>
                         <span>拖拽左侧学生到此区域可添加成员（最多 {MAX_TEAM_SIZE} 人）</span>
@@ -860,7 +879,10 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
                 <i className="ri-check-double-line text-3xl text-white"></i>
               </div>
               <h3 className="text-xl font-bold text-gray-900 mb-2">确认组队并通知学生</h3>
-              <p className="text-sm text-gray-500">确认后将向所有学生发送组队通知，学生将看到自己的团队信息</p>
+              <p className="text-sm text-gray-500">
+                每次点击都会向当前所有已入队学生发送一条新通知。
+                {hasDraftTeams ? ' 同时将未确认的草稿团队标记为已确认。' : ' 当前无草稿团队，仅重复发送通知。'}
+              </p>
             </div>
 
             <div className="bg-gray-50 rounded-xl p-4 mb-6 space-y-2 text-sm">
@@ -869,8 +891,10 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
                 <span className="font-bold text-gray-900">{teams.length} 个</span>
               </div>
               <div className="flex items-center justify-between">
-                <span className="text-gray-600">已分组学生</span>
-                <span className="font-bold text-gray-900">{groupedCount} 人</span>
+                <span className="text-gray-600">已入队学生（将收到通知）</span>
+                <span className="font-bold text-gray-900">
+                  {teams.reduce((s, t) => s + t.members.length, 0)} 人
+                </span>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-gray-600">待组队学生</span>
