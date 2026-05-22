@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { getPool } from '../lib/db.js';
+import { seedDefaultTeamFormationQuestions } from '../lib/defaultTeamFormationQuestions.js';
 import { logError } from '../lib/logError.js';
 import { requireAuth, requireTeacher } from '../middleware/auth.js';
 
@@ -102,13 +103,27 @@ router.post('/teacher/personal-classes', requireAuth(), requireTeacher(), async 
 
     if (!name) return bad(req, res, 400, 40002, '班级名称不能为空');
 
-    const { rows } = await getPool().query(
-      `INSERT INTO teacher_personal_classes (teacher_id, name, academic_year, semester)
-       VALUES ($1, $2, $3, $4)
-       RETURNING id, name, academic_year AS "academicYear", semester, created_at AS "createdAt"`,
-      [tid, name, academicYear, semester]
-    );
-    const r = rows[0];
+    const pool = getPool();
+    const client = await pool.connect();
+    let r;
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query(
+        `INSERT INTO teacher_personal_classes (teacher_id, name, academic_year, semester)
+         VALUES ($1, $2, $3, $4)
+         RETURNING id, name, academic_year AS "academicYear", semester, created_at AS "createdAt"`,
+        [tid, name, academicYear, semester]
+      );
+      r = rows[0];
+      await seedDefaultTeamFormationQuestions(client, r.id);
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+
     return ok(req, res, {
       id: String(r.id),
       name: r.name,

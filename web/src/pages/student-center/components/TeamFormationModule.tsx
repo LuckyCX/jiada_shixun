@@ -1,5 +1,11 @@
 import { useState } from 'react';
 import VersionControl, { Version } from '../../../components/feature/VersionControl';
+import TeamFormationAssessmentPanel from './TeamFormationAssessmentPanel';
+
+type TeamFormationModuleProps = {
+  classId: string;
+  className: string;
+};
 
 type AbilityProfile = {
   techGeek: number;
@@ -259,7 +265,7 @@ function showToast(message: string, type: 'success' | 'error' = 'success') {
   setTimeout(() => div.remove(), 3000);
 }
 
-export default function TeamFormationModule() {
+export default function TeamFormationModule({ classId, className }: TeamFormationModuleProps) {
   const [activeTab, setActiveTab] = useState<'assessment' | 'waiting' | 'myteam' | 'square'>('assessment');
   
   // 测评相关
@@ -575,185 +581,13 @@ export default function TeamFormationModule() {
         <div className="p-5">
           {/* ── 能力测评 ── */}
           {activeTab === 'assessment' && (
-            <div className="space-y-5">
-              {!assessmentCompleted ? (
-                <>
-                  <div className="bg-gradient-to-br from-teal-50 to-cyan-50 border border-teal-200 rounded-xl p-5">
-                    <div className="flex items-start gap-3 mb-4">
-                      <div className="w-10 h-10 bg-teal-500 rounded-xl flex items-center justify-center flex-shrink-0">
-                        <i className="ri-file-list-3-line text-lg text-white"></i>
-                      </div>
-                      <div>
-                        <h3 className="text-sm font-bold text-gray-900 mb-1">能力画像测评（10题）</h3>
-                        <p className="text-xs text-gray-600">通过10道问题，精准识别你的"技术极客"、"设计美学"、"商业操盘"三类特质</p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <div className="flex-1 h-2 bg-white rounded-full overflow-hidden">
-                        <div className="h-full bg-gradient-to-r from-teal-500 to-cyan-500 transition-all duration-300" style={{ width: `${(currentQuestion / profileQuestions.length) * 100}%` }}></div>
-                      </div>
-                      <span className="text-xs font-medium text-gray-600 whitespace-nowrap">{currentQuestion}/{profileQuestions.length}</span>
-                    </div>
-                  </div>
-                  <div className="bg-white border-2 border-gray-100 rounded-xl p-5">
-                    <span className="inline-block px-2.5 py-1 bg-teal-100 text-teal-700 text-xs font-medium rounded-full mb-4 whitespace-nowrap">问题 {currentQuestion + 1}/{profileQuestions.length}</span>
-                    <h3 className="text-base font-bold text-gray-900 mb-5">{profileQuestions[currentQuestion].question}</h3>
-                    <div className="space-y-2.5">
-                      {profileQuestions[currentQuestion].options.map((option, index) => (
-                        <button key={index} onClick={() => handleAnswerSelect(option.value)}
-                          className={`w-full p-3.5 text-left border-2 rounded-xl transition-all cursor-pointer ${answers[currentQuestion] === option.value ? 'border-teal-500 bg-teal-50' : 'border-gray-200 hover:border-teal-300 hover:bg-gray-50'}`}>
-                          <div className="flex items-center gap-3">
-                            <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 ${answers[currentQuestion] === option.value ? 'border-teal-500 bg-teal-500' : 'border-gray-300'}`}>
-                              {answers[currentQuestion] === option.value && <i className="ri-check-line text-white text-xs"></i>}
-                            </div>
-                            <span className="text-sm text-gray-800">{option.label}</span>
-                          </div>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </>
-              ) : !videoUploaded ? (
-                <>
-                  <div className="bg-gradient-to-br from-teal-500 to-cyan-500 rounded-xl p-5 text-white">
-                    <div className="flex items-center gap-2 mb-2">
-                      <i className="ri-checkbox-circle-fill text-xl"></i>
-                      <h3 className="text-base font-bold">测评完成！</h3>
-                    </div>
-                    <p className="text-white/80 text-xs">已生成能力画像，请上传自我介绍视频进行AI分析</p>
-                  </div>
-                  
-                  {/* 能力雷达图 */}
-                  <div className="grid grid-cols-3 gap-3">
-                    {[
-                      { label: '技术极客', icon: 'ri-code-s-slash-line', color: 'from-teal-500 to-cyan-500', value: abilityProfile.techGeek },
-                      { label: '设计美学', icon: 'ri-palette-line', color: 'from-orange-400 to-amber-400', value: abilityProfile.designAesthetic },
-                      { label: '商业操盘', icon: 'ri-line-chart-line', color: 'from-green-500 to-emerald-500', value: abilityProfile.businessOperator },
-                    ].map(item => (
-                      <div key={item.label} className="bg-white border-2 border-gray-100 rounded-xl p-4">
-                        <div className={`w-9 h-9 bg-gradient-to-br ${item.color} rounded-xl flex items-center justify-center mb-3`}>
-                          <i className={`${item.icon} text-base text-white`}></i>
-                        </div>
-                        <p className="text-xs font-bold text-gray-900 mb-2">{item.label}</p>
-                        <div className="flex items-center justify-between text-xs mb-1.5">
-                          <span className="text-gray-400">指数</span>
-                          <span className="font-bold text-gray-900">{Math.round(item.value)}</span>
-                        </div>
-                        <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
-                          <div className={`h-full bg-gradient-to-r ${item.color} rounded-full`} style={{ width: `${item.value}%` }}></div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* 视频上传 */}
-                  <div className="bg-white border-2 border-gray-100 rounded-xl p-5">
-                    <h3 className="text-sm font-bold text-gray-900 mb-4 flex items-center gap-2">
-                      <i className="ri-video-line text-teal-600"></i>
-                      上传自我介绍视频
-                    </h3>
-                    <div className="bg-gradient-to-br from-blue-50 to-indigo-50 border-2 border-dashed border-blue-300 rounded-xl p-6 text-center mb-4">
-                      <i className="ri-upload-cloud-line text-4xl text-blue-500 mb-3 block"></i>
-                      <p className="text-sm font-medium text-gray-900 mb-2">点击选择或拖拽视频文件</p>
-                      <p className="text-xs text-gray-500 mb-4">支持 MP4、MOV 格式，建议时长 1-3 分钟</p>
-                      <input type="file" accept="video/*" onChange={handleVideoUpload} className="hidden" id="video-upload" />
-                      <label htmlFor="video-upload" className="inline-block px-5 py-2.5 bg-gradient-to-r from-blue-500 to-indigo-500 text-white text-sm font-medium rounded-xl hover:shadow-lg transition-all cursor-pointer whitespace-nowrap">
-                        <i className="ri-folder-open-line mr-1.5"></i>选择视频
-                      </label>
-                    </div>
-                    
-                    {videoFile && (
-                      <div className="bg-gray-50 rounded-xl p-4 mb-4">
-                        <div className="flex items-center gap-3">
-                          <i className="ri-file-video-line text-2xl text-blue-500"></i>
-                          <div className="flex-1">
-                            <p className="text-sm font-medium text-gray-900">{videoFile.name}</p>
-                            <p className="text-xs text-gray-500">{(videoFile.size / 1024 / 1024).toFixed(2)} MB</p>
-                          </div>
-                          <button onClick={() => setVideoFile(null)} className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg cursor-pointer">
-                            <i className="ri-close-line"></i>
-                          </button>
-                        </div>
-                      </div>
-                    )}
-
-                    <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-4 text-xs text-amber-800 flex items-start gap-2">
-                      <i className="ri-information-line mt-0.5"></i>
-                      <div>
-                        <p className="font-bold mb-1">视频内容建议：</p>
-                        <ul className="space-y-0.5 list-disc list-inside">
-                          <li>简单介绍自己的专业、兴趣和特长</li>
-                          <li>分享你在团队中擅长的角色和贡献</li>
-                          <li>表达你对创新创业的热情和期待</li>
-                        </ul>
-                      </div>
-                    </div>
-
-                    <button 
-                      onClick={handleSubmitVideo}
-                      disabled={!videoFile || aiAnalyzing}
-                      className={`w-full px-5 py-3 text-sm font-medium rounded-xl transition-all whitespace-nowrap cursor-pointer ${
-                        !videoFile || aiAnalyzing 
-                          ? 'bg-gray-100 text-gray-400 cursor-not-allowed' 
-                          : 'bg-gradient-to-r from-teal-500 to-cyan-500 text-white hover:shadow-lg'
-                      }`}>
-                      {aiAnalyzing ? (
-                        <>
-                          <i className="ri-loader-4-line mr-2 animate-spin"></i>
-                          AI正在分析视频内容...
-                        </>
-                      ) : (
-                        <>
-                          <i className="ri-send-plane-line mr-2"></i>
-                          提交视频并开始AI分析
-                        </>
-                      )}
-                    </button>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div className="bg-gradient-to-br from-green-500 to-emerald-500 rounded-xl p-5 text-white">
-                    <div className="flex items-center gap-2 mb-2">
-                      <i className="ri-checkbox-circle-fill text-xl"></i>
-                      <h3 className="text-base font-bold">AI分析完成！</h3>
-                    </div>
-                    <p className="text-white/80 text-xs">已为你匹配最适合的团队角色</p>
-                  </div>
-
-                  {/* AI匹配角色 */}
-                  <div className="bg-white border-2 border-green-200 rounded-xl p-5">
-                    <div className="text-center mb-4">
-                      <div className="w-16 h-16 bg-gradient-to-br from-green-500 to-emerald-500 rounded-full flex items-center justify-center mx-auto mb-3">
-                        <i className="ri-user-star-line text-3xl text-white"></i>
-                      </div>
-                      <h3 className="text-lg font-bold text-gray-900 mb-1">AI为你匹配的角色</h3>
-                      <div className="inline-block px-4 py-2 bg-gradient-to-r from-green-500 to-emerald-500 text-white text-base font-bold rounded-xl">
-                        {aiMatchedRole}
-                      </div>
-                    </div>
-                    
-                    <div className="bg-green-50 border border-green-200 rounded-xl p-4 mb-4">
-                      <p className="text-xs font-bold text-green-900 mb-2">角色分析：</p>
-                      <p className="text-xs text-green-800">
-                        {aiMatchedRole === '团队负责人' && '你的商业操盘能力和领导力突出，适合统筹团队整体方向和决策'}
-                        {aiMatchedRole === '技术负责人' && '你的技术能力和逻辑思维优秀，适合负责技术开发和架构设计'}
-                        {aiMatchedRole === '运营负责人' && '你的协调能力和执行力强，适合负责团队运营和日常管理'}
-                        {aiMatchedRole === '财务负责人' && '你的数据分析和财务规划能力强，适合负责财务管理和成本控制'}
-                        {aiMatchedRole === '市场负责人' && '你的市场洞察和营销能力突出，适合负责市场推广和用户运营'}
-                      </p>
-                    </div>
-
-                    <button 
-                      onClick={handleSubmitForTeamMatching}
-                      className="w-full px-5 py-3 bg-gradient-to-r from-teal-500 to-cyan-500 text-white text-sm font-medium rounded-xl hover:shadow-lg transition-all whitespace-nowrap cursor-pointer">
-                      <i className="ri-send-plane-line mr-2"></i>
-                      提交并等待教师组队
-                    </button>
-                  </div>
-                </>
-              )}
-            </div>
+            <TeamFormationAssessmentPanel
+              classId={classId}
+              onSubmitted={() => {
+                setActiveTab('waiting');
+                setWaitingForTeam(true);
+              }}
+            />
           )}
 
           {/* ── 等待组队 ── */}
@@ -796,13 +630,6 @@ export default function TeamFormationModule() {
                       </div>
                     </div>
 
-                    {/* 模拟按钮（实际使用时删除） */}
-                    <button 
-                      onClick={handleSimulateTeamFormed}
-                      className="mt-6 px-5 py-2.5 bg-gray-100 text-gray-600 text-sm font-medium rounded-xl hover:bg-gray-200 transition-colors whitespace-nowrap cursor-pointer">
-                      <i className="ri-flask-line mr-2"></i>
-                      模拟教师组队完成（测试用）
-                    </button>
                   </div>
                 </>
               ) : (

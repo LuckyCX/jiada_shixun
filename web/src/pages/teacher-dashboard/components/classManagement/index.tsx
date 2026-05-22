@@ -3,7 +3,6 @@ import { Modal, Spin, message } from 'antd';
 import { useTranslation } from 'react-i18next';
 import { usePublicDictOptions } from '../../../admin-dashboard/components/classManagement/usePublicDictOptions';
 import CreateClassModal from './CreateClassModal';
-import AddStudentsTransferModal from './AddStudentsTransferModal';
 import {
   type TeacherPersonalClassRow,
   type TeacherProfile,
@@ -14,16 +13,15 @@ import {
 
 type ClassManagementProps = {
   onOpenClassStudents: (cls: TeacherPersonalClassRow) => void;
+  onOpenTeamReview: (cls: TeacherPersonalClassRow) => void;
 };
 
-export default function ClassManagement({ onOpenClassStudents }: ClassManagementProps) {
+export default function ClassManagement({ onOpenClassStudents, onOpenTeamReview }: ClassManagementProps) {
   const { t } = useTranslation();
   const { labelByValue: semesterLabel } = usePublicDictOptions('semester', true);
   const [profile, setProfile] = useState<TeacherProfile | null>(null);
   const [classes, setClasses] = useState<TeacherPersonalClassRow[]>([]);
-  const [addStudentsClass, setAddStudentsClass] = useState<TeacherPersonalClassRow | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [showAddStudentsModal, setShowAddStudentsModal] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const loadAll = useCallback(async () => {
@@ -54,10 +52,6 @@ export default function ClassManagement({ onOpenClassStudents }: ClassManagement
         try {
           await deleteTeacherPersonalClass(cls.id);
           message.success(t('teacher_class.delete_success'));
-          if (addStudentsClass?.id === cls.id) {
-            setAddStudentsClass(null);
-            setShowAddStudentsModal(false);
-          }
           await loadAll();
         } catch (e) {
           message.error(e instanceof Error ? e.message : t('teacher_class.delete_fail'));
@@ -173,14 +167,11 @@ export default function ClassManagement({ onOpenClassStudents }: ClassManagement
                     </button>
                     <button
                       type="button"
-                      onClick={() => {
-                        setAddStudentsClass(cls);
-                        setShowAddStudentsModal(true);
-                      }}
-                      className="flex-1 px-3 py-2 bg-green-50 text-green-600 rounded-lg hover:bg-green-100 transition-colors text-sm font-medium cursor-pointer whitespace-nowrap"
+                      onClick={() => onOpenTeamReview(cls)}
+                      className="flex-1 px-3 py-2 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 transition-colors text-sm font-medium cursor-pointer whitespace-nowrap"
                     >
-                      <i className="ri-user-add-line mr-1"></i>
-                      {t('teacher_class.page.add_students')}
+                      <i className="ri-team-line mr-1"></i>
+                      {t('teacher_class.page.team_manage')}
                     </button>
                     <button
                       type="button"
@@ -206,20 +197,6 @@ export default function ClassManagement({ onOpenClassStudents }: ClassManagement
         onCreated={() => void loadAll()}
       />
 
-      {addStudentsClass && (
-        <AddStudentsTransferModal
-          open={showAddStudentsModal}
-          personalClassId={addStudentsClass.id}
-          groupName={addStudentsClass.name}
-          onClose={() => {
-            setShowAddStudentsModal(false);
-            setAddStudentsClass(null);
-          }}
-          onSaved={() => {
-            void loadAll();
-          }}
-        />
-      )}
     </div>
   );
 }

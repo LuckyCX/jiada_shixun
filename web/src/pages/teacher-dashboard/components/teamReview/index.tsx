@@ -1,4 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { Alert, Tooltip } from 'antd';
+import type { TeacherPersonalClassRow } from '../../teacherPortalApi';
+import { fetchTeacherPendingTeamStudents, fetchTeacherTeamQuestions } from '../../../../lib/teamFormationApi';
 
 // 学生能力画像类型
 type AbilityProfile = {
@@ -19,6 +22,8 @@ type Student = {
   skills: string[];
   status: 'pending' | 'grouped' | 'confirmed';
   teamId?: string;
+  aiMatchedRole?: string;
+  aiMatchedRoleLabel?: string;
 };
 
 // 团队类型
@@ -30,8 +35,8 @@ type Team = {
   complementScore: number;
 };
 
-// Mock 学生数据
-const mockStudents: Student[] = [
+// 已分组等演示数据（待组队走 API）
+const mockStudentsGrouped: Student[] = [
   {
     id: 'stu-001',
     name: '张明',
@@ -174,8 +179,50 @@ function showToast(message: string, type: 'success' | 'error' = 'success') {
   setTimeout(() => div.remove(), 3000);
 }
 
-export default function TeamReview() {
-  const [students, setStudents] = useState<Student[]>(mockStudents);
+function hasPresetQuestionsReady(list: { title?: string }[]): boolean {
+  const filled = list.filter((q) => (q.title ?? '').trim().length > 0);
+  return filled.length >= 3;
+}
+
+type TeamReviewProps = {
+  personalClass: TeacherPersonalClassRow;
+  onOpenQuestionsPreset: () => void;
+  questionsSavedTick?: number;
+};
+
+export default function TeamReview({ personalClass, onOpenQuestionsPreset, questionsSavedTick = 0 }: TeamReviewProps) {
+  const [students, setStudents] = useState<Student[]>([]);
+  const [loadingStudents, setLoadingStudents] = useState(true);
+  const [questionsChecked, setQuestionsChecked] = useState(false);
+  const [questionsReady, setQuestionsReady] = useState(true);
+  const [presetAlertClosed, setPresetAlertClosed] = useState(false);
+
+  useEffect(() => {
+    setLoadingStudents(true);
+    fetchTeacherPendingTeamStudents(personalClass.id)
+      .then((list) => {
+        setStudents(
+          (list as Student[]).map((s) => ({
+            ...s,
+            status: 'pending' as const,
+            profile: s.profile || { techGeek: 0, designAesthetic: 0, businessOperator: 0 },
+            skills: s.skills || [],
+          }))
+        );
+      })
+      .catch(() => setStudents([]))
+      .finally(() => setLoadingStudents(false));
+  }, [personalClass.id]);
+
+  useEffect(() => {
+    setPresetAlertClosed(false);
+    setQuestionsChecked(false);
+    fetchTeacherTeamQuestions(personalClass.id)
+      .then((list) => setQuestionsReady(hasPresetQuestionsReady(list)))
+      .catch(() => setQuestionsReady(false))
+      .finally(() => setQuestionsChecked(true));
+  }, [personalClass.id, questionsSavedTick]);
+
   const [teams, setTeams] = useState<Team[]>([]);
   const [selectedStudents, setSelectedStudents] = useState<string[]>([]);
   const [draggedStudent, setDraggedStudent] = useState<Student | null>(null);
@@ -403,6 +450,28 @@ export default function TeamReview() {
 
   return (
     <div className="space-y-6">
+      {questionsChecked && !questionsReady && !presetAlertClosed && (
+        <Alert
+          type="warning"
+          showIcon
+          closable
+          onClose={() => setPresetAlertClosed(true)}
+          message="尚未完成组队问题预设"
+          description={
+            <span>
+              请先配置至少 3 道组队测评题，学生才能提交组队测评。
+              <button
+                type="button"
+                onClick={onOpenQuestionsPreset}
+                className="ml-2 text-teal-600 font-medium underline cursor-pointer"
+              >
+                去预设
+              </button>
+            </span>
+          }
+        />
+      )}
+
       {/* 头部统计 */}
       <div className="bg-gradient-to-br from-teal-500 to-cyan-600 rounded-2xl p-6 text-white">
         <div className="flex items-center justify-between mb-5">
@@ -412,15 +481,23 @@ export default function TeamReview() {
           </div>
           <div className="flex items-center gap-3">
             <button
-              onClick={handleAutoGroup}
-              disabled={pendingCount < 3}
-              className={`px-5 py-2.5 bg-white text-teal-600 text-sm font-bold rounded-xl hover:shadow-lg transition-all whitespace-nowrap cursor-pointer flex items-center gap-2 ${
-                pendingCount < 3 ? 'opacity-50 cursor-not-allowed' : ''
-              }`}
+              type="button"
+              onClick={onOpenQuestionsPreset}
+              className="px-5 py-2.5 bg-white/90 text-teal-700 text-sm font-bold rounded-xl hover:shadow-lg transition-all whitespace-nowrap cursor-pointer flex items-center gap-2"
             >
-              <i className="ri-magic-line text-base"></i>
-              AI 智能组队
+              <i className="ri-questionnaire-line text-base"></i>
+              组队问题预设
             </button>
+            <Tooltip title="下一步实现">
+              <button
+                type="button"
+                disabled
+                className="px-5 py-2.5 bg-white/50 text-teal-600/60 text-sm font-bold rounded-xl whitespace-nowrap flex items-center gap-2 opacity-60 cursor-not-allowed"
+              >
+                <i className="ri-magic-line text-base"></i>
+                AI 智能组队
+              </button>
+            </Tooltip>
             {teams.length > 0 && (
               <button
                 onClick={() => setShowConfirmModal(true)}
@@ -719,6 +796,7 @@ export default function TeamReview() {
           </div>
         </div>
       )}
+
     </div>
   );
 }

@@ -1,5 +1,5 @@
-import { useState, useMemo, useEffect } from 'react';
-import { Modal } from 'antd';
+import { useState, useMemo, useEffect, useRef } from 'react';
+import { Modal, notification } from 'antd';
 import { clearPortalToken, getPortalToken, parseJwtPayload } from '../../lib/authApi';
 import { Link, useSearchParams, useNavigate } from 'react-router-dom';
 import { useSiteBrand } from '../../lib/publicSite';
@@ -7,6 +7,7 @@ import LearningDetail from '../knowledge-system/components/LearningDetail';
 import QuizModal from './components/QuizModal';
 import { quizBank } from '../../mocks/quizBank';
 import { notifications } from '../../mocks/notifications';
+import StudentClassSwitcher from './components/StudentClassSwitcher';
 import TeamFormationModule from './components/TeamFormationModule';
 import IdeationModule from './components/IdeationModule';
 import MarketResearchModule from './components/MarketResearchModule';
@@ -14,7 +15,13 @@ import ProductDesignModule from './components/ProductDesignModule';
 import BusinessModelModule from './components/BusinessModelModule';
 import RoleSimulationModule from './components/RoleSimulationModule';
 import BusinessPlanModule from './components/BusinessPlanModule';
-import { getStudentProfile, type StudentProfile } from '../../lib/studentPortalApi';
+import {
+  fetchStudentPersonalEnrollments,
+  getStudentProfile,
+  type StudentPersonalEnrollment,
+  type StudentProfile,
+} from '../../lib/studentPortalApi';
+import { fetchTeamSubmission, isTeamFormationDone } from '../../lib/teamFormationApi';
 
 type TabType =
   | 'overview'
@@ -80,6 +87,14 @@ export default function StudentCenterPage() {
   const [expandedNotificationId, setExpandedNotificationId] = useState<string | null>(null);
   const [logoutModalOpen, setLogoutModalOpen] = useState(false);
   const [studentProfile, setStudentProfile] = useState<StudentProfile | null>(null);
+  const [enrollments, setEnrollments] = useState<StudentPersonalEnrollment[]>([]);
+  const [selectedClassId, setSelectedClassId] = useState<string>('');
+  const teamGuideShownRef = useRef(false);
+
+  const selectedEnrollment = useMemo(
+    () => enrollments.find((e) => e.classId === selectedClassId) ?? enrollments[0],
+    [enrollments, selectedClassId]
+  );
 
   useEffect(() => {
     getStudentProfile()
@@ -88,6 +103,40 @@ export default function StudentCenterPage() {
         /* 失败时下面仍用 JWT username 兜底 */
       });
   }, []);
+
+  useEffect(() => {
+    fetchStudentPersonalEnrollments()
+      .then((list) => {
+        setEnrollments(list);
+        if (list.length === 0) return;
+        const saved = sessionStorage.getItem('jiada_student_selected_class_id');
+        const valid = saved && list.some((e) => e.classId === saved);
+        setSelectedClassId(valid ? saved! : list[0].classId);
+      })
+      .catch(() => setEnrollments([]));
+  }, []);
+
+  useEffect(() => {
+    if (!selectedClassId || teamGuideShownRef.current) return;
+    void fetchTeamSubmission(selectedClassId)
+      .then((sub) => {
+        if (isTeamFormationDone(sub.status)) return;
+        teamGuideShownRef.current = true;
+        setActiveTab('module-team');
+        notification.info({
+          message: '请先完成组队测评',
+          description: '进入「组队与团队管理」完成教师预设题目、上传视频并提交，等待教师组队。',
+          placement: 'topRight',
+          duration: 6,
+        });
+      })
+      .catch(() => {});
+  }, [selectedClassId]);
+
+  const handleClassChange = (classId: string) => {
+    setSelectedClassId(classId);
+    sessionStorage.setItem('jiada_student_selected_class_id', classId);
+  };
 
   const overallProgress = {
     currentLevel: '初级创业者', nextLevel: '中级创业者', levelProgress: 36,
@@ -299,19 +348,28 @@ export default function StudentCenterPage() {
   const renderModuleContent = () => {
     switch (activeTab) {
       case 'module-team':
-        return <TeamFormationModule />;
+        if (!selectedEnrollment) {
+          return <div className="text-sm text-gray-500 py-8 text-center">未加入教学班级，无法使用组队功能</div>;
+        }
+        return (
+          <TeamFormationModule
+            key={selectedEnrollment.classId}
+            classId={selectedEnrollment.classId}
+            className={selectedEnrollment.className}
+          />
+        );
       case 'module-ideation':
-        return <IdeationModule />;
+        return <IdeationModule key={selectedClassId} />;
       case 'module-market':
-        return <MarketResearchModule />;
+        return <MarketResearchModule key={selectedClassId} />;
       case 'module-product':
-        return <ProductDesignModule />;
+        return <ProductDesignModule key={selectedClassId} />;
       case 'module-business':
-        return <BusinessModelModule />;
+        return <BusinessModelModule key={selectedClassId} />;
       case 'module-simulation':
-        return <RoleSimulationModule />;
+        return <RoleSimulationModule key={selectedClassId} />;
       case 'module-plan':
-        return <BusinessPlanModule />;
+        return <BusinessPlanModule key={selectedClassId} />;
       default:
         return null;
     }
@@ -464,6 +522,11 @@ export default function StudentCenterPage() {
               <span className="font-medium text-gray-700">{getCurrentLabel()}</span>
             </div>
             <div className="flex items-center gap-3">
+              <StudentClassSwitcher
+                enrollments={enrollments}
+                selectedClassId={selectedClassId}
+                onClassChange={handleClassChange}
+              />
               <div className="flex items-center gap-2 px-3 py-1.5 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors whitespace-nowrap cursor-pointer">
                 <i className="ri-trophy-line"></i><span>{overallProgress.currentLevel}</span>
               </div>
@@ -471,7 +534,7 @@ export default function StudentCenterPage() {
           </div>
         </header>
 
-        <main className="flex-1 p-6">
+        <main key={selectedClassId || 'student-no-class'} className="flex-1 p-6">
 
           {/* 进度看板 */}
           {activeTab === 'overview' && (
@@ -490,7 +553,11 @@ export default function StudentCenterPage() {
                       <span className="px-2.5 py-0.5 bg-white/20 text-white rounded-full text-xs font-medium border border-white/30 whitespace-nowrap cursor-pointer">创新创业实训课程</span>
                     </div>
                     <div className="flex items-center gap-5 text-sm text-white/80">
-                      <span className="flex items-center gap-1.5"><i className="ri-team-line"></i>创新创业2024-1班 · 5人团队</span>
+                      <span className="flex items-center gap-1.5">
+                        <i className="ri-team-line"></i>
+                        {selectedEnrollment?.className ?? '未加入教学班级'}
+                        {enrollments.length > 1 ? ` · 已选 ${enrollments.length} 个班级` : ''}
+                      </span>
                       <span className="flex items-center gap-1.5"><i className="ri-map-pin-line"></i>当前阶段：市场调研与用户画像</span>
                     </div>
                   </div>

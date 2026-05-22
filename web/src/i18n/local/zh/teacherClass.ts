@@ -53,6 +53,7 @@ export default {
   'teacher_class.page.view_students': '查看学生',
   'teacher_class.page.collapse': '收起',
   'teacher_class.page.add_students': '添加学生',
+  'teacher_class.page.team_manage': '组队管理',
   'teacher_class.page.roster_title': '班级学生名单',
   'teacher_class.page.roster_modal_close': '关闭',
   'teacher_class.page.roster_empty': '暂无学生，请点击「添加学生」筛选并加入',

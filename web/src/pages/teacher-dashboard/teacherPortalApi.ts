@@ -110,3 +110,9 @@ export async function removePersonalClassStudent(classId: string, studentId: str
     method: 'DELETE',
   }) as Promise<{ studentCount: number }>;
 }
+
+export {
+  fetchTeacherTeamQuestions,
+  saveTeacherTeamQuestions,
+  fetchTeacherPendingTeamStudents,
+} from '../../lib/teamFormationApi';

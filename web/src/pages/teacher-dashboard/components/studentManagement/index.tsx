@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Modal, Spin, message } from 'antd';
 import { useTranslation } from 'react-i18next';
+import AddStudentsTransferModal from '../classManagement/AddStudentsTransferModal';
 import {
   listPersonalClassStudents,
   removePersonalClassStudent,
@@ -101,6 +102,9 @@ export default function StudentManagement({ personalClass, onBack }: StudentMana
   const [search, setSearch] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedStudent, setSelectedStudent] = useState<TeacherRosterStudent | null>(null);
+  const [showAddStudentsModal, setShowAddStudentsModal] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [batchRemoving, setBatchRemoving] = useState(false);
 
   const loadStudents = useCallback(async () => {
     setLoading(true);
@@ -129,9 +133,53 @@ export default function StudentManagement({ personalClass, onBack }: StudentMana
         try {
           await removePersonalClassStudent(personalClass.id, studentId);
           message.success(t('teacher_class.remove_success'));
+          setSelectedIds((prev) => {
+            const next = new Set(prev);
+            next.delete(studentId);
+            return next;
+          });
           await loadStudents();
         } catch (e) {
           message.error(e instanceof Error ? e.message : t('teacher_class.remove_fail'));
+        }
+      },
+    });
+  };
+
+  const handleBatchRemove = () => {
+    const ids = [...selectedIds];
+    if (!ids.length) return;
+    Modal.confirm({
+      title: `确认将选中的 ${ids.length} 名学生移出本班？`,
+      content: '移出后学生将不再属于该教学班级，可重新通过「添加学生」加入。',
+      okText: t('teacher_class.confirm_remove_student_ok'),
+      okType: 'danger',
+      cancelText: t('teacher_class.confirm_cancel'),
+      onOk: async () => {
+        setBatchRemoving(true);
+        let okCount = 0;
+        const failed: string[] = [];
+        try {
+          for (const studentId of ids) {
+            try {
+              await removePersonalClassStudent(personalClass.id, studentId);
+              okCount += 1;
+            } catch {
+              failed.push(studentId);
+            }
+          }
+          setSelectedIds(new Set(failed));
+          await loadStudents();
+          if (okCount > 0) {
+            message.success(
+              failed.length ? `已移除 ${okCount} 名，${failed.length} 名失败` : `已移除 ${okCount} 名学生`
+            );
+          }
+          if (failed.length && okCount === 0) {
+            message.error(t('teacher_class.remove_fail'));
+          }
+        } finally {
+          setBatchRemoving(false);
         }
       },
     });
@@ -160,6 +208,32 @@ export default function StudentManagement({ personalClass, onBack }: StudentMana
     setCurrentPage(1);
   }, [search, personalClass.id]);
 
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [personalClass.id]);
+
+  const pageIds = useMemo(() => paginated.map((s) => s.id), [paginated]);
+  const pageAllSelected = pageIds.length > 0 && pageIds.every((id) => selectedIds.has(id));
+  const pageSomeSelected = pageIds.some((id) => selectedIds.has(id));
+
+  const toggleSelectOne = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectPage = () => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (pageAllSelected) pageIds.forEach((id) => next.delete(id));
+      else pageIds.forEach((id) => next.add(id));
+      return next;
+    });
+  };
+
   return (
     <div className="space-y-5">
       <div className="flex items-center gap-3">
@@ -186,8 +260,8 @@ export default function StudentManagement({ personalClass, onBack }: StudentMana
         </div>
       </div> */}
 
-      <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
-        <div className="relative max-w-md">
+      <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 flex items-center gap-3 flex-wrap">
+        <div className="relative flex-1 min-w-[200px] max-w-md">
           <i className="ri-search-line absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm" />
           <input
             type="text"
@@ -197,21 +271,60 @@ export default function StudentManagement({ personalClass, onBack }: StudentMana
             className="w-full pl-9 pr-4 py-2 text-sm border border-gray-200 rounded-lg bg-gray-50 focus:outline-none focus:ring-2 focus:ring-teal-300 focus:bg-white"
           />
         </div>
+        <button
+          type="button"
+          onClick={() => setShowAddStudentsModal(true)}
+          className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-medium cursor-pointer whitespace-nowrap"
+        >
+          <i className="ri-user-add-line" />
+          {t('teacher_class.page.add_students')}
+        </button>
       </div>
 
       <Spin spinning={loading}>
         <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
-          <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
+          <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between gap-3 flex-wrap">
             <span className="text-sm font-semibold text-gray-700">
               共 <span className="text-teal-600">{filtered.length}</span> 名学生
+              {selectedIds.size > 0 && (
+                <span className="text-gray-500 font-normal ml-2">
+                  ，已选 <span className="text-teal-600">{selectedIds.size}</span> 人
+                </span>
+              )}
             </span>
-            <span className="text-xs text-gray-400">第 {currentPage} / {totalPages} 页</span>
+            <div className="flex items-center gap-2">
+              {selectedIds.size > 0 && (
+                <button
+                  type="button"
+                  disabled={batchRemoving}
+                  onClick={handleBatchRemove}
+                  className="px-3 py-1.5 text-sm text-red-600 border border-red-200 rounded-lg hover:bg-red-50 transition-colors cursor-pointer whitespace-nowrap disabled:opacity-50"
+                >
+                  <i className="ri-user-unfollow-line mr-1" />
+                  批量移除
+                </button>
+              )}
+              <span className="text-xs text-gray-400">第 {currentPage} / {totalPages} 页</span>
+            </div>
           </div>
 
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-gray-50 border-b border-gray-100">
                 <tr>
+                  <th className="w-10 px-3 py-3">
+                    <input
+                      type="checkbox"
+                      className="w-4 h-4 rounded border-gray-300 text-teal-600 cursor-pointer"
+                      checked={pageAllSelected}
+                      ref={(el) => {
+                        if (el) el.indeterminate = pageSomeSelected && !pageAllSelected;
+                      }}
+                      onChange={toggleSelectPage}
+                      disabled={paginated.length === 0}
+                      aria-label="全选本页"
+                    />
+                  </th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">
                     {t('teacher_class.page.th_name')}
                   </th>
@@ -230,7 +343,7 @@ export default function StudentManagement({ personalClass, onBack }: StudentMana
               <tbody className="divide-y divide-gray-50">
                 {paginated.length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="px-4 py-16 text-center">
+                    <td colSpan={6} className="px-4 py-16 text-center">
                       <i className="ri-user-line text-4xl text-gray-200 block mb-2" />
                       <p className="text-sm text-gray-400">
                         {loading ? '' : t('teacher_class.page.roster_empty')}
@@ -239,7 +352,19 @@ export default function StudentManagement({ personalClass, onBack }: StudentMana
                   </tr>
                 ) : (
                   paginated.map((student) => (
-                    <tr key={student.id} className="hover:bg-gray-50 transition-colors">
+                    <tr
+                      key={student.id}
+                      className={`hover:bg-gray-50 transition-colors ${selectedIds.has(student.id) ? 'bg-teal-50/40' : ''}`}
+                    >
+                      <td className="px-3 py-3">
+                        <input
+                          type="checkbox"
+                          className="w-4 h-4 rounded border-gray-300 text-teal-600 cursor-pointer"
+                          checked={selectedIds.has(student.id)}
+                          onChange={() => toggleSelectOne(student.id)}
+                          aria-label={`选择 ${student.name}`}
+                        />
+                      </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-3">
                           <div
@@ -318,6 +443,14 @@ export default function StudentManagement({ personalClass, onBack }: StudentMana
           onClose={() => setSelectedStudent(null)}
         />
       )}
+
+      <AddStudentsTransferModal
+        open={showAddStudentsModal}
+        personalClassId={personalClass.id}
+        groupName={personalClass.name}
+        onClose={() => setShowAddStudentsModal(false)}
+        onSaved={() => void loadStudents()}
+      />
     </div>
   );
 }

@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { clearPortalToken, getPortalToken, parseJwtPayload } from '../../lib/authApi';
 import { useSiteBrand } from '../../lib/publicSite';
 import TeamCard, { TeamProject } from './components/TeamCard';
@@ -15,6 +15,9 @@ import ClassManagement from './components/classManagement';
 import StudentManagement from './components/studentManagement';
 import TaskManagement from './components/taskManagement';
 import TeamReview from './components/teamReview';
+import TeamQuestionsPresetPage, {
+  confirmLeaveTeamQuestionsUnsaved,
+} from './components/teamReview/TeamQuestionsPresetPage';
 import TopicReview from './components/topicReview';
 import BusinessPlanReview from './components/businessPlanReview';
 import ClassProjectOverview from '../class-project-overview/page';
@@ -23,6 +26,7 @@ import CourseSettings from '../course-settings/page';
 import EvaluationPanel from './components/EvaluationPanel';
 import {
   getTeacherProfile,
+  listTeacherPersonalClasses,
   type TeacherPersonalClassRow,
   type TeacherProfile,
 } from './teacherPortalApi';
@@ -75,7 +79,7 @@ const sidebarGroups: SidebarGroup[] = [
     groupLabel: '任务与审核',
     items: [
       { key: 'taskManagement', label: '任务发布', icon: 'ri-task-line', type: 'tab' },
-      { key: 'teamReview', label: '组队审核', icon: 'ri-team-line', type: 'tab' },
+      // { key: 'teamReview', label: '组队审核', icon: 'ri-team-line', type: 'tab' },
       { key: 'topicReview', label: '选题审核', icon: 'ri-file-search-line', type: 'tab' },
       { key: 'businessPlanReview', label: '商业计划书审核', icon: 'ri-file-chart-line', type: 'tab' },
     ],
@@ -93,6 +97,37 @@ const sidebarGroups: SidebarGroup[] = [
 
 // flat list for lookup
 const sidebarItems = sidebarGroups.flatMap((g) => g.items);
+
+const TEACHER_TAB_PARAM = 'tab';
+const TEACHER_CLASS_PARAM = 'classId';
+const TEACHER_SUB_PARAM = 'sub';
+
+const ALL_TAB_KEYS: TabKey[] = [
+  'monitor',
+  'analysis',
+  'guidance',
+  'evaluation',
+  'classManagement',
+  'studentManagement',
+  'taskManagement',
+  'teamReview',
+  'topicReview',
+  'businessPlanReview',
+  'classProjectOverview',
+  'teacherGuide',
+  'courseSettings',
+  'courseResources',
+];
+
+function isTabKey(v: string): v is TabKey {
+  return (ALL_TAB_KEYS as string[]).includes(v);
+}
+
+function tabFromSearchParams(sp: URLSearchParams): TabKey {
+  const raw = sp.get(TEACHER_TAB_PARAM);
+  if (raw && isTabKey(raw)) return raw;
+  return 'monitor';
+}
 
 const mockTeams: TeamProject[] = [
   {
@@ -303,7 +338,43 @@ export default function TeacherDashboard() {
   const { logoUrl, siteTitle } = useSiteBrand();
   const brandTitle = siteTitle.trim() || '教师工作台';
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState<TabKey>('monitor');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeTab = tabFromSearchParams(searchParams);
+  const teamReviewSubPage: 'main' | 'questions' =
+    searchParams.get(TEACHER_SUB_PARAM) === 'questions' ? 'questions' : 'main';
+
+  const setTeacherTab = (
+    tab: TabKey,
+    opts?: { classId?: string | null; sub?: 'main' | 'questions' | null }
+  ) => {
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        if (tab === 'monitor') {
+          next.delete(TEACHER_TAB_PARAM);
+          next.delete(TEACHER_CLASS_PARAM);
+          next.delete(TEACHER_SUB_PARAM);
+        } else {
+          next.set(TEACHER_TAB_PARAM, tab);
+        }
+        const needsClass = tab === 'studentManagement' || tab === 'teamReview';
+        if (opts && 'classId' in opts) {
+          if (opts.classId && needsClass) next.set(TEACHER_CLASS_PARAM, opts.classId);
+          else next.delete(TEACHER_CLASS_PARAM);
+        } else if (!needsClass) {
+          next.delete(TEACHER_CLASS_PARAM);
+        }
+        if (opts && 'sub' in opts) {
+          if (opts.sub === 'questions' && tab === 'teamReview') next.set(TEACHER_SUB_PARAM, 'questions');
+          else next.delete(TEACHER_SUB_PARAM);
+        } else if (tab !== 'teamReview') {
+          next.delete(TEACHER_SUB_PARAM);
+        }
+        return next;
+      },
+      { replace: true }
+    );
+  };
   const [selectedTeam, setSelectedTeam] = useState<TeamProject | null>(null);
   const [interveneTeam, setInterveneTeam] = useState<TeamProject | null>(null);
   const [showBatchScoring, setShowBatchScoring] = useState(false);
@@ -313,10 +384,31 @@ export default function TeacherDashboard() {
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [teacherProfile, setTeacherProfile] = useState<TeacherProfile | null>(null);
   const [studentClassContext, setStudentClassContext] = useState<TeacherPersonalClassRow | null>(null);
+  const [teamReviewClassContext, setTeamReviewClassContext] = useState<TeacherPersonalClassRow | null>(null);
+  const [teamQuestionsSavedTick, setTeamQuestionsSavedTick] = useState(0);
+  const [teamQuestionsDirty, setTeamQuestionsDirty] = useState(false);
+
+  const leaveTeamQuestionsPreset = () => {
+    setTeamQuestionsDirty(false);
+    setTeacherTab('teamReview', { sub: 'main' });
+  };
 
   const backFromClassStudents = () => {
     setStudentClassContext(null);
-    setActiveTab('classManagement');
+    setTeacherTab('classManagement', { classId: null, sub: null });
+  };
+
+  const backFromTeamReview = () => {
+    if (teamReviewSubPage === 'questions') {
+      if (teamQuestionsDirty) {
+        confirmLeaveTeamQuestionsUnsaved(leaveTeamQuestionsPreset);
+        return;
+      }
+      leaveTeamQuestionsPreset();
+      return;
+    }
+    setTeamReviewClassContext(null);
+    setTeacherTab('classManagement', { classId: null, sub: null });
   };
 
   const { teacherDisplayName, teacherAvatarChar } = useMemo(() => {
@@ -339,9 +431,39 @@ export default function TeacherDashboard() {
 
   useEffect(() => {
     if (activeTab === 'studentManagement' && !studentClassContext) {
-      setActiveTab('classManagement');
+      setTeacherTab('classManagement', { classId: null, sub: null });
     }
   }, [activeTab, studentClassContext]);
+
+  useEffect(() => {
+    const classId = searchParams.get(TEACHER_CLASS_PARAM);
+    if (!classId) return;
+    if (
+      activeTab !== 'studentManagement' &&
+      activeTab !== 'teamReview'
+    ) {
+      return;
+    }
+    if (
+      (activeTab === 'studentManagement' && studentClassContext?.id === classId) ||
+      (activeTab === 'teamReview' && teamReviewClassContext?.id === classId)
+    ) {
+      return;
+    }
+    let cancelled = false;
+    listTeacherPersonalClasses()
+      .then((list) => {
+        if (cancelled) return;
+        const cls = list.find((c) => c.id === classId);
+        if (!cls) return;
+        if (activeTab === 'studentManagement') setStudentClassContext(cls);
+        if (activeTab === 'teamReview') setTeamReviewClassContext(cls);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, searchParams, studentClassContext?.id, teamReviewClassContext?.id]);
 
   const filteredTeams = mockTeams.filter((t) => {
     const matchStatus = filterStatus === 'all' || t.status === filterStatus;
@@ -354,7 +476,7 @@ export default function TeacherDashboard() {
       navigate(item.to);
       return;
     }
-    setActiveTab(item.key as TabKey);
+    setTeacherTab(item.key as TabKey, { classId: null, sub: null });
   };
 
   const renderContent = () => {
@@ -443,7 +565,11 @@ export default function TeacherDashboard() {
           <ClassManagement
             onOpenClassStudents={(cls) => {
               setStudentClassContext(cls);
-              setActiveTab('studentManagement');
+              setTeacherTab('studentManagement', { classId: cls.id, sub: null });
+            }}
+            onOpenTeamReview={(cls) => {
+              setTeamReviewClassContext(cls);
+              setTeacherTab('teamReview', { classId: cls.id, sub: 'main' });
             }}
           />
         );
@@ -463,7 +589,31 @@ export default function TeacherDashboard() {
         return <TaskManagement />;
 
       case 'teamReview':
-        return <TeamReview />;
+        if (!teamReviewClassContext) {
+          return (
+            <div className="bg-white rounded-xl border border-dashed border-gray-200 py-16 text-center text-gray-500 text-sm">
+              请从「班级管理」进入某个班级的「组队管理」
+            </div>
+          );
+        }
+        if (teamReviewSubPage === 'questions') {
+          return (
+            <TeamQuestionsPresetPage
+              classId={teamReviewClassContext.id}
+              className={teamReviewClassContext.name}
+              onBack={leaveTeamQuestionsPreset}
+              onDirtyChange={setTeamQuestionsDirty}
+              onSaved={() => setTeamQuestionsSavedTick((n) => n + 1)}
+            />
+          );
+        }
+        return (
+          <TeamReview
+            personalClass={teamReviewClassContext}
+            onOpenQuestionsPreset={() => setTeacherTab('teamReview', { sub: 'questions' })}
+            questionsSavedTick={teamQuestionsSavedTick}
+          />
+        );
 
       case 'topicReview':
         return <TopicReview />;
@@ -492,7 +642,7 @@ export default function TeacherDashboard() {
   };
 
   const sidebarHighlightKey =
-    activeTab === 'studentManagement' ? 'classManagement' : activeTab;
+    activeTab === 'studentManagement' || activeTab === 'teamReview' ? 'classManagement' : activeTab;
   const activeItem = sidebarItems.find(
     (item) => item.type === 'tab' && item.key === sidebarHighlightKey
   );
@@ -594,11 +744,25 @@ export default function TeacherDashboard() {
                 返回班级管理
               </button>
             )}
+            {activeTab === 'teamReview' && teamReviewClassContext && (
+              <button
+                type="button"
+                onClick={backFromTeamReview}
+                className="flex items-center gap-1 px-2 py-1 text-sm text-teal-600 hover:bg-teal-50 rounded-lg transition-colors cursor-pointer whitespace-nowrap flex-shrink-0"
+              >
+                <i className="ri-arrow-left-line" />
+                {teamReviewSubPage === 'questions' ? '返回组队管理' : '返回班级管理'}
+              </button>
+            )}
             <div className="min-w-0">
             <h1 className="text-base font-bold text-gray-900 truncate">
               {activeTab === 'studentManagement' && studentClassContext
                 ? `学生管理 — ${studentClassContext.name}`
-                : (activeItem?.label ?? '教师工作台')}
+                : activeTab === 'teamReview' && teamReviewClassContext
+                  ? teamReviewSubPage === 'questions'
+                    ? `组队问题预设 — ${teamReviewClassContext.name}`
+                    : `组队管理 — ${teamReviewClassContext.name}`
+                  : (activeItem?.label ?? '教师工作台')}
             </h1>
             <p className="text-xs text-gray-400 mt-0.5">
               {activeTab === 'monitor' && `共 ${mockTeams.length} 个团队 · ${mockTeams.filter(t => t.status !== 'on-track').length} 个需关注`}
@@ -607,7 +771,12 @@ export default function TeacherDashboard() {
               {activeTab === 'classManagement' && '管理班级信息与学生导入'}
               {activeTab === 'studentManagement' && studentClassContext && `班级「${studentClassContext.name}」学生名册`}
               {activeTab === 'taskManagement' && '发布与管理课程任务'}
-              {activeTab === 'teamReview' && '审核学生组队申请'}
+              {activeTab === 'teamReview' &&
+                (teamReviewClassContext
+                  ? teamReviewSubPage === 'questions'
+                    ? `维护班级「${teamReviewClassContext.name}」组队测评题目（3～10 道）`
+                    : `班级「${teamReviewClassContext.name}」组队管理`
+                  : '组队管理')}
               {activeTab === 'topicReview' && '审核学生选题方案'}
               {activeTab === 'businessPlanReview' && '审核商业计划书提交'}
               {activeTab === 'classProjectOverview' && '多维度查看全班项目进度'}

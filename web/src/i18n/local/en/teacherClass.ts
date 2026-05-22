@@ -53,6 +53,7 @@ export default {
   'teacher_class.page.view_students': 'Students',
   'teacher_class.page.collapse': 'Hide',
   'teacher_class.page.add_students': 'Add students',
+  'teacher_class.page.team_manage': 'Team management',
   'teacher_class.page.roster_title': 'Class roster',
   'teacher_class.page.roster_modal_close': 'Close',
   'teacher_class.page.roster_empty': 'No students — use “Add students” to pick from administrative classes.',
