@@ -1358,17 +1358,24 @@ router.post(
       if (!(await ownsPersonalClass(pool, tid, classId))) {
         return bad(req, res, 404, 40402, '班级不存在或无权操作');
       }
+      const mode = req.body?.mode === 'notify' ? 'notify' : 'confirm';
       const draftTeams = await loadTeamsWithMembers(pool, classId, ['draft']);
       const allTeams = await loadTeamsWithMembers(pool, classId, ['draft', 'confirmed']);
       const teamsToNotify = existingTeamsWithMembers(allTeams);
-      if (!draftTeams.length && !teamsToNotify.length) {
-        return bad(req, res, 400, 40017, '还没有任何团队，请先进行组队');
-      }
-      for (const t of draftTeams) {
-        if (t.members.length < MIN_TEAM_SIZE) {
-          return bad(req, res, 400, 40018, `「${t.name}」人数不足 ${MIN_TEAM_SIZE} 人`);
+
+      if (mode === 'confirm') {
+        if (!draftTeams.length) {
+          return bad(req, res, 400, 40017, '没有待确认的草稿团队');
         }
+        for (const t of draftTeams) {
+          if (t.members.length < MIN_TEAM_SIZE) {
+            return bad(req, res, 400, 40018, `「${t.name}」人数不足 ${MIN_TEAM_SIZE} 人`);
+          }
+        }
+      } else if (!teamsToNotify.length) {
+        return bad(req, res, 400, 40019, '还没有已入队学生，无法发送通知');
       }
+
       const { rows: tpc } = await pool.query(
         `SELECT name FROM teacher_personal_classes WHERE id = $1`,
         [classId]
@@ -1381,7 +1388,7 @@ router.post(
       let notifiedCount = 0;
       try {
         await client.query('BEGIN');
-        if (draftTeams.length) {
+        if (mode === 'confirm') {
           await client.query(
             `UPDATE teacher_personal_class_teams SET grouping_status = 'confirmed', updated_at = now()
              WHERE teacher_personal_class_id = $1 AND grouping_status = 'draft'`,
@@ -1396,21 +1403,22 @@ router.post(
               );
             }
           }
-        }
-        for (const team of teamsToNotify) {
-          for (const m of team.members) {
-            await client.query(
-              `INSERT INTO notifications (receiver_id, sender_id, type, title, content, related_module, related_link, is_read)
-               VALUES ($1, $2, 'team_join', $3, $4, 'team_formation', $5, false)`,
-              [
-                m.id,
-                tid,
-                '你已被编入创业团队',
-                `${teacherName} 已将你编入「${team.name}」（${className}），请进入「组队与团队管理」查看最新团队信息。`,
-                '/student-center?tab=module-team&teamTab=myteam',
-              ]
-            );
-            notifiedCount += 1;
+        } else {
+          for (const team of teamsToNotify) {
+            for (const m of team.members) {
+              await client.query(
+                `INSERT INTO notifications (receiver_id, sender_id, type, title, content, related_module, related_link, is_read)
+                 VALUES ($1, $2, 'team_join', $3, $4, 'team_formation', $5, false)`,
+                [
+                  m.id,
+                  tid,
+                  '你已被编入创业团队',
+                  `${teacherName} 已将你编入「${team.name}」（${className}），请进入「组队与团队管理」查看最新团队信息。`,
+                  '/student-center?tab=module-team&teamTab=myteam',
+                ]
+              );
+              notifiedCount += 1;
+            }
           }
         }
         await client.query('COMMIT');

@@ -13,10 +13,10 @@ import {
 
 type ClassManagementProps = {
   onOpenClassStudents: (cls: TeacherPersonalClassRow) => void;
-  onOpenTeamReview: (cls: TeacherPersonalClassRow) => void;
+  onClassesChanged?: (preferredClass?: TeacherPersonalClassRow) => void;
 };
 
-export default function ClassManagement({ onOpenClassStudents, onOpenTeamReview }: ClassManagementProps) {
+export default function ClassManagement({ onOpenClassStudents, onClassesChanged }: ClassManagementProps) {
   const { t } = useTranslation();
   const { labelByValue: semesterLabel } = usePublicDictOptions('semester', true);
   const [profile, setProfile] = useState<TeacherProfile | null>(null);
@@ -53,6 +53,7 @@ export default function ClassManagement({ onOpenClassStudents, onOpenTeamReview 
           await deleteTeacherPersonalClass(cls.id);
           message.success(t('teacher_class.delete_success'));
           await loadAll();
+          onClassesChanged?.();
         } catch (e) {
           message.error(e instanceof Error ? e.message : t('teacher_class.delete_fail'));
         }
@@ -167,14 +168,6 @@ export default function ClassManagement({ onOpenClassStudents, onOpenTeamReview 
                     </button>
                     <button
                       type="button"
-                      onClick={() => onOpenTeamReview(cls)}
-                      className="flex-1 px-3 py-2 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 transition-colors text-sm font-medium cursor-pointer whitespace-nowrap"
-                    >
-                      <i className="ri-team-line mr-1"></i>
-                      {t('teacher_class.page.team_manage')}
-                    </button>
-                    <button
-                      type="button"
                       onClick={() => handleDeleteClass(cls)}
                       className="px-3 py-2 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors text-sm font-medium cursor-pointer whitespace-nowrap"
                     >
@@ -194,7 +187,10 @@ export default function ClassManagement({ onOpenClassStudents, onOpenTeamReview 
         open={showCreateModal}
         onClose={() => setShowCreateModal(false)}
         profile={profile}
-        onCreated={() => void loadAll()}
+        onCreated={() => {
+          void loadAll();
+          onClassesChanged?.();
+        }}
       />
 
     </div>

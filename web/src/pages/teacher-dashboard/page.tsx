@@ -1,5 +1,6 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Dropdown } from 'antd';
 import { clearPortalToken, getPortalToken, parseJwtPayload } from '../../lib/authApi';
 import { useSiteBrand } from '../../lib/publicSite';
 import TeamCard, { TeamProject } from './components/TeamCard';
@@ -61,6 +62,19 @@ type SidebarGroup = {
 
 const sidebarGroups: SidebarGroup[] = [
   {
+    groupLabel: '班级与学生',
+    items: [
+      { key: 'classManagement', label: '班级管理', icon: 'ri-building-4-line', type: 'tab' },
+      { key: 'teamReview', label: '组队管理', icon: 'ri-team-line', type: 'tab' },
+    ],
+  },
+  {
+    groupLabel: '课程建设',
+    items: [
+      { key: 'courseResources', label: '课程资源', icon: 'ri-user-line', type: 'tab' },
+    ],
+  },
+  {
     groupLabel: '教学监控',
     items: [
       { key: 'monitor', label: '全局项目监控', icon: 'ri-radar-line', type: 'tab' },
@@ -70,27 +84,19 @@ const sidebarGroups: SidebarGroup[] = [
     ],
   },
   {
-    groupLabel: '班级与学生',
-    items: [
-      { key: 'classManagement', label: '班级管理', icon: 'ri-building-4-line', type: 'tab' },
-    ],
-  },
-  {
     groupLabel: '任务与审核',
     items: [
       { key: 'taskManagement', label: '任务发布', icon: 'ri-task-line', type: 'tab' },
-      // { key: 'teamReview', label: '组队审核', icon: 'ri-team-line', type: 'tab' },
       { key: 'topicReview', label: '选题审核', icon: 'ri-file-search-line', type: 'tab' },
       { key: 'businessPlanReview', label: '商业计划书审核', icon: 'ri-file-chart-line', type: 'tab' },
     ],
   },
   {
-    groupLabel: '指南与设置',
+    groupLabel: '指南',//指南与设置
     items: [
       // { key: 'classProjectOverview', label: '班级项目总览', icon: 'ri-layout-grid-line', type: 'tab' },
       { key: 'teacherGuide', label: '教学指南', icon: 'ri-book-open-line', type: 'tab' },
       // { key: 'courseSettings', label: '课程设置', icon: 'ri-settings-3-line', type: 'tab' },
-      { key: 'courseResources', label: '课程资源', icon: 'ri-layout-grid-line', type: 'tab' },
     ],
   },
 ];
@@ -101,6 +107,13 @@ const sidebarItems = sidebarGroups.flatMap((g) => g.items);
 const TEACHER_TAB_PARAM = 'tab';
 const TEACHER_CLASS_PARAM = 'classId';
 const TEACHER_SUB_PARAM = 'sub';
+
+const CLASS_CONTEXT_TABS: TabKey[] = ['taskManagement', 'teamReview', 'studentManagement'];
+
+function earliestClass(list: TeacherPersonalClassRow[]): TeacherPersonalClassRow | null {
+  if (!list.length) return null;
+  return [...list].sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
+}
 
 const ALL_TAB_KEYS: TabKey[] = [
   'monitor',
@@ -357,10 +370,10 @@ export default function TeacherDashboard() {
         } else {
           next.set(TEACHER_TAB_PARAM, tab);
         }
-        const needsClass = tab === 'studentManagement' || tab === 'teamReview';
+        const needsClass = (CLASS_CONTEXT_TABS as string[]).includes(tab);
         if (opts && 'classId' in opts) {
           if (opts.classId && needsClass) next.set(TEACHER_CLASS_PARAM, opts.classId);
-          else next.delete(TEACHER_CLASS_PARAM);
+          else if (!opts.classId) next.delete(TEACHER_CLASS_PARAM);
         } else if (!needsClass) {
           next.delete(TEACHER_CLASS_PARAM);
         }
@@ -383,8 +396,8 @@ export default function TeacherDashboard() {
   const [searchQuery, setSearchQuery] = useState('');
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [teacherProfile, setTeacherProfile] = useState<TeacherProfile | null>(null);
-  const [studentClassContext, setStudentClassContext] = useState<TeacherPersonalClassRow | null>(null);
-  const [teamReviewClassContext, setTeamReviewClassContext] = useState<TeacherPersonalClassRow | null>(null);
+  const [personalClasses, setPersonalClasses] = useState<TeacherPersonalClassRow[]>([]);
+  const [selectedPersonalClass, setSelectedPersonalClass] = useState<TeacherPersonalClassRow | null>(null);
   const [teamQuestionsSavedTick, setTeamQuestionsSavedTick] = useState(0);
   const [teamQuestionsDirty, setTeamQuestionsDirty] = useState(false);
 
@@ -394,7 +407,6 @@ export default function TeacherDashboard() {
   };
 
   const backFromClassStudents = () => {
-    setStudentClassContext(null);
     setTeacherTab('classManagement', { classId: null, sub: null });
   };
 
@@ -405,11 +417,45 @@ export default function TeacherDashboard() {
         return;
       }
       leaveTeamQuestionsPreset();
-      return;
     }
-    setTeamReviewClassContext(null);
-    setTeacherTab('classManagement', { classId: null, sub: null });
   };
+
+  const syncClassToUrl = useCallback((cls: TeacherPersonalClassRow | null) => {
+    if (!cls) return;
+    if (!(CLASS_CONTEXT_TABS as string[]).includes(activeTab)) return;
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.set(TEACHER_CLASS_PARAM, cls.id);
+        return next;
+      },
+      { replace: true }
+    );
+  }, [activeTab, setSearchParams]);
+
+  const onHeaderClassChange = (classId: string) => {
+    const cls = personalClasses.find((c) => c.id === classId);
+    if (!cls) return;
+    setSelectedPersonalClass(cls);
+    syncClassToUrl(cls);
+  };
+
+  const refreshPersonalClasses = useCallback(
+    async (preferredClassId?: string | null) => {
+      const list = await listTeacherPersonalClasses();
+      setPersonalClasses(list);
+      const fromUrl = searchParams.get(TEACHER_CLASS_PARAM);
+      const pick =
+        (preferredClassId ? list.find((c) => c.id === preferredClassId) : null) ??
+        (selectedPersonalClass?.id ? list.find((c) => c.id === selectedPersonalClass.id) : null) ??
+        (fromUrl ? list.find((c) => c.id === fromUrl) : null) ??
+        earliestClass(list);
+      setSelectedPersonalClass(pick ?? null);
+      if (preferredClassId && pick) syncClassToUrl(pick);
+      return pick ?? null;
+    },
+    [searchParams, selectedPersonalClass?.id, syncClassToUrl]
+  );
 
   const { teacherDisplayName, teacherAvatarChar } = useMemo(() => {
     const token = getPortalToken('teacher');
@@ -430,40 +476,29 @@ export default function TeacherDashboard() {
   }, []);
 
   useEffect(() => {
-    if (activeTab === 'studentManagement' && !studentClassContext) {
-      setTeacherTab('classManagement', { classId: null, sub: null });
-    }
-  }, [activeTab, studentClassContext]);
-
-  useEffect(() => {
-    const classId = searchParams.get(TEACHER_CLASS_PARAM);
-    if (!classId) return;
-    if (
-      activeTab !== 'studentManagement' &&
-      activeTab !== 'teamReview'
-    ) {
-      return;
-    }
-    if (
-      (activeTab === 'studentManagement' && studentClassContext?.id === classId) ||
-      (activeTab === 'teamReview' && teamReviewClassContext?.id === classId)
-    ) {
-      return;
-    }
     let cancelled = false;
-    listTeacherPersonalClasses()
-      .then((list) => {
+    refreshPersonalClasses()
+      .then(() => {
         if (cancelled) return;
-        const cls = list.find((c) => c.id === classId);
-        if (!cls) return;
-        if (activeTab === 'studentManagement') setStudentClassContext(cls);
-        if (activeTab === 'teamReview') setTeamReviewClassContext(cls);
       })
       .catch(() => {});
     return () => {
       cancelled = true;
     };
-  }, [activeTab, searchParams, studentClassContext?.id, teamReviewClassContext?.id]);
+  }, []);
+
+  useEffect(() => {
+    const classId = searchParams.get(TEACHER_CLASS_PARAM);
+    if (!classId || selectedPersonalClass?.id === classId) return;
+    const cls = personalClasses.find((c) => c.id === classId);
+    if (cls) setSelectedPersonalClass(cls);
+  }, [searchParams, personalClasses, selectedPersonalClass?.id]);
+
+  useEffect(() => {
+    if (activeTab === 'studentManagement' && !selectedPersonalClass) {
+      setTeacherTab('classManagement', { classId: null, sub: null });
+    }
+  }, [activeTab, selectedPersonalClass]);
 
   const filteredTeams = mockTeams.filter((t) => {
     const matchStatus = filterStatus === 'all' || t.status === filterStatus;
@@ -476,7 +511,11 @@ export default function TeacherDashboard() {
       navigate(item.to);
       return;
     }
-    setTeacherTab(item.key as TabKey, { classId: null, sub: null });
+    const key = item.key as TabKey;
+    const classId = (CLASS_CONTEXT_TABS as string[]).includes(key)
+      ? selectedPersonalClass?.id ?? null
+      : null;
+    setTeacherTab(key, { classId, sub: null });
   };
 
   const renderContent = () => {
@@ -564,43 +603,49 @@ export default function TeacherDashboard() {
         return (
           <ClassManagement
             onOpenClassStudents={(cls) => {
-              setStudentClassContext(cls);
+              setSelectedPersonalClass(cls);
               setTeacherTab('studentManagement', { classId: cls.id, sub: null });
             }}
-            onOpenTeamReview={(cls) => {
-              setTeamReviewClassContext(cls);
-              setTeacherTab('teamReview', { classId: cls.id, sub: 'main' });
+            onClassesChanged={() => {
+              void refreshPersonalClasses();
             }}
           />
         );
 
       case 'studentManagement':
-        if (!studentClassContext) {
+        if (!selectedPersonalClass) {
           return null;
         }
         return (
           <StudentManagement
-            personalClass={studentClassContext}
+            personalClass={selectedPersonalClass}
             onBack={backFromClassStudents}
           />
         );
 
       case 'taskManagement':
-        return <TaskManagement />;
-
-      case 'teamReview':
-        if (!teamReviewClassContext) {
+        if (!selectedPersonalClass) {
           return (
             <div className="bg-white rounded-xl border border-dashed border-gray-200 py-16 text-center text-gray-500 text-sm">
-              请从「班级管理」进入某个班级的「组队管理」
+              请先在右上角选择班级
+            </div>
+          );
+        }
+        return <TaskManagement personalClass={selectedPersonalClass} />;
+
+      case 'teamReview':
+        if (!selectedPersonalClass) {
+          return (
+            <div className="bg-white rounded-xl border border-dashed border-gray-200 py-16 text-center text-gray-500 text-sm">
+              请先在右上角选择班级
             </div>
           );
         }
         if (teamReviewSubPage === 'questions') {
           return (
             <TeamQuestionsPresetPage
-              classId={teamReviewClassContext.id}
-              className={teamReviewClassContext.name}
+              classId={selectedPersonalClass.id}
+              className={selectedPersonalClass.name}
               onBack={leaveTeamQuestionsPreset}
               onDirtyChange={setTeamQuestionsDirty}
               onSaved={() => setTeamQuestionsSavedTick((n) => n + 1)}
@@ -609,7 +654,7 @@ export default function TeacherDashboard() {
         }
         return (
           <TeamReview
-            personalClass={teamReviewClassContext}
+            personalClass={selectedPersonalClass}
             onOpenQuestionsPreset={() => setTeacherTab('teamReview', { sub: 'questions' })}
             questionsSavedTick={teamQuestionsSavedTick}
           />
@@ -641,11 +686,11 @@ export default function TeacherDashboard() {
     }
   };
 
-  const sidebarHighlightKey =
-    activeTab === 'studentManagement' || activeTab === 'teamReview' ? 'classManagement' : activeTab;
+  const sidebarHighlightKey = activeTab === 'studentManagement' ? 'classManagement' : activeTab;
   const activeItem = sidebarItems.find(
     (item) => item.type === 'tab' && item.key === sidebarHighlightKey
   );
+  const groupLabelsWithClass = new Set(['课程建设', '教学监控', '任务与审核']);
 
   return (
     <div className="flex h-screen bg-gray-50 overflow-hidden">
@@ -677,6 +722,9 @@ export default function TeacherDashboard() {
                   <div className="px-3 mb-1">
                     <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
                       {group.groupLabel}
+                      {selectedPersonalClass && groupLabelsWithClass.has(group.groupLabel) && (
+                        <span className="ml-1">| {selectedPersonalClass.name}</span>
+                      )}
                     </span>
                   </div>
                 )}
@@ -734,7 +782,7 @@ export default function TeacherDashboard() {
         {/* 顶部 Header */}
         <header className="bg-white border-b border-gray-100 shadow-sm flex-shrink-0 px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3 min-w-0">
-            {activeTab === 'studentManagement' && studentClassContext && (
+            {activeTab === 'studentManagement' && selectedPersonalClass && (
               <button
                 type="button"
                 onClick={backFromClassStudents}
@@ -744,24 +792,24 @@ export default function TeacherDashboard() {
                 返回班级管理
               </button>
             )}
-            {activeTab === 'teamReview' && teamReviewClassContext && (
+            {activeTab === 'teamReview' && teamReviewSubPage === 'questions' && selectedPersonalClass && (
               <button
                 type="button"
                 onClick={backFromTeamReview}
                 className="flex items-center gap-1 px-2 py-1 text-sm text-teal-600 hover:bg-teal-50 rounded-lg transition-colors cursor-pointer whitespace-nowrap flex-shrink-0"
               >
                 <i className="ri-arrow-left-line" />
-                {teamReviewSubPage === 'questions' ? '返回组队管理' : '返回班级管理'}
+                返回组队管理
               </button>
             )}
             <div className="min-w-0">
             <h1 className="text-base font-bold text-gray-900 truncate">
-              {activeTab === 'studentManagement' && studentClassContext
-                ? `学生管理 — ${studentClassContext.name}`
-                : activeTab === 'teamReview' && teamReviewClassContext
+              {activeTab === 'studentManagement' && selectedPersonalClass
+                ? `学生管理 — ${selectedPersonalClass.name}`
+                : activeTab === 'teamReview' && selectedPersonalClass
                   ? teamReviewSubPage === 'questions'
-                    ? `组队问题预设 — ${teamReviewClassContext.name}`
-                    : `组队管理 — ${teamReviewClassContext.name}`
+                    ? `组队问题预设 — ${selectedPersonalClass.name}`
+                    : `组队管理 — ${selectedPersonalClass.name}`
                   : (activeItem?.label ?? '教师工作台')}
             </h1>
             <p className="text-xs text-gray-400 mt-0.5">
@@ -769,13 +817,13 @@ export default function TeacherDashboard() {
               {activeTab === 'analysis' && '智能分析学生学习数据'}
               {activeTab === 'guidance' && '动态生成教学引导策略'}
               {activeTab === 'classManagement' && '管理班级信息与学生导入'}
-              {activeTab === 'studentManagement' && studentClassContext && `班级「${studentClassContext.name}」学生名册`}
+              {activeTab === 'studentManagement' && selectedPersonalClass && `班级「${selectedPersonalClass.name}」学生名册`}
               {activeTab === 'taskManagement' && '发布与管理课程任务'}
               {activeTab === 'teamReview' &&
-                (teamReviewClassContext
+                (selectedPersonalClass
                   ? teamReviewSubPage === 'questions'
-                    ? `维护班级「${teamReviewClassContext.name}」组队测评题目（3～10 道）`
-                    : `班级「${teamReviewClassContext.name}」组队管理`
+                    ? `维护班级「${selectedPersonalClass.name}」组队测评题目（3～10 道）`
+                    : `班级「${selectedPersonalClass.name}」组队管理`
                   : '组队管理')}
               {activeTab === 'topicReview' && '审核学生选题方案'}
               {activeTab === 'businessPlanReview' && '审核商业计划书提交'}
@@ -788,6 +836,32 @@ export default function TeacherDashboard() {
             </div>
           </div>
           <div className="flex items-center gap-3">
+            {personalClasses.length > 0 && (
+              <Dropdown
+                menu={{
+                  items: personalClasses.map((c) => ({ key: c.id, label: c.name })),
+                  selectedKeys: selectedPersonalClass?.id ? [selectedPersonalClass.id] : [],
+                  onClick: ({ key }) => onHeaderClassChange(String(key)),
+                }}
+                trigger={['click']}
+                disabled={personalClasses.length <= 1}
+              >
+                <button
+                  type="button"
+                  className={`flex items-center gap-2 px-3 py-1.5 text-sm font-medium border rounded-lg whitespace-nowrap transition-colors ${
+                    personalClasses.length > 1
+                      ? 'text-teal-700 bg-teal-50 border-teal-200 hover:bg-teal-100 cursor-pointer'
+                      : 'text-gray-700 bg-gray-50 border-gray-200 cursor-default'
+                  }`}
+                >
+                  <i className="ri-building-4-line text-teal-600" />
+                  <span className="max-w-[180px] truncate">
+                    {selectedPersonalClass?.name ?? '选择班级'}
+                  </span>
+                  {personalClasses.length > 1 && <i className="ri-arrow-down-s-line" />}
+                </button>
+              </Dropdown>
+            )}
             <button className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors cursor-pointer relative">
               <i className="ri-notification-3-line text-base"></i>
               <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>

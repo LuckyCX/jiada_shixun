@@ -4,8 +4,8 @@ import { clearPortalToken, getPortalToken, parseJwtPayload } from '../../lib/aut
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useSiteBrand } from '../../lib/publicSite';
 import LearningDetail from '../knowledge-system/components/LearningDetail';
-import QuizModal from './components/QuizModal';
-import { quizBank } from '../../mocks/quizBank';
+import QuizModal, { type QuizConfig } from './components/QuizModal';
+import { fetchStudentKnowledgeQuiz } from '../../lib/courseResourceApi';
 import {
   fetchStudentNotifications,
   markStudentNotificationRead,
@@ -29,7 +29,14 @@ import {
   fetchStudentMyTeam,
   fetchTeamSubmission,
   isTeamFormationDone,
+  type GroupingTeam,
 } from '../../lib/teamFormationApi';
+import {
+  downloadStudentTaskAttachment,
+  fetchStudentTodoTasks,
+  TRAINING_ID_TO_TAB,
+  type StudentTodoTask,
+} from '../../lib/personalClassTaskApi';
 
 const TRAINING_MODULE_ORDER = ['team', 'ideation', 'market', 'product', 'business', 'simulation', 'plan'] as const;
 
@@ -106,6 +113,8 @@ export default function StudentCenterPage() {
   const [knowledgeSubTab, setKnowledgeSubTab] = useState<'overview' | 'knowledge' | 'ability' | 'progress'>('overview');
   const [selectedModule, setSelectedModule] = useState<string>('all');
   const [activeQuizId, setActiveQuizId] = useState<string | null>(null);
+  const [activeQuizConfig, setActiveQuizConfig] = useState<QuizConfig | null>(null);
+  const [quizLoadingId, setQuizLoadingId] = useState<string | null>(null);
   const [quizStates, setQuizStates] = useState<KnowledgeQuizState>({});
   const [completedKnowledgeIds, setCompletedKnowledgeIds] = useState<Set<string>>(new Set(['k_ideation_1']));
   const [moduleProgressState, setModuleProgressState] = useState<Record<string, number>>({
@@ -126,6 +135,9 @@ export default function StudentCenterPage() {
   const [studentProfile, setStudentProfile] = useState<StudentProfile | null>(null);
   const [enrollments, setEnrollments] = useState<StudentPersonalEnrollment[]>([]);
   const [selectedClassId, setSelectedClassId] = useState<string>('');
+  const [studentTodoTasks, setStudentTodoTasks] = useState<StudentTodoTask[]>([]);
+  const [overviewMyTeam, setOverviewMyTeam] = useState<GroupingTeam | null>(null);
+  const [overviewPanelTab, setOverviewPanelTab] = useState<'notifications' | 'tasks'>('notifications');
   const teamGuideShownRef = useRef(false);
 
   const selectedEnrollment = useMemo(
@@ -156,6 +168,7 @@ export default function StudentCenterPage() {
   const refreshTeamFormationComplete = useCallback(() => {
     if (!selectedClassId) {
       setTeamFormationComplete(false);
+      setOverviewMyTeam(null);
       return;
     }
     void Promise.all([
@@ -163,14 +176,37 @@ export default function StudentCenterPage() {
       fetchStudentMyTeam(selectedClassId).catch(() => null),
     ])
       .then(([sub, team]) => {
-        setTeamFormationComplete(sub.status === 'confirmed' || Boolean(team));
+        const mine = team as GroupingTeam | null;
+        setOverviewMyTeam(mine);
+        setTeamFormationComplete(sub.status === 'confirmed' || Boolean(mine));
       })
-      .catch(() => setTeamFormationComplete(false));
+      .catch(() => {
+        setTeamFormationComplete(false);
+        setOverviewMyTeam(null);
+      });
   }, [selectedClassId]);
 
   useEffect(() => {
     refreshTeamFormationComplete();
   }, [refreshTeamFormationComplete]);
+
+  useEffect(() => {
+    if (!selectedClassId) {
+      setStudentTodoTasks([]);
+      return;
+    }
+    let cancelled = false;
+    fetchStudentTodoTasks(selectedClassId)
+      .then((res) => {
+        if (!cancelled) setStudentTodoTasks(res.tasks);
+      })
+      .catch(() => {
+        if (!cancelled) setStudentTodoTasks([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedClassId]);
 
   useEffect(() => {
     if (!selectedClassId || teamGuideShownRef.current) return;
@@ -279,6 +315,27 @@ export default function StudentCenterPage() {
     { moduleId: 'plan', moduleName: '商业计划书要点', totalKnowledge: 4, completedKnowledge: moduleProgressState.plan, totalTasks: 2, completedTasks: 0, status: getModuleUnlockStatus('plan'), color: 'from-teal-500 to-teal-600' },
   ];
 
+  /** 未解锁时提示需先完成的实训阶段（与侧边栏解锁规则一致） */
+  const getPrerequisiteStageHint = (targetModuleId: string): string | null => {
+    const idx = TRAINING_MODULE_ORDER.indexOf(targetModuleId as (typeof TRAINING_MODULE_ORDER)[number]);
+    if (idx < 0) return null;
+    if (getSidebarModuleUi(targetModuleId).locked) {
+      if (!teamFormationComplete) {
+        const teamName = moduleProgress.find((m) => m.moduleId === 'team')?.moduleName ?? '组队与团队管理';
+        return `请完成实训模块第1阶段任务：${teamName}`;
+      }
+      for (let i = 0; i < idx; i++) {
+        const prevId = TRAINING_MODULE_ORDER[i];
+        if (!isModuleCompletedByProgress(prevId)) {
+          const stage = i + 1;
+          const name = moduleProgress.find((m) => m.moduleId === prevId)?.moduleName ?? prevId;
+          return `请完成实训模块第${stage}阶段任务：${name}`;
+        }
+      }
+    }
+    return null;
+  };
+
   const knowledgePoints = [
     { id: 'k_ideation_1', name: '头脑风暴法', module: 'ideation', description: '掌握头脑风暴、延迟判断等核心创新思维工具', status: completedKnowledgeIds.has('k_ideation_1') ? 'completed' : 'learning', progress: completedKnowledgeIds.has('k_ideation_1') ? 100 : 65, abilityPoints: ['创新思维'], resources: [{ type: 'video', name: '头脑风暴法导论' }, { type: 'document', name: '实施指南' }], quizId: 'k_ideation_1' },
     { id: 'k_ideation_2', name: 'SCAMPER创新法', module: 'ideation', description: '掌握SCAMPER七大创新维度，学会系统化创新', status: completedKnowledgeIds.has('k_ideation_2') ? 'completed' : 'learning', progress: completedKnowledgeIds.has('k_ideation_2') ? 100 : 40, abilityPoints: ['创新思维', '系统思维'], resources: [{ type: 'video', name: 'SCAMPER方法详解' }, { type: 'document', name: '实战手册' }], quizId: 'k_ideation_2' },
@@ -322,6 +379,22 @@ export default function StudentCenterPage() {
     setQuizStates((prev) => ({ ...prev, [knowledgeId]: 'passed' }));
     setCompletedKnowledgeIds((prev) => new Set([...prev, knowledgeId]));
     setModuleProgressState((prev) => ({ ...prev, [moduleId]: Math.min((prev[moduleId] || 0) + 1, 99) }));
+  };
+
+  const startKnowledgeQuiz = async (knowledgeId: string) => {
+    setQuizLoadingId(knowledgeId);
+    try {
+      const config = await fetchStudentKnowledgeQuiz(knowledgeId);
+      setActiveQuizConfig(config);
+      setActiveQuizId(knowledgeId);
+    } catch (e) {
+      notification.warning({
+        message: '暂无检测题',
+        description: e instanceof Error ? e.message : '该知识点暂未配置检测题',
+      });
+    } finally {
+      setQuizLoadingId(null);
+    }
   };
 
   const unreadCount = notificationList.filter(n => !n.isRead).length;
@@ -384,6 +457,7 @@ export default function StudentCenterPage() {
       case 'reminder': return 'bg-orange-100 text-orange-700';
       case 'evaluation': return 'bg-purple-100 text-purple-700';
       case 'team_join': return 'bg-cyan-100 text-cyan-800';
+      case 'system': return 'bg-blue-100 text-blue-700';
       default: return 'bg-gray-100 text-gray-700';
     }
   };
@@ -394,6 +468,7 @@ export default function StudentCenterPage() {
       case 'reminder': return '督促通知';
       case 'evaluation': return '评价反馈';
       case 'team_join': return '加入团队';
+      case 'system': return '系统通知';
       default: return '消息';
     }
   };
@@ -403,7 +478,7 @@ export default function StudentCenterPage() {
     { key: 'knowledge' as TabType, label: '实践课程', icon: 'ri-book-2-line' },
     { key: 'ability' as TabType, label: '能力点管理', icon: 'ri-medal-line' },
     { key: 'archive' as TabType, label: '学习档案', icon: 'ri-folder-line' },
-    { key: 'notifications' as TabType, label: '消息通知', icon: 'ri-notification-line' },
+    // { key: 'notifications' as TabType, label: '消息通知', icon: 'ri-notification-line' },
   ];
 
   const getModuleProgress = (moduleId: string): number => getModuleProgressPercent(moduleId);
@@ -455,20 +530,62 @@ export default function StudentCenterPage() {
 
   const filteredKnowledge = selectedModule === 'all' ? knowledgePoints : knowledgePoints.filter(k => k.module === selectedModule);
 
-  const todoTasks = [
-    { id: 't1', type: 'task' as const, title: '创意筛选报告提交', module: '创新思维与创意生成', moduleKey: 'module-ideation', daysLeft: 2, priority: 'urgent' as const, quizId: undefined as string | undefined },
-    { id: 't2', type: 'task' as const, title: '用户访谈记录整理', module: '市场调研与用户画像', moduleKey: 'module-market', daysLeft: 5, priority: 'normal' as const, quizId: undefined as string | undefined },
-    { id: 't3', type: 'task' as const, title: '产品原型设计稿', module: '产品设计与原型', moduleKey: 'module-product', daysLeft: 7, priority: 'normal' as const, quizId: undefined as string | undefined },
-    { id: 't4', type: 'quiz' as const, title: 'SCAMPER创新法 — 学习检测', module: '创新思维与创意生成', moduleKey: 'knowledge', daysLeft: 3, priority: 'urgent' as const, quizId: 'k_ideation_2' },
-    { id: 't5', type: 'quiz' as const, title: '用户画像构建 — 学习检测', module: '市场调研与用户画像', moduleKey: 'knowledge', daysLeft: 6, priority: 'normal' as const, quizId: 'k_market_2' },
-  ];
+  type TodoListItem = {
+    id: string;
+    title: string;
+    module: string;
+    moduleKey: TabType;
+    trainingModuleId?: string;
+    daysLeft: number;
+    priority: 'urgent' | 'high' | 'normal' | 'low';
+    attachments: StudentTodoTask['attachments'];
+  };
 
-  const activeTodoTasks = todoTasks.filter(task => {
-    if (task.type === 'quiz' && task.quizId && completedKnowledgeIds.has(task.quizId)) return false;
-    return true;
-  });
+  const activeTodoTasks: TodoListItem[] = studentTodoTasks.map((t) => ({
+    id: t.id,
+    title: t.title,
+    module: t.module,
+    moduleKey: (t.moduleId && (TRAINING_ID_TO_TAB[t.moduleId] as TabType)) || 'overview',
+    trainingModuleId: t.moduleId ?? undefined,
+    daysLeft: t.daysLeft,
+    priority: t.priority,
+    attachments: t.attachments ?? [],
+  }));
 
-  const urgentCount = activeTodoTasks.filter(t => t.priority === 'urgent').length;
+  const completedStagesCount = useMemo(() => {
+    let n = 0;
+    for (const id of TRAINING_MODULE_ORDER) {
+      if (id === 'team') {
+        if (teamFormationComplete) n += 1;
+      } else if (isModuleCompletedByProgress(id)) {
+        n += 1;
+      }
+    }
+    return n;
+  }, [teamFormationComplete, moduleProgressState]);
+
+  const overallProgressPercent = Math.round((completedStagesCount / TRAINING_MODULE_ORDER.length) * 100);
+
+  const currentStageLabel = useMemo(() => {
+    if (!teamFormationComplete) {
+      return moduleProgress.find((m) => m.moduleId === 'team')?.moduleName ?? '组队与团队管理';
+    }
+    const inProgress = moduleProgress.find((m) => getModuleUnlockStatus(m.moduleId) === 'in_progress');
+    if (inProgress) return inProgress.moduleName;
+    return moduleProgress[moduleProgress.length - 1]?.moduleName ?? '—';
+  }, [teamFormationComplete, moduleProgressState, moduleProgress]);
+
+  const overviewHeroTitle =
+    overviewMyTeam?.name?.trim() || selectedEnrollment?.className?.trim() || '我的实训项目';
+
+  const formatTeamCreatedAt = (iso?: string) => {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '';
+    return d.toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' });
+  };
+
+  const urgentCount = activeTodoTasks.filter((t) => t.priority === 'urgent' || t.priority === 'high').length;
 
   if (showLearningDetail) {
     return <LearningDetail onBack={() => setShowLearningDetail(false)} />;
@@ -561,10 +678,6 @@ export default function StudentCenterPage() {
                 <div className="text-xs text-teal-600 truncate">{overallProgress.currentLevel}</div>
               </div>
             </div>
-            <div className="w-full bg-teal-100 rounded-full h-1.5 overflow-hidden">
-              <div className="h-full bg-gradient-to-r from-teal-500 to-cyan-500 rounded-full" style={{ width: `${overallProgress.levelProgress}%` }} />
-            </div>
-            <div className="text-xs text-gray-500 mt-1">{overallProgress.levelProgress}% → {overallProgress.nextLevel}</div>
           </div>
         )}
 
@@ -708,8 +821,12 @@ export default function StudentCenterPage() {
                 selectedClassId={selectedClassId}
                 onClassChange={handleClassChange}
               />
-              <div className="flex items-center gap-2 px-3 py-1.5 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors whitespace-nowrap cursor-pointer">
-                <i className="ri-trophy-line"></i><span>{overallProgress.currentLevel}</span>
+              <div className="flex items-center gap-2 px-3 py-1.5 text-sm text-gray-600 bg-gray-50 border border-gray-100 rounded-lg whitespace-nowrap">
+                <i className="ri-trophy-line text-teal-600"></i>
+                <span>{overallProgress.currentLevel}</span>
+                <span className="text-xs text-gray-400">
+                  {overallProgress.levelProgress}% → {overallProgress.nextLevel}
+                </span>
               </div>
             </div>
           </div>
@@ -730,27 +847,31 @@ export default function StudentCenterPage() {
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-3 mb-1">
-                      <h1 className="text-2xl font-bold text-white">校园快递创新项目</h1>
-                      <span className="px-2.5 py-0.5 bg-white/20 text-white rounded-full text-xs font-medium border border-white/30 whitespace-nowrap cursor-pointer">创新创业实训课程</span>
+                      <h1 className="text-2xl font-bold text-white truncate">{overviewHeroTitle}</h1>
+                      <span className="px-2.5 py-0.5 bg-white/20 text-white rounded-full text-xs font-medium border border-white/30 whitespace-nowrap">创新创业实训课程</span>
                     </div>
-                    <div className="flex items-center gap-5 text-sm text-white/80">
+                    <div className="flex items-center gap-5 text-sm text-white/80 flex-wrap">
                       <span className="flex items-center gap-1.5">
                         <i className="ri-team-line"></i>
                         {selectedEnrollment?.className ?? '未加入教学班级'}
                         {enrollments.length > 1 ? ` · 已选 ${enrollments.length} 个班级` : ''}
                       </span>
-                      <span className="flex items-center gap-1.5"><i className="ri-map-pin-line"></i>当前阶段：市场调研与用户画像</span>
+                      <span className="flex items-center gap-1.5">
+                        <i className="ri-map-pin-line"></i>当前阶段：{currentStageLabel}
+                      </span>
                     </div>
                   </div>
                   <div className="flex-shrink-0 text-center bg-white/10 backdrop-blur-md rounded-2xl px-8 py-4 border border-white/20">
-                    <div className="text-4xl font-bold text-white mb-1">43%</div>
+                    <div className="text-4xl font-bold text-white mb-1">{overallProgressPercent}%</div>
                     <div className="text-xs text-white/70 mb-2">项目整体进度</div>
                     <div className="w-24 h-1.5 bg-white/20 rounded-full overflow-hidden mx-auto">
-                      <div className="h-full bg-white rounded-full" style={{ width: '43%' }}></div>
+                      <div className="h-full bg-white rounded-full" style={{ width: `${overallProgressPercent}%` }}></div>
                     </div>
                   </div>
                   <div className="flex-shrink-0 bg-white/10 backdrop-blur-md rounded-2xl px-6 py-4 border border-white/20 text-center">
-                    <div className="text-3xl font-bold text-white mb-1">3/7</div>
+                    <div className="text-3xl font-bold text-white mb-1">
+                      {completedStagesCount}/{TRAINING_MODULE_ORDER.length}
+                    </div>
                     <div className="text-xs text-white/70">已完成阶段</div>
                   </div>
                 </div>
@@ -812,61 +933,196 @@ export default function StudentCenterPage() {
 
               {/* 待办任务 */}
               <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
-                <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
                   <h3 className="text-base font-bold text-gray-900 flex items-center gap-2">
-                    <i className="ri-todo-line text-teal-600"></i>待办任务
-                    {urgentCount > 0 && <span className="px-2 py-0.5 bg-red-500 text-white text-xs font-bold rounded-full">{urgentCount} 紧急</span>}
+                    <i className="ri-todo-line text-teal-600"></i>通知•待办任务
                   </h3>
-                  <span className="text-xs text-gray-400">{activeTodoTasks.length} 项待完成</span>
-                </div>
-                {activeTodoTasks.length === 0 ? (
-                  <div className="py-8 text-center">
-                    <div className="w-14 h-14 bg-green-50 rounded-full flex items-center justify-center mx-auto mb-3">
-                      <i className="ri-checkbox-circle-line text-2xl text-green-500"></i>
-                    </div>
-                    <p className="text-sm font-medium text-gray-700">所有任务已完成！🎉</p>
+                  <div className="flex items-center gap-1 bg-gray-100 rounded-xl p-1">
+                    <button
+                      type="button"
+                      onClick={() => setOverviewPanelTab('notifications')}
+                      className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all whitespace-nowrap cursor-pointer ${
+                        overviewPanelTab === 'notifications'
+                          ? 'bg-white text-teal-600 shadow-sm'
+                          : 'text-gray-500 hover:text-gray-700'
+                      }`}
+                    >
+                      通知{unreadCount > 0 ? ` ${unreadCount}` : ''}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setOverviewPanelTab('tasks')}
+                      className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all whitespace-nowrap cursor-pointer ${
+                        overviewPanelTab === 'tasks'
+                          ? 'bg-white text-teal-600 shadow-sm'
+                          : 'text-gray-500 hover:text-gray-700'
+                      }`}
+                    >
+                      任务 {activeTodoTasks.length}
+                      {urgentCount > 0 ? ` · ${urgentCount} 紧急` : ''}
+                    </button>
                   </div>
-                ) : (
-                  <div className="space-y-2.5">
-                    {activeTodoTasks.map((task) => {
-                      const isUrgent = task.priority === 'urgent';
-                      const isQuiz = task.type === 'quiz';
-                      return (
-                        <div key={task.id}
-                          className={`flex items-center gap-3 p-3.5 rounded-xl border transition-all hover:shadow-sm cursor-pointer ${isUrgent ? 'border-red-200 bg-red-50/40' : 'border-gray-100 bg-gray-50/50 hover:border-teal-200'}`}
-                          onClick={() => { if (isQuiz && task.quizId) setActiveQuizId(task.quizId); else setActiveTab(task.moduleKey as TabType); }}
+                </div>
+                {overviewPanelTab === 'notifications' ? (
+                  notificationList.length === 0 ? (
+                    <div className="py-8 text-center">
+                      <div className="w-14 h-14 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-3">
+                        <i className="ri-notification-line text-2xl text-gray-400"></i>
+                      </div>
+                      <p className="text-sm font-medium text-gray-700">暂无系统通知</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2.5">
+                      {notificationList.slice(0, 5).map((notice) => (
+                        <div
+                          key={notice.id}
+                          className={`flex items-start gap-3 p-3.5 rounded-xl border transition-all ${
+                            notice.isRead ? 'border-gray-100 bg-gray-50/50' : 'border-teal-200 bg-teal-50/50'
+                          }`}
                         >
-                          <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${isQuiz ? 'bg-gradient-to-br from-teal-500 to-cyan-600' : isUrgent ? 'bg-gradient-to-br from-red-500 to-orange-500' : 'bg-gradient-to-br from-orange-400 to-orange-500'}`}>
-                            <i className={`text-white text-sm ${isQuiz ? 'ri-edit-2-line' : 'ri-task-line'}`}></i>
+                          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-teal-500 to-cyan-600 flex items-center justify-center flex-shrink-0">
+                            <i className="ri-notification-3-line text-white text-sm"></i>
                           </div>
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2 mb-0.5 flex-wrap">
-                              <span className="font-semibold text-gray-900 text-sm truncate">{task.title}</span>
-                              <span className={`px-1.5 py-0.5 rounded text-xs font-medium flex-shrink-0 ${isQuiz ? 'bg-teal-100 text-teal-700' : 'bg-orange-100 text-orange-700'}`}>{isQuiz ? '知识检测' : '实训任务'}</span>
-                              {isUrgent && <span className="flex items-center gap-0.5 px-1.5 py-0.5 bg-red-100 text-red-600 rounded text-xs font-bold flex-shrink-0"><i className="ri-alarm-warning-line"></i>紧急</span>}
-                            </div>
-                            <div className="flex items-center gap-3 text-xs text-gray-400">
-                              <span className="truncate"><i className="ri-folder-line mr-1"></i>{task.module}</span>
-                              <span className={`flex-shrink-0 font-medium ${task.daysLeft <= 3 ? 'text-red-500' : 'text-gray-400'}`}>
-                                <i className="ri-calendar-line mr-1"></i>{task.daysLeft <= 0 ? '已逾期' : task.daysLeft === 1 ? '明天截止' : `还剩 ${task.daysLeft} 天`}
+                              <span className="font-semibold text-gray-900 text-sm truncate">{notice.title}</span>
+                              <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${getNotificationTypeStyle(notice.type)}`}>
+                                {getNotificationTypeText(notice.type)}
                               </span>
+                              {!notice.isRead && (
+                                <span className="px-1.5 py-0.5 bg-red-100 text-red-600 rounded text-xs font-bold">未读</span>
+                              )}
                             </div>
+                            <p className="text-xs text-gray-500 line-clamp-2">{notice.content}</p>
+                            <div className="text-xs text-gray-400 mt-1">{notice.timestamp}</div>
                           </div>
-                          <button onClick={(e) => { e.stopPropagation(); if (isQuiz && task.quizId) setActiveQuizId(task.quizId); else setActiveTab(task.moduleKey as TabType); }}
-                            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all whitespace-nowrap cursor-pointer flex-shrink-0 ${isUrgent ? 'bg-red-500 hover:bg-red-600 text-white' : 'bg-gradient-to-r from-teal-500 to-cyan-600 text-white hover:shadow-md'}`}
-                          >
-                            {isQuiz ? '去检测' : '去完成'}<i className="ri-arrow-right-line ml-1"></i>
-                          </button>
+                          <div className="flex items-center gap-2 flex-shrink-0">
+                            {!notice.isRead && (
+                              <button
+                                type="button"
+                                onClick={() => markAsRead(notice.id)}
+                                className="px-2.5 py-1.5 bg-white border border-teal-200 text-teal-700 text-xs rounded-lg hover:bg-teal-50 cursor-pointer whitespace-nowrap"
+                              >
+                                已读
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (notice.relatedModule === 'personal_class_task') {
+                                  setOverviewPanelTab('tasks');
+                                  return;
+                                }
+                                goFromNotificationLink(notice.relatedLink || '/student-center?tab=overview');
+                              }}
+                              className="px-2.5 py-1.5 bg-teal-500 text-white text-xs rounded-lg hover:bg-teal-600 cursor-pointer whitespace-nowrap"
+                            >
+                              查看
+                            </button>
+                          </div>
                         </div>
-                      );
-                    })}
-                  </div>
-                )}
-                {activeTodoTasks.length > 0 && (
-                  <div className="mt-3 pt-3 border-t border-gray-100 flex items-center justify-between">
-                    <p className="text-xs text-gray-400"><i className="ri-information-line mr-1"></i>完成知识检测后，对应待办将自动消除</p>
-                    <button onClick={() => setActiveTab('knowledge')} className="text-xs text-teal-600 hover:text-teal-700 font-medium whitespace-nowrap cursor-pointer">查看全部知识检测 <i className="ri-arrow-right-s-line"></i></button>
-                  </div>
+                      ))}
+                    </div>
+                  )
+                ) : (
+                  <>
+                    {activeTodoTasks.length === 0 ? (
+                      <div className="py-8 text-center">
+                        <div className="w-14 h-14 bg-green-50 rounded-full flex items-center justify-center mx-auto mb-3">
+                          <i className="ri-checkbox-circle-line text-2xl text-green-500"></i>
+                        </div>
+                        <p className="text-sm font-medium text-gray-700">所有任务已完成</p>
+                      </div>
+                    ) : (
+                      <div className="space-y-2.5">
+                        {activeTodoTasks.map((task) => {
+                          const isUrgent = task.priority === 'urgent' || task.priority === 'high';
+                          const lockHint = task.trainingModuleId
+                            ? getPrerequisiteStageHint(task.trainingModuleId)
+                            : null;
+                          const actionDisabled = Boolean(lockHint);
+                          const goTodo = () => {
+                            if (actionDisabled) return;
+                            handleModuleClick(task.moduleKey);
+                          };
+                          return (
+                            <div
+                              key={task.id}
+                              className={`flex items-center gap-3 p-3.5 rounded-xl border transition-all ${actionDisabled ? 'opacity-80 cursor-default' : 'hover:shadow-sm cursor-pointer'} ${isUrgent ? 'border-red-200 bg-red-50/40' : 'border-gray-100 bg-gray-50/50 hover:border-teal-200'}`}
+                              onClick={goTodo}
+                            >
+                              <div
+                                className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${isUrgent ? 'bg-gradient-to-br from-red-500 to-orange-500' : 'bg-gradient-to-br from-orange-400 to-orange-500'}`}
+                              >
+                                <i className="ri-task-line text-white text-sm"></i>
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2 mb-0.5 flex-wrap">
+                                  <span className="font-semibold text-gray-900 text-sm truncate">{task.title}</span>
+                                  <span className="px-1.5 py-0.5 rounded text-xs font-medium flex-shrink-0 bg-orange-100 text-orange-700">
+                                    实训任务
+                                  </span>
+                                  {isUrgent && <span className="flex items-center gap-0.5 px-1.5 py-0.5 bg-red-100 text-red-600 rounded text-xs font-bold flex-shrink-0"><i className="ri-alarm-warning-line"></i>紧急</span>}
+                                </div>
+                                <div className="flex items-center gap-3 text-xs text-gray-400">
+                                  <span className="truncate"><i className="ri-folder-line mr-1"></i>{task.module}</span>
+                                  <span className={`flex-shrink-0 font-medium ${task.daysLeft <= 3 ? 'text-red-500' : 'text-gray-400'}`}>
+                                    <i className="ri-calendar-line mr-1"></i>{task.daysLeft <= 0 ? '已逾期' : task.daysLeft === 1 ? '明天截止' : `还剩 ${task.daysLeft} 天`}
+                                  </span>
+                                </div>
+                                {task.attachments.length > 0 && (
+                                  <div className="flex flex-wrap gap-2 mt-2">
+                                    {task.attachments.map((file) => (
+                                      <button
+                                        key={file.id}
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          void downloadStudentTaskAttachment(selectedClassId, task.id, file.id, file.fileName);
+                                        }}
+                                        className="inline-flex items-center gap-1.5 px-2 py-1 bg-white border border-gray-200 rounded-lg text-xs text-teal-700 hover:bg-teal-50 hover:border-teal-200 cursor-pointer"
+                                        title="点击下载附件"
+                                      >
+                                        <i className="ri-attachment-2"></i>
+                                        <span className="max-w-[160px] truncate">{file.fileName}</span>
+                                      </button>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                              <button
+                                type="button"
+                                disabled={actionDisabled}
+                                title={lockHint ?? undefined}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  goTodo();
+                                }}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all whitespace-nowrap flex-shrink-0 ${
+                                  actionDisabled
+                                    ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                                    : isUrgent
+                                      ? 'bg-red-500 hover:bg-red-600 text-white cursor-pointer'
+                                      : 'bg-gradient-to-r from-teal-500 to-cyan-600 text-white hover:shadow-md cursor-pointer'
+                                }`}
+                              >
+                                去完成
+                                <i className="ri-arrow-right-line ml-1"></i>
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                    {activeTodoTasks.length > 0 && (
+                      <div className="mt-3 pt-3 border-t border-gray-100">
+                        <p className="text-xs text-gray-400">
+                          <i className="ri-information-line mr-1"></i>
+                          待办来自教师发布的实训任务；标记完成后将从列表移除（功能对接中）
+                        </p>
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
 
@@ -875,28 +1131,58 @@ export default function StudentCenterPage() {
                 <h3 className="text-base font-bold text-gray-900 mb-4 flex items-center gap-2">
                   <i className="ri-team-line text-teal-600"></i>我的团队
                 </h3>
-                <div className="bg-gradient-to-br from-teal-500 to-cyan-600 rounded-xl p-5 text-white">
-                  <div className="flex items-center justify-between mb-4">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center backdrop-blur-sm"><i className="ri-team-line text-xl"></i></div>
-                      <div>
-                        <h4 className="font-bold">校园快递创新团队</h4>
-                        <p className="text-teal-100 text-xs">5名成员 · 创建于 2024-12-01</p>
+                {overviewMyTeam ? (
+                  <div className="bg-gradient-to-br from-teal-500 to-cyan-600 rounded-xl p-5 text-white">
+                    <div className="flex items-center justify-between flex-wrap gap-3">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center backdrop-blur-sm flex-shrink-0">
+                          <i className="ri-team-line text-xl"></i>
+                        </div>
+                        <div className="min-w-0">
+                          <h4 className="font-bold truncate">{overviewMyTeam.name}</h4>
+                          <p className="text-teal-100 text-xs">
+                            {overviewMyTeam.members.length} 名成员
+                            {formatTeamCreatedAt(overviewMyTeam.createdAt)
+                              ? ` · 创建于 ${formatTeamCreatedAt(overviewMyTeam.createdAt)}`
+                              : ''}
+                          </p>
+                        </div>
                       </div>
+                      <button
+                        type="button"
+                        onClick={() => handleModuleClick('module-team')}
+                        className="px-3 py-1.5 bg-white/20 hover:bg-white/30 text-white rounded-lg text-sm font-medium transition-all whitespace-nowrap cursor-pointer"
+                      >
+                        <i className="ri-arrow-right-line mr-1"></i>进入团队管理
+                      </button>
                     </div>
-                    <button onClick={() => setActiveTab('module-team')} className="px-3 py-1.5 bg-white/20 hover:bg-white/30 text-white rounded-lg text-sm font-medium transition-all whitespace-nowrap cursor-pointer">
-                      <i className="ri-arrow-right-line mr-1"></i>进入团队管理
+                    {overviewMyTeam.complementScore != null && (
+                      <div className="mt-4 grid grid-cols-2 gap-3 max-w-md">
+                        <div className="bg-white/10 rounded-lg p-3 text-center">
+                          <div className="text-lg font-bold mb-0.5">{overviewMyTeam.members.length}</div>
+                          <div className="text-xs text-teal-100">团队成员</div>
+                        </div>
+                        <div className="bg-white/10 rounded-lg p-3 text-center">
+                          <div className="text-lg font-bold mb-0.5">
+                            {Number(overviewMyTeam.complementScore).toFixed(1)}
+                          </div>
+                          <div className="text-xs text-teal-100">互补得分</div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="rounded-xl border border-dashed border-gray-200 py-10 px-4 text-center">
+                    <p className="text-sm text-gray-500 mb-3">教师确认组队后将在此显示团队信息</p>
+                    <button
+                      type="button"
+                      onClick={() => handleModuleClick('module-team')}
+                      className="px-4 py-2 bg-teal-600 text-white text-sm rounded-lg hover:bg-teal-700 cursor-pointer"
+                    >
+                      前往组队与团队管理
                     </button>
                   </div>
-                  <div className="grid grid-cols-4 gap-3">
-                    {[{ value: '92%', label: '团队进度' }, { value: '156', label: '共享文件' }, { value: '1247', label: '讨论消息' }, { value: '48h', label: '协作时长' }].map((item, i) => (
-                      <div key={i} className="bg-white/10 rounded-lg p-3 text-center">
-                        <div className="text-lg font-bold mb-0.5">{item.value}</div>
-                        <div className="text-xs text-teal-100">{item.label}</div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
+                )}
               </div>
             </div>
           )}
@@ -975,7 +1261,7 @@ export default function StudentCenterPage() {
                       const isCompleted = kp.status === 'completed';
                       const isLocked = kp.status === 'locked';
                       const quizState = quizStates[kp.id];
-                      const hasQuiz = !!quizBank[kp.id];
+                      const hasQuiz = Boolean(kp.quizId);
                       return (
                         <div key={kp.id}
                           className={`bg-white rounded-2xl shadow-sm border-2 p-6 transition-all ${isLocked ? 'opacity-60 border-gray-100' : isCompleted ? 'border-green-200 hover:shadow-xl' : 'border-gray-100 hover:shadow-xl hover:border-teal-200'} cursor-pointer`}
@@ -1016,10 +1302,11 @@ export default function StudentCenterPage() {
                                   <i className="ri-play-circle-line mr-1"></i>{isCompleted ? '复习' : '学习'}
                                 </button>
                                 {hasQuiz && (
-                                  <button onClick={(e) => { e.stopPropagation(); setActiveQuizId(kp.id); }}
+                                  <button onClick={(e) => { e.stopPropagation(); startKnowledgeQuiz(kp.id); }}
+                                    disabled={quizLoadingId === kp.id}
                                     className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all whitespace-nowrap cursor-pointer ${isCompleted ? 'bg-green-100 text-green-700 hover:bg-green-200' : 'bg-gradient-to-r from-teal-500 to-cyan-600 text-white hover:shadow-md'}`}
                                   >
-                                    <i className={`${isCompleted ? 'ri-refresh-line' : 'ri-edit-2-line'} mr-1`}></i>{isCompleted ? '重新检测' : '开始检测'}
+                                    <i className={`${isCompleted ? 'ri-refresh-line' : 'ri-edit-2-line'} mr-1`}></i>{quizLoadingId === kp.id ? '加载中' : isCompleted ? '重新检测' : '开始检测'}
                                   </button>
                                 )}
                               </div>
@@ -1402,11 +1689,11 @@ export default function StudentCenterPage() {
       </div>
 
       {/* 检测弹窗 */}
-      {activeQuizId && quizBank[activeQuizId] && (
+      {activeQuizId && activeQuizConfig && (
         <QuizModal
-          config={quizBank[activeQuizId]}
-          onClose={() => setActiveQuizId(null)}
-          onPass={(knowledgeId, moduleId) => { handleQuizPass(knowledgeId, moduleId); setActiveQuizId(null); }}
+          config={activeQuizConfig}
+          onClose={() => { setActiveQuizId(null); setActiveQuizConfig(null); }}
+          onPass={(knowledgeId, moduleId) => { handleQuizPass(knowledgeId, moduleId); setActiveQuizId(null); setActiveQuizConfig(null); }}
         />
       )}
 

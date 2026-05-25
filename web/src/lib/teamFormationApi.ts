@@ -439,7 +439,15 @@ export async function confirmTeacherGrouping(classId: string) {
   return portalAuthenticatedFetch(
     'teacher',
     `/api/teacher/personal-classes/${encodeURIComponent(classId)}/team-formation/confirm`,
-    { method: 'POST', body: JSON.stringify({}) }
+    { method: 'POST', body: JSON.stringify({ mode: 'confirm' }) }
+  ) as Promise<TeacherGroupingState & { notifiedCount?: number }>;
+}
+
+export async function notifyTeacherTeamStudents(classId: string) {
+  return portalAuthenticatedFetch(
+    'teacher',
+    `/api/teacher/personal-classes/${encodeURIComponent(classId)}/team-formation/confirm`,
+    { method: 'POST', body: JSON.stringify({ mode: 'notify' }) }
   ) as Promise<TeacherGroupingState & { notifiedCount?: number }>;
 }
 

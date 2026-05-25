@@ -69,7 +69,7 @@ router.get('/teacher/personal-classes', requireAuth(), requireTeacher(), async (
                WHERE s.teacher_personal_class_id = t.id) AS "studentCount"
        FROM teacher_personal_classes t
        WHERE t.teacher_id = $1
-       ORDER BY t.id DESC
+       ORDER BY t.created_at ASC, t.id ASC
        LIMIT 500`,
       [tid]
     );
@@ -144,6 +144,49 @@ async function ownsPersonalClass(pool, teacherId, classId) {
     teacherId,
   ]);
   return rows.length > 0;
+}
+
+async function getClassNoticeContext(db, teacherId, classId) {
+  const { rows } = await db.query(
+    `SELECT tpc.name AS "className", COALESCE(u.real_name, u.username, '教师') AS "teacherName"
+     FROM teacher_personal_classes tpc
+     JOIN users u ON u.id = tpc.teacher_id
+     WHERE tpc.id = $1 AND tpc.teacher_id = $2`,
+    [classId, teacherId]
+  );
+  return rows[0] || { className: '教学班级', teacherName: '教师' };
+}
+
+async function insertStudentNotification(
+  db,
+  { receiverId, senderId, type, title, content, relatedModule = 'personal_class', relatedLink = '/student-center?tab=overview' }
+) {
+  await db.query(
+    `INSERT INTO notifications (receiver_id, sender_id, type, title, content, related_module, related_link, is_read)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, false)`,
+    [receiverId, senderId, type, title, content, relatedModule, relatedLink]
+  );
+}
+
+async function notifyClassMembershipChanges(db, { teacherId, className, teacherName, addedIds, removedIds }) {
+  for (const studentId of addedIds) {
+    await insertStudentNotification(db, {
+      receiverId: studentId,
+      senderId: teacherId,
+      type: 'system',
+      title: '你已加入教学班级',
+      content: `${teacherName} 已将你加入「${className}」，请进入学生工作台查看实训安排。`,
+    });
+  }
+  for (const studentId of removedIds) {
+    await insertStudentNotification(db, {
+      receiverId: studentId,
+      senderId: teacherId,
+      type: 'system',
+      title: '你已被移出教学班级',
+      content: `${teacherName} 已将你移出「${className}」。如有疑问，请联系任课教师。`,
+    });
+  }
 }
 
 /** 教务班级下拉（管理端 classes，按学院筛选） */
@@ -309,17 +352,27 @@ router.put('/teacher/personal-classes/:id/students', requireAuth(), requireTeach
     try {
       await client.query('BEGIN');
 
+      const ctx = await getClassNoticeContext(client, tid, classId);
+      const { rows: oldRows } = await client.query(
+        `SELECT student_id AS "studentId"
+         FROM teacher_personal_class_students
+         WHERE teacher_personal_class_id = $1`,
+        [classId]
+      );
+      const oldSet = new Set(oldRows.map((r) => String(r.studentId)));
+
       await client.query(`DELETE FROM teacher_personal_class_students WHERE teacher_personal_class_id = $1`, [
         classId,
       ]);
 
+      let valid = [];
       if (idStrs.length > 0) {
         const nums = idStrs.map((x) => Number(x));
         const { rows: okRows } = await client.query(
           `SELECT id FROM users WHERE id = ANY($1::bigint[]) AND role = 'student' AND status = 'active'`,
           [nums]
         );
-        const valid = okRows.map((r) => r.id);
+        valid = okRows.map((r) => r.id);
         if (valid.length) {
           await client.query(
             `INSERT INTO teacher_personal_class_students (teacher_personal_class_id, student_id)
@@ -328,6 +381,17 @@ router.put('/teacher/personal-classes/:id/students', requireAuth(), requireTeach
           );
         }
       }
+
+      const newSet = new Set(valid.map((id) => String(id)));
+      const addedIds = valid.filter((id) => !oldSet.has(String(id)));
+      const removedIds = oldRows.map((r) => r.studentId).filter((id) => !newSet.has(String(id)));
+      await notifyClassMembershipChanges(client, {
+        teacherId: tid,
+        className: ctx.className,
+        teacherName: ctx.teacherName,
+        addedIds,
+        removedIds,
+      });
 
       await client.query('COMMIT');
       const {
@@ -364,16 +428,39 @@ router.delete(
       if (!Number.isFinite(studentNum) || studentNum <= 0) return bad(req, res, 400, 40012, '无效的学生 ID');
 
       const pool = getPool();
-      const { rowCount } = await pool.query(
-        `DELETE FROM teacher_personal_class_students tp
-         USING teacher_personal_classes tpc
-         WHERE tp.teacher_personal_class_id = tpc.id
-           AND tp.teacher_personal_class_id = $1
-           AND tp.student_id = $2
-           AND tpc.teacher_id = $3`,
-        [classId, studentNum, tid]
-      );
-      if (!rowCount) return bad(req, res, 404, 40403, '未找到该分组中的学生');
+      const client = await pool.connect();
+      let rowCount = 0;
+      try {
+        await client.query('BEGIN');
+        const ctx = await getClassNoticeContext(client, tid, classId);
+        const result = await client.query(
+          `DELETE FROM teacher_personal_class_students tp
+           USING teacher_personal_classes tpc
+           WHERE tp.teacher_personal_class_id = tpc.id
+             AND tp.teacher_personal_class_id = $1
+             AND tp.student_id = $2
+             AND tpc.teacher_id = $3`,
+          [classId, studentNum, tid]
+        );
+        rowCount = result.rowCount || 0;
+        if (!rowCount) {
+          await client.query('ROLLBACK');
+          return bad(req, res, 404, 40403, '未找到该分组中的学生');
+        }
+        await notifyClassMembershipChanges(client, {
+          teacherId: tid,
+          className: ctx.className,
+          teacherName: ctx.teacherName,
+          addedIds: [],
+          removedIds: [studentNum],
+        });
+        await client.query('COMMIT');
+      } catch (e) {
+        await client.query('ROLLBACK');
+        throw e;
+      } finally {
+        client.release();
+      }
 
       const {
         rows: [cnt],

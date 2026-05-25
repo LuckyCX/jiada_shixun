@@ -5,6 +5,7 @@ import {
   addTeamMember,
   confirmTeacherAiGroupRandom,
   confirmTeacherGrouping,
+  notifyTeacherTeamStudents,
   fetchTeacherGrouping,
   fetchTeacherTeamQuestions,
   normalizeTeamDimensionProfile,
@@ -444,9 +445,11 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
     setDraggedStudent(null);
   };
 
+  const inTeamCount = teams.reduce((s, t) => s + t.members.length, 0);
+
   const handleConfirmGrouping = async () => {
-    if (!teams.some((t) => t.members.length > 0)) {
-      showToast('还没有任何团队，请先进行组队', 'error');
+    if (!hasDraftTeams) {
+      showToast('没有待确认的草稿团队', 'error');
       return;
     }
     try {
@@ -455,14 +458,22 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
       setStudents(ui.students);
       setTeams(ui.teams);
       setShowConfirmModal(false);
-      const n = data.notifiedCount ?? 0;
-      showToast(
-        hasDraftTeams
-          ? `已确认组队，并向 ${n} 名已入队学生发送通知`
-          : `已向 ${n} 名已入队学生发送组队通知`
-      );
+      showToast('已确认组队，团队状态已锁定为已确认');
     } catch (e) {
       showToast(e instanceof Error ? e.message : '确认失败', 'error');
+    }
+  };
+
+  const handleNotifyStudents = async () => {
+    if (inTeamCount < 1) {
+      showToast('还没有已入队学生', 'error');
+      return;
+    }
+    try {
+      const data = await notifyTeacherTeamStudents(personalClass.id);
+      showToast(`已向 ${data.notifiedCount ?? inTeamCount} 名已入队学生发送通知`);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : '发送通知失败', 'error');
     }
   };
 
@@ -549,11 +560,25 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
                 ) : null}
                 <button
                   type="button"
+                  disabled={!hasDraftTeams}
                   onClick={() => setShowConfirmModal(true)}
-                  className="px-5 py-2.5 bg-white text-teal-700 text-sm font-bold rounded-xl hover:shadow-lg whitespace-nowrap flex items-center gap-2 cursor-pointer"
+                  className={`px-5 py-2.5 bg-white text-teal-700 text-sm font-bold rounded-xl whitespace-nowrap flex items-center gap-2 cursor-pointer ${
+                    !hasDraftTeams ? 'opacity-50 cursor-not-allowed' : 'hover:shadow-lg'
+                  }`}
                 >
                   <i className="ri-check-double-line text-base"></i>
-                  确认组队并通知学生
+                  确认组队
+                </button>
+                <button
+                  type="button"
+                  disabled={inTeamCount < 1}
+                  onClick={() => void handleNotifyStudents()}
+                  className={`px-5 py-2.5 bg-white/90 text-teal-800 text-sm font-bold rounded-xl whitespace-nowrap flex items-center gap-2 cursor-pointer border border-white/60 ${
+                    inTeamCount < 1 ? 'opacity-50 cursor-not-allowed' : 'hover:shadow-lg'
+                  }`}
+                >
+                  <i className="ri-send-plane-line text-base"></i>
+                  通知学生
                 </button>
               </>
             )}
@@ -878,10 +903,9 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
               <div className="w-16 h-16 bg-gradient-to-br from-teal-500 to-cyan-500 rounded-full flex items-center justify-center mx-auto mb-4">
                 <i className="ri-check-double-line text-3xl text-white"></i>
               </div>
-              <h3 className="text-xl font-bold text-gray-900 mb-2">确认组队并通知学生</h3>
+              <h3 className="text-xl font-bold text-gray-900 mb-2">确认组队</h3>
               <p className="text-sm text-gray-500">
-                每次点击都会向当前所有已入队学生发送一条新通知。
-                {hasDraftTeams ? ' 同时将未确认的草稿团队标记为已确认。' : ' 当前无草稿团队，仅重复发送通知。'}
+                将当前所有草稿团队标记为已确认，学生组队状态同步为已确认。不会发送通知，请另行点击「通知学生」。
               </p>
             </div>
 
@@ -891,9 +915,9 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
                 <span className="font-bold text-gray-900">{teams.length} 个</span>
               </div>
               <div className="flex items-center justify-between">
-                <span className="text-gray-600">已入队学生（将收到通知）</span>
+                <span className="text-gray-600">草稿团队数</span>
                 <span className="font-bold text-gray-900">
-                  {teams.reduce((s, t) => s + t.members.length, 0)} 人
+                  {teams.filter((t) => t.groupingStatus === 'draft').length} 个
                 </span>
               </div>
               <div className="flex items-center justify-between">
@@ -920,8 +944,8 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
                 onClick={() => void handleConfirmGrouping()}
                 className="flex-1 px-5 py-3 bg-gradient-to-r from-teal-500 to-cyan-500 text-white text-sm font-bold rounded-xl hover:shadow-lg transition-all whitespace-nowrap cursor-pointer"
               >
-                <i className="ri-send-plane-line mr-2"></i>
-                确认并通知学生
+                <i className="ri-check-double-line mr-2"></i>
+                确认组队
               </button>
             </div>
           </div>

@@ -62,7 +62,7 @@ router.get('/student/personal-class-enrollments', requireAuth(), requireStudent(
        INNER JOIN teacher_personal_classes tpc ON tpc.id = tp.teacher_personal_class_id
        INNER JOIN users u ON u.id = tpc.teacher_id
        WHERE tp.student_id = $1
-       ORDER BY tp.joined_at DESC
+       ORDER BY tp.joined_at ASC, tpc.id ASC
        LIMIT 200`,
       [sid]
     );

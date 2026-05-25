@@ -1,290 +1,301 @@
-import { useState } from 'react';
-import { TaskFormData } from './types';
-import { moduleOptions, allTeams } from './mockData';
+import { useEffect, useState } from 'react';
+import {
+  Modal,
+  Form,
+  Input,
+  Select,
+  DatePicker,
+  Switch,
+  Radio,
+  Checkbox,
+  Upload,
+  message,
+  Spin,
+} from 'antd';
+import type { UploadFile } from 'antd';
+import dayjs from 'dayjs';
+import type { TaskFormValues } from './types';
+import {
+  TASK_MODULES,
+  TASK_PRIORITY_OPTIONS,
+  type PersonalClassTask,
+  type TeamForTask,
+  createPersonalClassTask,
+  updatePersonalClassTask,
+  getPersonalClassTask,
+  listTeamsForTask,
+  uploadTaskAttachment,
+  deleteTaskAttachment,
+} from '../../../../lib/personalClassTaskApi';
 
-interface CreateTaskModalProps {
+type Props = {
+  open: boolean;
+  classId: string;
+  taskId?: string;
   onClose: () => void;
-  onSubmit: (data: TaskFormData, isDraft: boolean) => void;
-}
+  onSuccess: () => void;
+};
 
-export default function CreateTaskModal({ onClose, onSubmit }: CreateTaskModalProps) {
-  const [formData, setFormData] = useState<TaskFormData>({
-    title: '',
-    description: '',
-    module: moduleOptions[0],
-    deadline: '',
-    attachments: [],
-    scope: 'all',
-    targetTeams: [],
+const MAX_ATTACH = 5;
+const MAX_BYTES = 100 * 1024 * 1024;
+
+export default function CreateTaskModal({ open, classId, taskId, onClose, onSuccess }: Props) {
+  const [form] = Form.useForm<TaskFormValues>();
+  const [teams, setTeams] = useState<TeamForTask[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [existingAttachments, setExistingAttachments] = useState<PersonalClassTask['attachments']>([]);
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const editMode = Boolean(taskId);
+
+  const attachmentsEnabled = Form.useWatch('attachmentsEnabled', form);
+  const scope = Form.useWatch('scope', form);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setLoading(true);
+    setPendingFiles([]);
+    Promise.all([
+      listTeamsForTask(classId),
+      editMode && taskId ? getPersonalClassTask(classId, taskId) : Promise.resolve(null),
+    ])
+      .then(([teamRes, task]) => {
+        if (cancelled) return;
+        setTeams(teamRes.teams);
+        if (task) {
+          setExistingAttachments(task.attachments);
+          form.setFieldsValue({
+            title: task.title,
+            description: task.description,
+            module: task.module,
+            priority: task.priority,
+            deadline: task.deadline ? dayjs(task.deadline) : undefined,
+            attachmentsEnabled: task.attachmentsEnabled,
+            scope: task.scope,
+            teamIds: task.targetTeamIds,
+          });
+        } else {
+          setExistingAttachments([]);
+          form.setFieldsValue({
+            title: '',
+            description: '',
+            module: TASK_MODULES[0],
+            priority: 'normal',
+            deadline: '',
+            attachmentsEnabled: false,
+            scope: 'all',
+            teamIds: [],
+          });
+        }
+      })
+      .catch((e) => message.error(e instanceof Error ? e.message : '加载失败'))
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, classId, taskId, editMode, form]);
+
+  const buildBody = (values: TaskFormValues, status: 'draft' | 'published') => ({
+    title: values.title.trim(),
+    description: values.description.trim(),
+    module: values.module,
+    priority: values.priority,
+    deadline: values.deadline,
+    scope: values.scope,
+    teamIds: values.scope === 'specific' ? values.teamIds : [],
+    attachmentsEnabled: values.attachmentsEnabled,
+    status,
   });
 
-  const [attachmentFiles, setAttachmentFiles] = useState<File[]>([]);
+  const uploadPending = async (resolvedTaskId: string, enabled: boolean) => {
+    if (!enabled || !pendingFiles.length) return;
+    for (const file of pendingFiles) {
+      await uploadTaskAttachment(classId, resolvedTaskId, file);
+    }
+    setPendingFiles([]);
+  };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) {
-      const newFiles = Array.from(e.target.files);
-      setAttachmentFiles([...attachmentFiles, ...newFiles]);
+  const submit = async (asDraft: boolean) => {
+    try {
+      const values = await form.validateFields();
+      if (values.scope === 'specific' && !values.teamIds?.length) {
+        message.warning('请选择目标团队');
+        return;
+      }
+      const dl = values.deadline;
+      const deadline =
+        typeof dl === 'string' ? dl : dayjs.isDayjs(dl) ? dl.format('YYYY-MM-DD') : '';
+      if (!deadline) {
+        message.warning('请选择截止时间');
+        return;
+      }
+      const payload = buildBody({ ...values, deadline }, asDraft ? 'draft' : 'published');
+      setSaving(true);
+      let saved: PersonalClassTask;
+      if (editMode && taskId) {
+        saved = await updatePersonalClassTask(classId, taskId, payload);
+      } else {
+        saved = await createPersonalClassTask(classId, payload);
+      }
+      await uploadPending(saved.id, values.attachmentsEnabled);
+      message.success(asDraft ? '草稿已保存' : '任务已发布');
+      onSuccess();
+      onClose();
+    } catch (e) {
+      if (e && typeof e === 'object' && 'errorFields' in e) return;
+      message.error(e instanceof Error ? e.message : '保存失败');
+    } finally {
+      setSaving(false);
     }
   };
 
-  const removeFile = (index: number) => {
-    setAttachmentFiles(attachmentFiles.filter((_, i) => i !== index));
+  const beforeUpload = (file: File) => {
+    if (file.size > MAX_BYTES) {
+      message.error('单文件不能超过 100MB');
+      return Upload.LIST_IGNORE;
+    }
+    const total = existingAttachments.length + pendingFiles.length;
+    if (total >= MAX_ATTACH) {
+      message.error(`最多 ${MAX_ATTACH} 个附件`);
+      return Upload.LIST_IGNORE;
+    }
+    setPendingFiles((prev) => [...prev, file]);
+    return false;
   };
 
-  const handleTeamToggle = (team: string) => {
-    if (formData.targetTeams.includes(team)) {
-      setFormData({
-        ...formData,
-        targetTeams: formData.targetTeams.filter(t => t !== team),
-      });
-    } else {
-      setFormData({
-        ...formData,
-        targetTeams: [...formData.targetTeams, team],
-      });
-    }
-  };
-
-  const handleSubmit = (isDraft: boolean) => {
-    if (!formData.title.trim()) {
-      alert('请输入任务标题');
-      return;
-    }
-    if (!formData.description.trim()) {
-      alert('请输入任务描述');
-      return;
-    }
-    if (!formData.deadline) {
-      alert('请选择截止时间');
-      return;
-    }
-    if (formData.scope === 'specific' && formData.targetTeams.length === 0) {
-      alert('请选择目标团队');
-      return;
-    }
-
-    onSubmit({ ...formData, attachments: attachmentFiles }, isDraft);
-  };
+  const fileList: UploadFile[] = [
+    ...existingAttachments.map((a) => ({
+      uid: `saved-${a.id}`,
+      name: a.fileName,
+      status: 'done' as const,
+    })),
+    ...pendingFiles.map((f, i) => ({
+      uid: `pending-${i}`,
+      name: f.name,
+      status: 'done' as const,
+    })),
+  ];
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-6" onClick={onClose}>
-      <div className="bg-white rounded-2xl max-w-3xl w-full max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-        <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 z-10 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-gradient-to-br from-teal-500 to-cyan-500 rounded-xl flex items-center justify-center">
-              <i className="ri-file-add-line text-white text-lg"></i>
-            </div>
-            <div>
-              <h3 className="text-xl font-bold text-gray-900">发布新任务</h3>
-              <p className="text-xs text-gray-400">向班级或指定团队发布实训任务</p>
-            </div>
-          </div>
+    <Modal
+      open={open}
+      title={editMode ? '编辑任务' : '发布新任务'}
+      onCancel={onClose}
+      width={720}
+      destroyOnClose
+      footer={
+        <div className="flex justify-end gap-2">
           <button
+            type="button"
             onClick={onClose}
-            className="w-9 h-9 flex items-center justify-center text-gray-400 hover:text-gray-600 transition-colors cursor-pointer hover:bg-gray-100 rounded-lg"
+            className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer"
           >
-            <i className="ri-close-line text-xl"></i>
+            取消
+          </button>
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() => void submit(true)}
+            className="px-4 py-2 text-sm text-teal-700 border border-teal-200 rounded-lg hover:bg-teal-50 cursor-pointer disabled:opacity-50"
+          >
+            保存草稿
+          </button>
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() => void submit(false)}
+            className="px-4 py-2 text-sm text-white bg-teal-600 rounded-lg hover:bg-teal-700 cursor-pointer disabled:opacity-50"
+          >
+            立即发布
           </button>
         </div>
-
-        <div className="p-6 space-y-5">
-          {/* 任务标题 */}
-          <div>
-            <label className="block text-sm font-medium text-gray-900 mb-2">
-              任务标题 <span className="text-red-500">*</span>
-            </label>
-            <input
-              type="text"
-              value={formData.title}
-              onChange={(e) => setFormData({ ...formData, title: e.target.value })}
-              placeholder="例如：完成市场调研报告"
-              className="w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent"
-            />
-          </div>
-
-          {/* 所属模块 */}
-          <div>
-            <label className="block text-sm font-medium text-gray-900 mb-2">
-              所属模块 <span className="text-red-500">*</span>
-            </label>
-            <select
-              value={formData.module}
-              onChange={(e) => setFormData({ ...formData, module: e.target.value })}
-              className="w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white cursor-pointer"
-            >
-              {moduleOptions.map((module) => (
-                <option key={module} value={module}>
-                  {module}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* 任务描述 */}
-          <div>
-            <label className="block text-sm font-medium text-gray-900 mb-2">
-              任务描述 <span className="text-red-500">*</span>
-            </label>
-            <textarea
-              value={formData.description}
-              onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-              placeholder="详细描述任务要求、提交内容、评分标准等..."
-              rows={6}
-              className="w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent resize-none"
-            />
-          </div>
-
-          {/* 截止时间 */}
-          <div>
-            <label className="block text-sm font-medium text-gray-900 mb-2">
-              截止时间 <span className="text-red-500">*</span>
-            </label>
-            <input
-              type="date"
-              value={formData.deadline}
-              onChange={(e) => setFormData({ ...formData, deadline: e.target.value })}
-              className="w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 cursor-pointer"
-            />
-          </div>
-
-          {/* 附件上传 */}
-          <div>
-            <label className="block text-sm font-medium text-gray-900 mb-2">
-              附件上传
-            </label>
-            <div className="border-2 border-dashed border-gray-200 rounded-xl p-6 text-center hover:border-teal-500 transition-colors">
-              <input
-                type="file"
-                multiple
-                onChange={handleFileChange}
-                className="hidden"
-                id="file-upload"
+      }
+    >
+      <Spin spinning={loading}>
+        <Form form={form} layout="vertical" className="mt-2">
+          <Form.Item name="title" label="任务标题" rules={[{ required: true, message: '请输入标题' }]}>
+            <Input placeholder="例如：完成市场调研报告" maxLength={256} />
+          </Form.Item>
+          <Form.Item name="module" label="实训模块" rules={[{ required: true }]}>
+            <Select options={TASK_MODULES.map((m) => ({ value: m, label: m }))} />
+          </Form.Item>
+          <Form.Item name="description" label="任务描述" rules={[{ required: true, message: '请输入描述' }]}>
+            <Input.TextArea rows={4} placeholder="说明任务要求与交付物" />
+          </Form.Item>
+          <div className="grid grid-cols-2 gap-4">
+            <Form.Item name="deadline" label="截止时间" rules={[{ required: true, message: '请选择日期' }]}>
+              <DatePicker className="w-full" format="YYYY-MM-DD" />
+            </Form.Item>
+            <Form.Item name="priority" label="紧急程度" rules={[{ required: true }]}>
+              <Select
+                options={TASK_PRIORITY_OPTIONS.map((o) => ({
+                  value: o.value,
+                  label: (
+                    <span>
+                      {o.label}
+                      <span className="text-gray-400 text-xs ml-2">{o.hint}</span>
+                    </span>
+                  ),
+                }))}
               />
-              <label
-                htmlFor="file-upload"
-                className="cursor-pointer flex flex-col items-center gap-2"
+            </Form.Item>
+          </div>
+          <Form.Item name="attachmentsEnabled" label="允许学生查看附件" valuePropName="checked">
+            <Switch />
+          </Form.Item>
+          {attachmentsEnabled && (
+            <Form.Item label="附件（最多 5 个，单文件 ≤100MB）">
+              <Upload
+                beforeUpload={beforeUpload}
+                fileList={fileList}
+                onRemove={async (file) => {
+                  if (file.uid.startsWith('saved-') && taskId) {
+                    const id = file.uid.replace('saved-', '');
+                    try {
+                      await deleteTaskAttachment(classId, taskId, id);
+                      setExistingAttachments((prev) => prev.filter((a) => a.id !== id));
+                    } catch (e) {
+                      message.error(e instanceof Error ? e.message : '删除失败');
+                      return false;
+                    }
+                  } else if (file.uid.startsWith('pending-')) {
+                    const idx = Number(file.uid.replace('pending-', ''));
+                    setPendingFiles((prev) => prev.filter((_, i) => i !== idx));
+                  }
+                  return true;
+                }}
               >
-                <div className="w-12 h-12 bg-teal-50 rounded-xl flex items-center justify-center">
-                  <i className="ri-upload-cloud-line text-teal-500 text-2xl"></i>
-                </div>
-                <div>
-                  <span className="text-sm font-medium text-teal-600">点击上传文件</span>
-                  <p className="text-xs text-gray-400 mt-1">支持 PDF、Word、Excel、PPT 等格式</p>
-                </div>
-              </label>
-            </div>
-
-            {/* 已上传文件列表 */}
-            {attachmentFiles.length > 0 && (
-              <div className="mt-3 space-y-2">
-                {attachmentFiles.map((file, index) => (
-                  <div
-                    key={index}
-                    className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-100"
-                  >
-                    <div className="flex items-center gap-3 flex-1 min-w-0">
-                      <div className="w-8 h-8 bg-teal-100 rounded-lg flex items-center justify-center flex-shrink-0">
-                        <i className="ri-file-line text-teal-600 text-sm"></i>
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-gray-900 truncate">{file.name}</p>
-                        <p className="text-xs text-gray-400">
-                          {(file.size / 1024 / 1024).toFixed(2)} MB
-                        </p>
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => removeFile(index)}
-                      className="w-7 h-7 flex items-center justify-center text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors cursor-pointer flex-shrink-0"
-                    >
-                      <i className="ri-close-line text-base"></i>
-                    </button>
-                  </div>
+                <button type="button" className="text-sm text-teal-600 cursor-pointer">
+                  选择文件
+                </button>
+              </Upload>
+              {!editMode && pendingFiles.length > 0 && (
+                <p className="text-xs text-amber-600 mt-1">新附件将在保存任务后上传</p>
+              )}
+            </Form.Item>
+          )}
+          <Form.Item name="scope" label="发布范围" rules={[{ required: true }]}>
+            <Radio.Group>
+              <Radio value="all">全班</Radio>
+              <Radio value="specific">指定团队</Radio>
+            </Radio.Group>
+          </Form.Item>
+          {scope === 'specific' && (
+            <Form.Item name="teamIds" label="目标团队">
+              <Checkbox.Group className="flex flex-col gap-2">
+                {teams.map((t) => (
+                  <Checkbox key={t.id} value={t.id}>
+                    {t.name}（{t.memberCount} 人）
+                  </Checkbox>
                 ))}
-              </div>
-            )}
-          </div>
-
-          {/* 发布范围 */}
-          <div>
-            <label className="block text-sm font-medium text-gray-900 mb-3">
-              发布范围 <span className="text-red-500">*</span>
-            </label>
-            <div className="flex items-center gap-1 bg-gray-100 rounded-xl p-1 w-fit">
-              <button
-                onClick={() => setFormData({ ...formData, scope: 'all', targetTeams: [] })}
-                className={`px-4 py-2 text-sm font-medium rounded-lg transition-all whitespace-nowrap cursor-pointer ${
-                  formData.scope === 'all'
-                    ? 'bg-white text-teal-600 shadow-sm'
-                    : 'text-gray-600 hover:text-gray-900'
-                }`}
-              >
-                <i className="ri-group-line mr-1.5"></i>全班发布
-              </button>
-              <button
-                onClick={() => setFormData({ ...formData, scope: 'specific' })}
-                className={`px-4 py-2 text-sm font-medium rounded-lg transition-all whitespace-nowrap cursor-pointer ${
-                  formData.scope === 'specific'
-                    ? 'bg-white text-teal-600 shadow-sm'
-                    : 'text-gray-600 hover:text-gray-900'
-                }`}
-              >
-                <i className="ri-user-star-line mr-1.5"></i>指定团队
-              </button>
-            </div>
-
-            {/* 指定团队选择 */}
-            {formData.scope === 'specific' && (
-              <div className="mt-4 p-4 bg-gray-50 rounded-xl border border-gray-200">
-                <p className="text-xs text-gray-500 mb-3">选择目标团队（可多选）</p>
-                <div className="grid grid-cols-2 gap-2">
-                  {allTeams.map((team) => (
-                    <button
-                      key={team}
-                      onClick={() => handleTeamToggle(team)}
-                      className={`px-3 py-2 text-sm font-medium rounded-lg border-2 transition-all cursor-pointer text-left ${
-                        formData.targetTeams.includes(team)
-                          ? 'border-teal-500 bg-teal-50 text-teal-700'
-                          : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300'
-                      }`}
-                    >
-                      <i
-                        className={`${
-                          formData.targetTeams.includes(team)
-                            ? 'ri-checkbox-circle-fill text-teal-500'
-                            : 'ri-checkbox-blank-circle-line text-gray-400'
-                        } mr-2`}
-                      ></i>
-                      {team}
-                    </button>
-                  ))}
-                </div>
-                {formData.targetTeams.length > 0 && (
-                  <p className="text-xs text-teal-600 mt-3">
-                    已选择 {formData.targetTeams.length} 个团队
-                  </p>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* 操作按钮 */}
-          <div className="flex gap-3 pt-4 border-t border-gray-100">
-            <button
-              onClick={() => handleSubmit(true)}
-              className="flex-1 px-5 py-2.5 bg-gray-100 text-gray-700 text-sm font-medium rounded-xl hover:bg-gray-200 transition-colors whitespace-nowrap cursor-pointer"
-            >
-              <i className="ri-draft-line mr-1.5"></i>保存草稿
-            </button>
-            <button
-              onClick={() => handleSubmit(false)}
-              className="flex-1 px-5 py-2.5 bg-gradient-to-r from-teal-500 to-cyan-500 text-white text-sm font-medium rounded-xl hover:shadow-lg transition-all whitespace-nowrap cursor-pointer"
-            >
-              <i className="ri-send-plane-line mr-1.5"></i>立即发布
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
+              </Checkbox.Group>
+            </Form.Item>
+          )}
+        </Form>
+      </Spin>
+    </Modal>
   );
 }

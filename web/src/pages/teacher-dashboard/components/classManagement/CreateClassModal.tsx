@@ -3,13 +3,13 @@ import { Form, Input, message, Modal, Select, Typography } from 'antd';
 import { useTranslation } from 'react-i18next';
 import { usePublicDictOptions } from '../../../admin-dashboard/components/classManagement/usePublicDictOptions';
 import { createTeacherPersonalClass } from '../../teacherPortalApi';
-import type { TeacherProfile } from '../../teacherPortalApi';
+import type { TeacherPersonalClassRow, TeacherProfile } from '../../teacherPortalApi';
 
 interface CreateClassModalProps {
   open: boolean;
   onClose: () => void;
   profile: TeacherProfile | null;
-  onCreated: () => void;
+  onCreated: (created: TeacherPersonalClassRow) => void;
 }
 
 const ACADEMIC_YEARS = [
@@ -44,13 +44,13 @@ export default function CreateClassModal({ open, onClose, profile, onCreated }: 
   const handleOk = async () => {
     try {
       const v = await form.validateFields();
-      await createTeacherPersonalClass({
+      const created = await createTeacherPersonalClass({
         name: v.name.trim(),
         academicYear: v.academicYear,
         semester: v.semester,
       });
       message.success(t('teacher_class.create.success'));
-      onCreated();
+      onCreated(created);
       onClose();
     } catch (e) {
       if (e && typeof e === 'object' && 'errorFields' in e) return;
