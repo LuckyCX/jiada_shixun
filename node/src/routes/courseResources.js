@@ -1078,4 +1078,30 @@ router.get('/student/course-resources/knowledge-points/:knowledgeId/quiz', requi
   }
 });
 
+router.post('/student/course-resources/knowledge-points/:knowledgeId/quiz-attempts', requireAuth(), requireStudent(), async (req, res) => {
+  try {
+    const knowledgeId = parseId(req.params.knowledgeId);
+    const uid = userIdFromReq(req);
+    if (!knowledgeId || !uid) return bad(req, res, 400, 40001, '参数无效');
+    const score = Math.max(0, Math.min(100, Number(req.body?.score || 0)));
+    const answers = req.body?.answers && typeof req.body.answers === 'object' ? req.body.answers : {};
+    const pool = getPool();
+    const { rows: quizRows } = await pool.query(
+      `SELECT id, pass_score FROM quizzes WHERE knowledge_point_id = $1 ORDER BY id ASC LIMIT 1`,
+      [knowledgeId]
+    );
+    if (!quizRows.length) return bad(req, res, 404, 40402, '暂无检测题');
+    const passed = score >= Number(quizRows[0].pass_score || 60);
+    await pool.query(
+      `INSERT INTO quiz_attempts (quiz_id, user_id, answers, score, passed)
+       VALUES ($1, $2, $3::jsonb, $4, $5)`,
+      [quizRows[0].id, uid, JSON.stringify(answers), score, passed]
+    );
+    return ok(req, res, { passed });
+  } catch (e) {
+    logError(`POST student knowledge quiz attempt traceId=${req.traceId}`, e);
+    return bad(req, res, 500, 50000, e.message);
+  }
+});
+
 export default router;

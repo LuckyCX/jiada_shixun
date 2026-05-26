@@ -11,9 +11,13 @@
     "type-check": "tsc --noEmit --project tsconfig.app.json"
   },
   "dependencies": {
+    "@ant-design/icons": "^6.2.3",
+    "@ckeditor/ckeditor5-react": "^11.1.2",
     "@tdesign-react/chat": "^1.0.2",
     "antd": "^6.4.0",
+    "ckeditor5": "^48.1.1",
     "dayjs": "^1.11.20",
+    "dompurify": "^3.4.5",
     "i18next": "^25.3.2",
     "i18next-browser-languagedetector": "^8.2.0",
     "lucide-react": "^0.469.0",

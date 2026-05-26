@@ -252,3 +252,13 @@ export async function fetchStudentKnowledgeQuiz(knowledgeId: string): Promise<Qu
   );
   return data.config;
 }
+
+export async function submitStudentKnowledgeQuizAttempt(
+  knowledgeId: string,
+  body: { score: number; answers: Record<string, number | number[] | string> }
+): Promise<{ passed: boolean }> {
+  return studentFetch(`/api/student/course-resources/knowledge-points/${knowledgeId}/quiz-attempts`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}

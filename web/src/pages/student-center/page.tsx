@@ -5,7 +5,7 @@ import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useSiteBrand } from '../../lib/publicSite';
 import LearningDetail, { type LearningDetailResource } from '../knowledge-system/components/LearningDetail';
 import QuizModal, { type QuizConfig } from './components/QuizModal';
-import { fetchStudentKnowledgeQuiz } from '../../lib/courseResourceApi';
+import { fetchStudentKnowledgeQuiz, submitStudentKnowledgeQuizAttempt } from '../../lib/courseResourceApi';
 import {
   fetchStudentNotifications,
   markStudentNotificationRead,
@@ -32,6 +32,7 @@ import {
   type GroupingTeam,
 } from '../../lib/teamFormationApi';
 import {
+  completeStudentTodoTask,
   downloadStudentTaskAttachment,
   fetchStudentTodoTasks,
   TRAINING_ID_TO_TAB,
@@ -225,6 +226,8 @@ export default function StudentCenterPage() {
   const [enrollments, setEnrollments] = useState<StudentPersonalEnrollment[]>([]);
   const [selectedClassId, setSelectedClassId] = useState<string>('');
   const [studentTodoTasks, setStudentTodoTasks] = useState<StudentTodoTask[]>([]);
+  const [activeCourseTaskId, setActiveCourseTaskId] = useState<string | null>(null);
+  const [activeTrainingTask, setActiveTrainingTask] = useState<{ id: string; moduleId: string } | null>(null);
   const [resourceProgressOverrides, setResourceProgressOverrides] = useState<Record<string, ResourceProgress>>({});
   const [overviewMyTeam, setOverviewMyTeam] = useState<GroupingTeam | null>(null);
   const [overviewPanelTab, setOverviewPanelTab] = useState<'notifications' | 'tasks'>('notifications');
@@ -289,7 +292,10 @@ export default function StudentCenterPage() {
     let cancelled = false;
     fetchStudentTodoTasks(selectedClassId)
       .then((res) => {
-        if (!cancelled) setStudentTodoTasks(res.tasks);
+        if (!cancelled) {
+          setStudentTodoTasks([...(res.tasks || []), ...(res.completedTasks || [])]);
+          setCompletedKnowledgeIds(new Set(res.completedKnowledgePointIds || []));
+        }
       })
       .catch(() => {
         if (!cancelled) setStudentTodoTasks([]);
@@ -519,7 +525,13 @@ export default function StudentCenterPage() {
     { id: 'r6', type: 'task' as const, title: '调研问卷设计', module: '市场调研与用户画像', date: '2024-12-25', duration: undefined as string | undefined, status: '已通过', score: undefined as number | undefined },
   ];
 
-  const handleQuizPass = (knowledgeId: string, moduleId: string) => {
+  const handleQuizPass = (
+    knowledgeId: string,
+    moduleId: string,
+    score: number,
+    answers: Record<string, number | number[] | string>,
+  ) => {
+    void submitStudentKnowledgeQuizAttempt(knowledgeId, { score, answers }).catch(() => {});
     setQuizStates((prev) => ({ ...prev, [knowledgeId]: 'passed' }));
     setCompletedKnowledgeIds((prev) => new Set([...prev, knowledgeId]));
     setModuleProgressState((prev) => ({ ...prev, [moduleId]: Math.min((prev[moduleId] || 0) + 1, 99) }));
@@ -695,6 +707,12 @@ export default function StudentCenterPage() {
     }
   };
 
+  const courseTaskSource = activeCourseTaskId
+    ? studentTodoTasks.filter((task) => task.id === activeCourseTaskId)
+    : studentTodoTasks;
+  const shouldShowCourseNode = (node: StudentTodoTask['resourceNodes'][number]) =>
+    !activeCourseTaskId || node.knowledgePoints.some((point) => !completedKnowledgeIds.has(point.id));
+
   const knowledgeChapterData = (() => {
     const nodeMap = new Map<string, ChapterTreeNode>();
     const leafIds = new Set<string>();
@@ -712,8 +730,9 @@ export default function StudentCenterPage() {
       }
     };
 
-    studentTodoTasks.forEach((task) => {
+    courseTaskSource.forEach((task) => {
       (task.resourceNodes || []).forEach((node) => {
+        if (!shouldShowCourseNode(node)) return;
         const moduleId = node.moduleKey || task.moduleId || '';
         if (moduleId !== selectedModule) return;
         leafIds.add(node.id);
@@ -772,12 +791,17 @@ export default function StudentCenterPage() {
   const activeChapterIsLeaf = Boolean(activeChapterNode && activeChapterNode.children.length === 0);
   const selectedChapterLeafIds = new Set(activeChapterIsLeaf && activeChapterId ? knowledgeChapterData.collectLeafIds(activeChapterId) : []);
   const selectedChapterKnowledge = selectedChapterLeafIds.size
-    ? knowledgePoints.filter((kp) => kp.module === selectedModule && kp.nodeIds.some((nodeId) => selectedChapterLeafIds.has(nodeId)))
+    ? knowledgePoints.filter((kp) =>
+      kp.module === selectedModule
+      && kp.nodeIds.some((nodeId) => selectedChapterLeafIds.has(nodeId))
+      && (!activeCourseTaskId || !completedKnowledgeIds.has(kp.id))
+    )
     : [];
   const selectedChapterResources = (() => {
     const byId = new Map<string, LearningDetailResource>();
-    studentTodoTasks.forEach((task) => {
+    courseTaskSource.forEach((task) => {
       (task.resourceNodes || []).forEach((node) => {
+        if (!shouldShowCourseNode(node)) return;
         if (!selectedChapterLeafIds.has(node.id)) return;
         node.resources.forEach((resource) => {
           const meta = resource as typeof resource & Partial<LearningDetailResource>;
@@ -970,14 +994,15 @@ export default function StudentCenterPage() {
     priority: 'urgent' | 'high' | 'normal' | 'low';
     attachments: StudentTodoTask['attachments'];
     resourceNodes: StudentTodoTask['resourceNodes'];
+    knowledgePointIds: string[];
     completed: boolean;
   };
 
-  const isModuleKnowledgeCompleted = (moduleId?: string) => {
-    if (!moduleId) return false;
-    const moduleKnowledge = knowledgePoints.filter((kp) => kp.module === moduleId);
-    return moduleKnowledge.length > 0 && moduleKnowledge.every((kp) => kp.status === 'completed');
-  };
+  const getTaskKnowledgePointIds = (task: StudentTodoTask) => [
+    ...new Set((task.resourceNodes || []).flatMap((node) => node.knowledgePoints.map((point) => point.id))),
+  ];
+  const isTaskKnowledgeCompleted = (task: TodoListItem) =>
+    task.knowledgePointIds.length > 0 && task.knowledgePointIds.every((id) => completedKnowledgeIds.has(id));
 
   const todoTasks: TodoListItem[] = studentTodoTasks.map((t) => ({
     id: t.id,
@@ -989,7 +1014,8 @@ export default function StudentCenterPage() {
     priority: t.priority,
     attachments: t.attachments ?? [],
     resourceNodes: t.resourceNodes ?? [],
-    completed: t.status === 'completed' || isModuleKnowledgeCompleted(t.moduleId ?? undefined),
+    knowledgePointIds: getTaskKnowledgePointIds(t),
+    completed: t.status === 'completed',
   }));
   const activeTodoTasks = todoTasks.filter((task) => !task.completed);
   const completedTodoTasks = todoTasks.filter((task) => task.completed);
@@ -1082,6 +1108,24 @@ export default function StudentCenterPage() {
     }
   };
 
+  const completeActiveTrainingTask = (moduleId: string) => {
+    if (!selectedClassId || !activeTrainingTask || activeTrainingTask.moduleId !== moduleId) return;
+    const taskId = activeTrainingTask.id;
+    void completeStudentTodoTask(selectedClassId, taskId)
+      .then(() => {
+        setStudentTodoTasks((prev) => prev.map((task) => (task.id === taskId ? { ...task, status: 'completed' } : task)));
+        setActiveTrainingTask(null);
+        notification.success({ message: '任务已完成', placement: 'topRight' });
+      })
+      .catch((e) => {
+        notification.warning({
+          message: '任务完成失败',
+          description: e instanceof Error ? e.message : '请稍后重试',
+          placement: 'topRight',
+        });
+      });
+  };
+
   const renderModuleContent = () => {
     switch (activeTab) {
       case 'module-team':
@@ -1096,20 +1140,21 @@ export default function StudentCenterPage() {
             initialSubTab={
               (searchParams.get('teamTab') as 'assessment' | 'waiting' | 'myteam' | 'square' | null) || undefined
             }
+            onTeamUpdated={refreshTeamFormationComplete}
           />
         );
       case 'module-ideation':
-        return <IdeationModule key={selectedClassId} />;
+        return <IdeationModule key={selectedClassId} classId={selectedClassId} onTaskComplete={() => completeActiveTrainingTask('ideation')} />;
       case 'module-market':
-        return <MarketResearchModule key={selectedClassId} />;
+        return <MarketResearchModule key={selectedClassId} onTaskComplete={() => completeActiveTrainingTask('market')} />;
       case 'module-product':
-        return <ProductDesignModule key={selectedClassId} />;
+        return <ProductDesignModule key={selectedClassId} onTaskComplete={() => completeActiveTrainingTask('product')} />;
       case 'module-business':
-        return <BusinessModelModule key={selectedClassId} />;
+        return <BusinessModelModule key={selectedClassId} onTaskComplete={() => completeActiveTrainingTask('business')} />;
       case 'module-simulation':
-        return <RoleSimulationModule key={selectedClassId} />;
+        return <RoleSimulationModule key={selectedClassId} onTaskComplete={() => completeActiveTrainingTask('simulation')} />;
       case 'module-plan':
-        return <BusinessPlanModule key={selectedClassId} />;
+        return <BusinessPlanModule key={selectedClassId} onTaskComplete={() => completeActiveTrainingTask('plan')} />;
       default:
         return null;
     }
@@ -1153,7 +1198,7 @@ export default function StudentCenterPage() {
           {!sidebarCollapsed && <div className="px-4 py-2"><span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">学习管理</span></div>}
           <div className="px-2 space-y-0.5 mb-2">
             {learningMenuItems.map((item) => (
-              <button key={item.key} onClick={() => changeActiveTab(item.key)} title={sidebarCollapsed ? item.label : undefined}
+              <button key={item.key} onClick={() => { if (item.key === 'knowledge') setActiveCourseTaskId(null); changeActiveTab(item.key); }} title={sidebarCollapsed ? item.label : undefined}
                 className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all cursor-pointer whitespace-nowrap relative ${activeTab === item.key ? 'bg-gradient-to-r from-teal-500 to-cyan-600 text-white shadow-sm' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'} ${sidebarCollapsed ? 'justify-center' : ''}`}
               >
                 <div className="w-5 h-5 flex items-center justify-center flex-shrink-0"><i className={`${item.icon} text-base`}></i></div>
@@ -1506,11 +1551,20 @@ export default function StudentCenterPage() {
                           const goTodo = () => {
                             if (actionDisabled) return;
                             if (task.resourceNodes.length > 0 && task.trainingModuleId) {
-                              setActiveTab('knowledge');
-                              setKnowledgeSubTab('knowledge');
-                              setSelectedModule(task.trainingModuleId);
+                              if (!isTaskKnowledgeCompleted(task)) {
+                                setActiveCourseTaskId(task.id);
+                                setActiveTab('knowledge');
+                                setKnowledgeSubTab('knowledge');
+                                setSelectedModule(task.trainingModuleId);
+                                return;
+                              }
+                              setActiveCourseTaskId(null);
+                              setActiveTrainingTask({ id: task.id, moduleId: task.trainingModuleId });
+                              handleModuleClick(task.moduleKey);
                               return;
                             }
+                            setActiveCourseTaskId(null);
+                            if (task.trainingModuleId) setActiveTrainingTask({ id: task.id, moduleId: task.trainingModuleId });
                             handleModuleClick(task.moduleKey);
                           };
                           return (
@@ -1557,19 +1611,10 @@ export default function StudentCenterPage() {
                                     ))}
                                   </div>
                                 )}
-                                {task.resourceNodes.length > 0 && (
-                                  <div className="flex flex-wrap gap-2 mt-2">
-                                    {task.resourceNodes.slice(0, 4).map((node) => (
-                                      <span key={node.id} className="inline-flex items-center gap-1.5 px-2 py-1 bg-teal-50 border border-teal-100 rounded-lg text-xs text-teal-700">
-                                        <i className="ri-book-open-line"></i>
-                                        <span className="max-w-[160px] truncate">{node.title}</span>
-                                      </span>
-                                    ))}
-                                    {task.resourceNodes.length > 4 && (
-                                      <span className="inline-flex items-center px-2 py-1 bg-gray-100 rounded-lg text-xs text-gray-500">
-                                        +{task.resourceNodes.length - 4}
-                                      </span>
-                                    )}
+                                {task.resourceNodes.length > 0 && !isTaskKnowledgeCompleted(task) && (
+                                  <div className="mt-2 px-2.5 py-2 bg-teal-50 border border-teal-100 rounded-lg text-xs text-teal-700 leading-relaxed">
+                                    <i className="ri-book-open-line mr-1"></i>
+                                    本任务已关联实践课程，您需要先学习相关课程并完成知识点检测后，才能进行实训任务。
                                   </div>
                                 )}
                               </div>
@@ -2169,7 +2214,7 @@ export default function StudentCenterPage() {
         <QuizModal
           config={activeQuizConfig}
           onClose={() => { setActiveQuizId(null); setActiveQuizConfig(null); }}
-          onPass={(knowledgeId, moduleId) => { handleQuizPass(knowledgeId, moduleId); setActiveQuizId(null); setActiveQuizConfig(null); }}
+          onPass={(knowledgeId, moduleId, score, answers) => { handleQuizPass(knowledgeId, moduleId, score, answers); setActiveQuizId(null); setActiveQuizConfig(null); }}
         />
       )}
 

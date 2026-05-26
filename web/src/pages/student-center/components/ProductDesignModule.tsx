@@ -137,7 +137,11 @@ const designTools: DesignTool[] = [
   }
 ];
 
-export default function ProductDesignModule() {
+type ProductDesignModuleProps = {
+  onTaskComplete?: () => void;
+};
+
+export default function ProductDesignModule({ onTaskComplete }: ProductDesignModuleProps) {
   const [activeTab, setActiveTab] = useState<'ai-suggestions' | 'cases' | 'tools' | 'upload'>('ai-suggestions');
   
   // 原型上传和AI分析
@@ -263,6 +267,7 @@ export default function ProductDesignModule() {
         prev.map(p => p.id === prototypeId ? { ...p, analysis: mockAnalysis } : p)
       );
       setIsAnalyzing(false);
+      onTaskComplete?.();
     }, 3000);
   };
 

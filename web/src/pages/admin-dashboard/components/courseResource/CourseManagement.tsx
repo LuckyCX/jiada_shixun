@@ -671,16 +671,7 @@ export default function CourseManagement() {
   return (
     <div className="space-y-5">
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h2 className="text-base font-bold text-gray-900 flex items-center gap-2">
-              <i className="ri-book-2-line text-teal-500"></i>
-              实践课程内容管理
-            </h2>
-            <p className="text-xs text-gray-400 mt-0.5">按实训环节维护课程资源、知识点与学习检测</p>
-          </div>
-        </div>
-        <div className="mt-4 pt-4 border-t border-gray-100 flex items-center justify-between gap-3">
+        <div className="  border-gray-100 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3 overflow-x-auto">
             {modules.map((mod) => (
               <button key={mod.key} onClick={() => setSelectedModule(mod.key)} className={`px-5 py-2.5 rounded-xl font-medium transition-all whitespace-nowrap text-sm ${selectedModule === mod.key ? `${mod.color} text-white shadow-lg` : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>

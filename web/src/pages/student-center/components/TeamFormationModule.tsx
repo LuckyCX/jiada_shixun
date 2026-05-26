@@ -18,6 +18,7 @@ type TeamFormationModuleProps = {
   classId: string;
   className: string;
   initialSubTab?: 'assessment' | 'waiting' | 'myteam' | 'square';
+  onTeamUpdated?: () => void;
 };
 
 function memberAvatarChar(name: string): string {
@@ -328,7 +329,7 @@ function showToast(message: string, type: 'success' | 'error' = 'success') {
   setTimeout(() => div.remove(), 3000);
 }
 
-export default function TeamFormationModule({ classId, className, initialSubTab }: TeamFormationModuleProps) {
+export default function TeamFormationModule({ classId, className, initialSubTab, onTeamUpdated }: TeamFormationModuleProps) {
   const [activeTab, setActiveTab] = useState<'assessment' | 'waiting' | 'myteam' | 'square'>(
     initialSubTab || 'assessment'
   );
@@ -652,6 +653,7 @@ export default function TeamFormationModule({ classId, className, initialSubTab 
           introduction: teamInfoForm.introduction.trim(),
         });
       setEditingTeamInfo(false);
+      onTeamUpdated?.();
       showToast('团队信息已保存');
     } catch (e) {
       showToast(e instanceof Error ? e.message : '保存失败', 'error');

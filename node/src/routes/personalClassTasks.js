@@ -512,6 +512,50 @@ async function mapTaskRow(pool, classId, row) {
   };
 }
 
+async function mapStudentTodoTaskRow(pool, row, studentId, forceStatus = null) {
+  const moduleId = TASK_MODULE_TO_TRAINING_ID[row.module] || null;
+  const dl = formatDateOnly(row.deadline);
+  let status = forceStatus || row.status;
+  if (status === 'published' && dl) {
+    const disp = displayStatus({ status: 'published', deadline: row.deadline });
+    if (disp === 'expired') status = 'expired';
+  }
+  return {
+    id: String(row.id),
+    title: row.title,
+    module: row.module,
+    moduleId,
+    priority: row.priority,
+    deadline: dl,
+    daysLeft: dl ? daysUntilDeadline(dl) : 0,
+    status,
+    attachments: row.attachmentsEnabled ? await loadTaskAttachments(pool, row.id) : [],
+    resourceLinkEnabled: row.resourceLinkEnabled,
+    resourceNodes: row.resourceLinkEnabled
+      ? await loadTaskResourceNodes(pool, row.id, { publishedLeavesOnly: true, studentId })
+      : [],
+  };
+}
+
+async function loadPassedKnowledgePointIds(pool, studentId, tasks) {
+  const ids = [
+    ...new Set(tasks.flatMap((task) =>
+      (task.resourceNodes || []).flatMap((node) => (node.knowledgePoints || []).map((point) => Number(point.id)))
+    ).filter(Boolean)),
+  ];
+  if (!ids.length) return [];
+  const { rows } = await pool.query(
+    `SELECT DISTINCT q.knowledge_point_id AS "knowledgePointId"
+     FROM quiz_attempts a
+     JOIN quizzes q ON q.id = a.quiz_id
+     WHERE a.user_id = $1
+       AND a.passed = true
+       AND q.knowledge_point_id = ANY($2::bigint[])`,
+    [studentId, ids]
+  );
+  return rows.map((row) => String(row.knowledgePointId));
+}
+
 async function saveTaskTeams(client, taskId, teamIds) {
   await client.query(`DELETE FROM teacher_personal_class_task_teams WHERE task_id = $1`, [taskId]);
   for (const teamId of teamIds) {
@@ -752,6 +796,9 @@ router.put(
 
       let publishedAt = existing[0].published_at;
       if (v.status === 'published' && !publishedAt) publishedAt = new Date();
+      const previousResourceNodeIds = await loadTaskResourceNodeIds(pool, taskId);
+      const nextResourceNodeIds = v.resourceLinkEnabled ? v.resourceNodeIds : [];
+      const hasAddedResourceNodes = nextResourceNodeIds.some((id) => !previousResourceNodeIds.includes(String(id)));
 
       const client = await pool.connect();
       try {
@@ -785,6 +832,9 @@ router.put(
         if (v.scope === 'specific') await saveTaskTeams(client, taskId, v.teamIds);
         else await client.query(`DELETE FROM teacher_personal_class_task_teams WHERE task_id = $1`, [taskId]);
         await saveTaskResourceNodes(client, taskId, v.resourceLinkEnabled ? v.resourceNodeIds : []);
+        if (hasAddedResourceNodes) {
+          await client.query(`DELETE FROM student_personal_class_task_completions WHERE task_id = $1`, [taskId]);
+        }
         if (v.status === 'published') {
           const action = existing[0].status === 'published' || existing[0].published_at ? 'updated' : 'published';
           await notifyTaskTargets(client, { classId, teacherId: tid, task: upd[0], action });
@@ -962,6 +1012,21 @@ router.get(
       if (!(await studentEnrolledInClass(pool, sid, classId))) {
         return bad(req, res, 403, 40301, '未加入该班级');
       }
+      const baseQuery = `SELECT t.id, t.title, t.module, t.priority, t.deadline, t.status,
+                t.attachments_enabled AS "attachmentsEnabled",
+                t.resource_link_enabled AS "resourceLinkEnabled"
+         FROM teacher_personal_class_tasks t
+         WHERE t.teacher_personal_class_id = $1
+           AND t.status = 'published'
+           AND (
+             t.scope = 'all'
+             OR EXISTS (
+               SELECT 1 FROM teacher_personal_class_task_teams tt
+               INNER JOIN teacher_personal_class_team_members m
+                 ON m.team_id = tt.team_id AND m.student_id = $2
+               WHERE tt.task_id = t.id
+             )
+           )`;
       const { rows } = await pool.query(
         `SELECT t.id, t.title, t.module, t.priority, t.deadline, t.status,
                 t.attachments_enabled AS "attachmentsEnabled",
@@ -985,34 +1050,55 @@ router.get(
          ORDER BY t.deadline ASC, t.created_at DESC`,
         [classId, sid]
       );
+      const { rows: completedRows } = await pool.query(
+        `${baseQuery}
+           AND EXISTS (
+             SELECT 1 FROM student_personal_class_task_completions c
+             WHERE c.task_id = t.id AND c.student_id = $2
+           )
+         ORDER BY t.deadline ASC, t.created_at DESC`,
+        [classId, sid]
+      );
       const tasks = [];
-      for (const row of rows) {
-        const moduleId = TASK_MODULE_TO_TRAINING_ID[row.module] || null;
-        const dl = formatDateOnly(row.deadline);
-        let status = row.status;
-        if (status === 'published' && dl) {
-          const disp = displayStatus({ status: 'published', deadline: row.deadline });
-          if (disp === 'expired') status = 'expired';
-        }
-        tasks.push({
-          id: String(row.id),
-          title: row.title,
-          module: row.module,
-          moduleId,
-          priority: row.priority,
-          deadline: dl,
-          daysLeft: dl ? daysUntilDeadline(dl) : 0,
-          status,
-          attachments: row.attachmentsEnabled ? await loadTaskAttachments(pool, row.id) : [],
-          resourceLinkEnabled: row.resourceLinkEnabled,
-          resourceNodes: row.resourceLinkEnabled
-            ? await loadTaskResourceNodes(pool, row.id, { publishedLeavesOnly: true, studentId: sid })
-            : [],
-        });
-      }
-      return ok(req, res, { tasks });
+      for (const row of rows) tasks.push(await mapStudentTodoTaskRow(pool, row, sid));
+      const completedTasks = [];
+      for (const row of completedRows) completedTasks.push(await mapStudentTodoTaskRow(pool, row, sid, 'completed'));
+      const completedKnowledgePointIds = await loadPassedKnowledgePointIds(pool, sid, [...tasks, ...completedTasks]);
+      return ok(req, res, { tasks, completedTasks, completedKnowledgePointIds });
     } catch (e) {
       logError(`GET student todos traceId=${req.traceId}`, e);
+      return bad(req, res, 500, 50000, e.message);
+    }
+  }
+);
+
+router.post(
+  '/student/personal-classes/:classId/tasks/:taskId/complete',
+  requireAuth(),
+  requireStudent(),
+  async (req, res) => {
+    try {
+      const sid = studentIdFromReq(req);
+      const classId = parseId(req.params.classId);
+      const taskId = parseId(req.params.taskId);
+      if (!sid || !classId || !taskId) return bad(req, res, 400, 40003, '参数无效');
+      const pool = getPool();
+      if (!(await studentEnrolledInClass(pool, sid, classId))) {
+        return bad(req, res, 403, 40301, '未加入该班级');
+      }
+      if (!(await studentCanViewTask(pool, sid, classId, taskId))) {
+        return bad(req, res, 403, 40302, '无权查看该任务');
+      }
+      await pool.query(
+        `INSERT INTO student_personal_class_task_completions (task_id, student_id)
+         VALUES ($1, $2)
+         ON CONFLICT (task_id, student_id)
+         DO UPDATE SET completed_at = now()`,
+        [taskId, sid]
+      );
+      return ok(req, res, { completed: true });
+    } catch (e) {
+      logError(`POST student task complete traceId=${req.traceId}`, e);
       return bad(req, res, 500, 50000, e.message);
     }
   }

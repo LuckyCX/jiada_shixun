@@ -1417,7 +1417,11 @@ function ChallengeTabInline({ savedTheme }: { savedTheme: any }) {
 }
 
 // ─── Main Component ───────────────────────────────────────────────────────────
-export default function MarketResearchModule() {
+type MarketResearchModuleProps = {
+  onTaskComplete?: () => void;
+};
+
+export default function MarketResearchModule({ onTaskComplete }: MarketResearchModuleProps) {
   const [activeTab, setActiveTab] = useState<'plan' | 'survey' | 'analysis' | 'persona' | 'challenge'>('plan');
   const [toast, setToast] = useState('');
 
@@ -1495,6 +1499,7 @@ export default function MarketResearchModule() {
       setPlanSaved(true);
       setPlan((prev) => ({ ...prev, savedAt: new Date().toLocaleString('zh-CN') }));
       showToast('调研计划已保存 ✓');
+      onTaskComplete?.();
       setTimeout(() => setPlanSaved(false), 3000);
     }, 800);
   };

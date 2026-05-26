@@ -97,7 +97,11 @@ const LineChart = ({
   );
 };
 
-const RoleSimulationModule = () => {
+type RoleSimulationModuleProps = {
+  onTaskComplete?: () => void;
+};
+
+const RoleSimulationModule = ({ onTaskComplete }: RoleSimulationModuleProps) => {
   const [step, setStep] = useState<'config' | 'tracking' | 'optimize'>('config');
   const [isRunning, setIsRunning] = useState(false);
   const [simDay, setSimDay] = useState(0);
@@ -145,6 +149,7 @@ const RoleSimulationModule = () => {
       if (day > 30) {
         if (timerRef.current) clearInterval(timerRef.current);
         setIsRunning(false);
+        onTaskComplete?.();
         return;
       }
 

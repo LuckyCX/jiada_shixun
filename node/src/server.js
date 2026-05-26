@@ -15,6 +15,7 @@ import teamFormationRoutes from './routes/teamFormation.js';
 import personalClassTasksRoutes from './routes/personalClassTasks.js';
 import studentNotificationsRoutes from './routes/studentNotifications.js';
 import courseResourcesRoutes from './routes/courseResources.js';
+import teacherInstanceLibraryRoutes from './routes/teacherInstanceLibrary.js';
 
 const app = express();
 
@@ -58,6 +59,7 @@ app.use('/api', teamFormationRoutes);
 app.use('/api', personalClassTasksRoutes);
 app.use('/api', studentNotificationsRoutes);
 app.use('/api', courseResourcesRoutes);
+app.use('/api', teacherInstanceLibraryRoutes);
 
 app.use((err, req, res, _next) => {
   logError(`express errorHandler traceId=${req.traceId}`, err);

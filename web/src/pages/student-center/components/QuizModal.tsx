@@ -6,7 +6,7 @@ export type { QuizConfig, QuizQuestion };
 interface QuizModalProps {
   config: QuizConfig;
   onClose: () => void;
-  onPass: (knowledgeId: string, moduleId: string) => void;
+  onPass: (knowledgeId: string, moduleId: string, score: number, answers: Record<string, number | number[] | string>) => void;
 }
 
 export default function QuizModal({ config, onClose, onPass }: QuizModalProps) {
@@ -105,7 +105,7 @@ export default function QuizModal({ config, onClose, onPass }: QuizModalProps) {
     setPassed(isPass);
     setShowResult(true);
     if (isPass) {
-      onPass(config.knowledgeId, config.moduleId);
+      onPass(config.knowledgeId, config.moduleId, finalScore, answers);
     }
   };
 

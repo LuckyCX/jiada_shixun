@@ -1,7 +1,11 @@
 import { useState } from 'react';
 import VersionControl, { Version } from '../../../components/feature/VersionControl';
 
-export default function BusinessPlanModule() {
+type BusinessPlanModuleProps = {
+  onTaskComplete?: () => void;
+};
+
+export default function BusinessPlanModule({ onTaskComplete }: BusinessPlanModuleProps) {
   const [activeTab, setActiveTab] = useState<'plan' | 'analysis'>('plan');
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatingStep, setGeneratingStep] = useState(0);
@@ -239,6 +243,7 @@ export default function BusinessPlanModule() {
 
   const handleKeepContent = () => {
     setShowGenerateOptions(false);
+    onTaskComplete?.();
   };
 
   const handleRegenerate = () => {

@@ -25,6 +25,7 @@ import ClassProjectOverview from '../class-project-overview/page';
 import TeacherGuide from '../teacher-guide/page';
 import CourseSettings from '../course-settings/page';
 import EvaluationPanel from './components/EvaluationPanel';
+import TrainingModuleResources from './components/trainingModuleResources';
 import {
   getTeacherProfile,
   listTeacherPersonalClasses,
@@ -47,7 +48,8 @@ type TabKey =
   | 'classProjectOverview'
   | 'teacherGuide'
   | 'courseSettings'
-  | 'courseResources';
+  | 'courseResources'
+  | 'trainingModuleResources';
 
 type SidebarGroup = {
   groupLabel?: string;
@@ -65,13 +67,6 @@ const sidebarGroups: SidebarGroup[] = [
     groupLabel: '班级与学生',
     items: [
       { key: 'classManagement', label: '班级管理', icon: 'ri-building-4-line', type: 'tab' },
-      { key: 'teamReview', label: '组队管理', icon: 'ri-team-line', type: 'tab' },
-    ],
-  },
-  {
-    groupLabel: '课程建设',
-    items: [
-      { key: 'courseResources', label: '课程资源', icon: 'ri-user-line', type: 'tab' },
     ],
   },
   {
@@ -84,8 +79,16 @@ const sidebarGroups: SidebarGroup[] = [
     ],
   },
   {
+    groupLabel: '课程建设',
+    items: [
+      { key: 'courseResources', label: '课程资源', icon: 'ri-book-open-line', type: 'tab' },
+      { key: 'trainingModuleResources', label: '实训模块资源', icon: 'ri-layout-grid-line', type: 'tab' },
+    ],
+  },
+  {
     groupLabel: '任务与审核',
     items: [
+      { key: 'teamReview', label: '组队管理', icon: 'ri-team-line', type: 'tab' },
       { key: 'taskManagement', label: '任务发布', icon: 'ri-task-line', type: 'tab' },
       { key: 'topicReview', label: '选题审核', icon: 'ri-file-search-line', type: 'tab' },
       { key: 'businessPlanReview', label: '商业计划书审核', icon: 'ri-file-chart-line', type: 'tab' },
@@ -130,6 +133,7 @@ const ALL_TAB_KEYS: TabKey[] = [
   'teacherGuide',
   'courseSettings',
   'courseResources',
+  'trainingModuleResources',
 ];
 
 function isTabKey(v: string): v is TabKey {
@@ -677,6 +681,9 @@ export default function TeacherDashboard() {
 
       case 'courseResources':
         return <CourseResourceManagement />;
+
+      case 'trainingModuleResources':
+        return <TrainingModuleResources />;
 
       case 'evaluation':
         return <EvaluationPanel />;

@@ -72,7 +72,11 @@ const initialRevenues: RevenueItem[] = [
   { id: 4, source: '广告收入', monthly: 1500 },
 ];
 
-export default function BusinessModelModule() {
+type BusinessModelModuleProps = {
+  onTaskComplete?: () => void;
+};
+
+export default function BusinessModelModule({ onTaskComplete }: BusinessModelModuleProps) {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<'canvas' | 'swot' | 'marketing' | 'finance' | 'warroom'>('canvas');
   const [costs, setCosts] = useState<CostItem[]>(initialCosts);
@@ -162,6 +166,7 @@ export default function BusinessModelModule() {
   const handleSaveCanvas = () => {
     localStorage.setItem('bmc_canvas_data', JSON.stringify(canvasData));
     showToast('商业画布已保存 ✓');
+    onTaskComplete?.();
   };
 
   const handleSaveSwot = () => {

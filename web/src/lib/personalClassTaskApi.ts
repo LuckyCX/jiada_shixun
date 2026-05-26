@@ -33,11 +33,24 @@ export type StudentTodoTask = {
   resourceNodes: TaskResourceNode[];
 };
 
-export async function fetchStudentTodoTasks(classId: string): Promise<{ tasks: StudentTodoTask[] }> {
+export async function fetchStudentTodoTasks(classId: string): Promise<{
+  tasks: StudentTodoTask[];
+  completedTasks?: StudentTodoTask[];
+  completedKnowledgePointIds?: string[];
+}> {
   const { portalAuthenticatedFetch } = await import('./authApi');
   return portalAuthenticatedFetch('student', `/api/student/personal-classes/${classId}/tasks/todos`) as Promise<{
     tasks: StudentTodoTask[];
+    completedTasks?: StudentTodoTask[];
+    completedKnowledgePointIds?: string[];
   }>;
+}
+
+export async function completeStudentTodoTask(classId: string, taskId: string): Promise<void> {
+  const { portalAuthenticatedFetch } = await import('./authApi');
+  await portalAuthenticatedFetch('student', `/api/student/personal-classes/${classId}/tasks/${taskId}/complete`, {
+    method: 'POST',
+  });
 }
 
 export async function downloadStudentTaskAttachment(classId: string, taskId: string, attachmentId: string, fileName: string) {
