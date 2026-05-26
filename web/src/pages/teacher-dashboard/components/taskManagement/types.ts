@@ -10,8 +10,7 @@ export type TaskFormValues = {
   priority: TaskPriority;
   deadline: Dayjs | string;
   attachmentsEnabled: boolean;
-  resourceLinkEnabled: boolean;
-  resourceNodeIds: string[];
+  requiresStudentAttachment: boolean;
   scope: 'all' | 'specific';
   teamIds: string[];
 };

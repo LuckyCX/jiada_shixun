@@ -275,6 +275,7 @@ export type GroupingTeam = {
   id: string;
   name: string;
   introduction?: string;
+  leaderStudentId?: string | null;
   groupingStatus?: string;
   complementScore: number;
   aiRationale?: string;

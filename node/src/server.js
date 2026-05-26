@@ -16,6 +16,9 @@ import personalClassTasksRoutes from './routes/personalClassTasks.js';
 import studentNotificationsRoutes from './routes/studentNotifications.js';
 import courseResourcesRoutes from './routes/courseResources.js';
 import teacherInstanceLibraryRoutes from './routes/teacherInstanceLibrary.js';
+import studentIdeationRoutes from './routes/studentIdeation.js';
+import courseSettingsRoutes from './routes/courseSettings.js';
+import { startCourseSettingReminderJob } from './jobs/courseSettingReminderJob.js';
 
 const app = express();
 
@@ -60,6 +63,8 @@ app.use('/api', personalClassTasksRoutes);
 app.use('/api', studentNotificationsRoutes);
 app.use('/api', courseResourcesRoutes);
 app.use('/api', teacherInstanceLibraryRoutes);
+app.use('/api', studentIdeationRoutes);
+app.use('/api', courseSettingsRoutes);
 
 app.use((err, req, res, _next) => {
   logError(`express errorHandler traceId=${req.traceId}`, err);
@@ -68,4 +73,5 @@ app.use((err, req, res, _next) => {
 
 app.listen(config.port, '0.0.0.0', () => {
   console.log(`API listening on ${config.port}`);
+  startCourseSettingReminderJob();
 });

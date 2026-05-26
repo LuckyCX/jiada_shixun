@@ -14,6 +14,14 @@ export type StudentPersonalEnrollment = {
   teacherId: string;
   teacherName: string;
   joinedAt: string;
+  teamStartDate: string;
+  canEnterTraining: boolean;
+  unavailableReason: string;
+  courseSettings: {
+    moduleKey: string;
+    startDate: string;
+    deadlineDate: string;
+  }[];
 };
 
 export type StudentProfile = {
@@ -30,11 +38,24 @@ export async function getStudentProfile(): Promise<StudentProfile> {
 
 export async function fetchStudentPersonalEnrollments(): Promise<StudentPersonalEnrollment[]> {
   const data = await studentFetch('/api/student/personal-class-enrollments');
-  return Array.isArray(data) ? (data as StudentPersonalEnrollment[]) : [];
+  if (!Array.isArray(data)) return [];
+  return (data as StudentPersonalEnrollment[]).map((item) => ({
+    ...item,
+    teamStartDate: item.teamStartDate || '',
+    canEnterTraining: Boolean(item.canEnterTraining),
+    unavailableReason: item.unavailableReason || '',
+    courseSettings: Array.isArray(item.courseSettings)
+      ? item.courseSettings.map((setting) => ({
+          moduleKey: String(setting.moduleKey || ''),
+          startDate: setting.startDate || '',
+          deadlineDate: setting.deadlineDate || '',
+        }))
+      : [],
+  }));
 }
 
-/** 登录成功后、写入 token 前：是否至少加入一个教师个性化班级 */
-export async function studentHasPersonalClassEnrollmentWithToken(
+/** 登录成功后、写入 token 前：是否至少有一个可进入实训的教师个性化班级 */
+export async function studentHasActivePersonalClassWithToken(
   token: string
 ): Promise<boolean> {
   const r = await fetch('/api/student/personal-class-enrollments', {
@@ -43,5 +64,5 @@ export async function studentHasPersonalClassEnrollmentWithToken(
   const j = await r.json().catch(() => ({ code: -1 }));
   if (!r.ok || j.code !== 0) return false;
   const list = j.data as StudentPersonalEnrollment[] | undefined;
-  return Array.isArray(list) && list.length > 0;
+  return Array.isArray(list) && list.some((item) => item.canEnterTraining);
 }

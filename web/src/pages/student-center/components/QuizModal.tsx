@@ -41,7 +41,7 @@ export default function QuizModal({ config, onClose, onPass }: QuizModalProps) {
   const isAnswered = (q: QuizQuestion) => {
     const ans = answers[q.id];
     if (q.type === 'short')
-      return typeof ans === 'string' && ans.trim().length >= 20;
+      return typeof ans === 'string' && ans.trim().length > 0;
     if (q.type === 'multiple')
       return Array.isArray(ans) && (ans as number[]).length > 0;
     return ans !== undefined;
@@ -52,15 +52,16 @@ export default function QuizModal({ config, onClose, onPass }: QuizModalProps) {
     if (q.type === 'short') {
       const ans = (answers[q.id] as string) || '';
       const trimmed = ans.trim();
-      if (trimmed.length < 20) return 0;
-      const keywords = q.keywords || [];
-      const matchCount = keywords.filter((kw) => trimmed.includes(kw)).length;
-      const keywordRatio = keywords.length > 0 ? matchCount / keywords.length : 1;
-      const lengthBonus = Math.min(trimmed.length / 100, 1);
-      return Math.round(
-        q.score *
-          Math.min(keywordRatio * 0.7 + lengthBonus * 0.3, 1)
-      );
+      if (!trimmed) return 0;
+      const answerText = trimmed.toLowerCase();
+      const keywords = (q.keywords || [])
+        .flatMap((kw) => String(kw || '').split(/[、,，;；\n]/))
+        .map((kw) => kw.trim())
+        .filter(Boolean);
+      if (keywords.length === 0) return 0;
+      const matchCount = keywords.filter((kw) => answerText.includes(kw.toLowerCase())).length;
+      const perKeywordScore = q.score / keywords.length;
+      return Number((matchCount * perKeywordScore).toFixed(2));
     }
 
     if (q.type === 'single') {
@@ -290,7 +291,6 @@ export default function QuizModal({ config, onClose, onPass }: QuizModalProps) {
                     /{totalQ}
                   </span>
                 </div>
-                <p className="text-teal-200 text-xs">{passingScore}分及格</p>
               </div>
               <button
                 onClick={onClose}
@@ -414,13 +414,13 @@ export default function QuizModal({ config, onClose, onPass }: QuizModalProps) {
               <textarea
                 value={(answers[question.id] as string) || ''}
                 onChange={(e) => handleShortAnswer(e.target.value)}
-                placeholder="请在此输入你的回答（至少20字）..."
+                placeholder="请在此输入你的回答..."
                 className="w-full border-2 border-gray-200 focus:border-teal-400 rounded-xl p-4 text-sm text-gray-700 resize-none focus:outline-none transition-colors leading-relaxed"
                 rows={5}
                 maxLength={500}
               />
               <div className="flex justify-between mt-1">
-                <span className="text-xs text-gray-400">至少输入20个字</span>
+                <span className="text-xs text-gray-400">按关键词命中情况计分</span>
                 <span className="text-xs text-gray-400">
                   {(answers[question.id] as string || '').length}/500
                 </span>

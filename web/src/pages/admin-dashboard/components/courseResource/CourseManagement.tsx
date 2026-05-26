@@ -22,8 +22,10 @@ import {
   updateCourseResourceNodeStatus,
   uploadCourseResourceFile,
 } from '../../../../lib/courseResourceApi';
+import TrainingModuleResources from '../../../teacher-dashboard/components/trainingModuleResources';
 
 type AddNodeState = { parentId: string | null; parentLevel: 0 | 1 | 2 } | null;
+type ResourceContentTab = 'course' | 'instance';
 type ConfirmState = {
   title: string;
   content: string;
@@ -148,9 +150,15 @@ const modalOkButtonProps = {
 };
 const TEXT_MAX_LENGTH = 300;
 
-export default function CourseManagement() {
+type CourseManagementProps = {
+  selectedModule?: string;
+  hideModuleTabs?: boolean;
+};
+
+export default function CourseManagement({ selectedModule: selectedModuleProp, hideModuleTabs = false }: CourseManagementProps) {
   const modules = TRAINING_MODULE_TABS;
-  const [selectedModule, setSelectedModule] = useState(TRAINING_MODULE_TABS[0].key);
+  const [internalSelectedModule, setInternalSelectedModule] = useState(TRAINING_MODULE_TABS[0].key);
+  const [resourceContentTab, setResourceContentTab] = useState<ResourceContentTab>('course');
   const [nodes, setNodes] = useState<CourseResourceNode[]>([]);
   const [knowledgePoints, setKnowledgePoints] = useState<CourseKnowledgePoint[]>([]);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -177,6 +185,9 @@ export default function CourseManagement() {
   const [editingQuestionId, setEditingQuestionId] = useState<string | null>(null);
   const [questionDraft, setQuestionDraft] = useState<QuestionDraft>(emptyQuestionDraft);
 
+  const selectedModule = modules.some((m) => m.key === selectedModuleProp)
+    ? String(selectedModuleProp)
+    : internalSelectedModule;
   const currentModule = modules.find((m) => m.key === selectedModule) || null;
   const activeKnowledge = knowledgePoints.find((kp) => kp.id === activeKnowledgeId) || null;
   const stats = useMemo(() => countNodes(nodes), [nodes]);
@@ -185,6 +196,8 @@ export default function CourseManagement() {
     [editingQuestionId, questions]
   );
   const questionScoreMax = Math.max(0, 100 - otherQuestionsScore);
+  const supportsInstanceLibraryTab = selectedModule === 'ideation' || selectedModule === 'product';
+  const instanceLibraryLabel = selectedModule === 'product' ? '原型案例库' : '实例库';
 
   const showToast = useCallback((message: string) => {
     setToast(message);
@@ -219,6 +232,12 @@ export default function CourseManagement() {
   useEffect(() => {
     loadData(selectedModule);
   }, [loadData, selectedModule]);
+
+  useEffect(() => {
+    if (!supportsInstanceLibraryTab && resourceContentTab !== 'course') {
+      setResourceContentTab('course');
+    }
+  }, [resourceContentTab, supportsInstanceLibraryTab]);
 
   useEffect(() => {
     if (!knowledgeDialogOpen || !activeKnowledgeId) {
@@ -614,7 +633,7 @@ export default function CourseManagement() {
 
   const renderSection = (section: CourseResourceNode) => (
     <div key={section.id} className="border border-gray-100 rounded-xl bg-gray-50/50 p-3">
-      <div className="flex items-center justify-between mb-3">
+      <div className="flex items-center justify-between ">
         <button onClick={() => setExpanded((prev) => ({ ...prev, [section.id]: !prev[section.id] }))} className="flex items-center gap-2 text-left cursor-pointer">
           <i className={`${expanded[section.id] ? 'ri-arrow-down-s-line' : 'ri-arrow-right-s-line'} text-gray-400 text-lg`}></i>
           <span className="text-sm font-bold text-gray-900">{section.title}</span>
@@ -636,23 +655,25 @@ export default function CourseManagement() {
   const renderChapter = (chapter: CourseResourceNode) => (
     <div key={chapter.id} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
       <div className="flex items-center justify-between p-4 bg-gradient-to-r from-teal-50 to-cyan-50">
-        <button onClick={() => setExpanded((prev) => ({ ...prev, [chapter.id]: !prev[chapter.id] }))} className="flex items-center gap-3 text-left cursor-pointer">
+        <button type="button" onClick={() => setExpanded((prev) => ({ ...prev, [chapter.id]: !prev[chapter.id] }))} className="flex flex-1 items-center gap-3 text-left cursor-pointer min-w-0">
           <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-teal-500 to-cyan-500 flex items-center justify-center flex-shrink-0">
             <i className="ri-book-open-line text-white text-sm"></i>
           </div>
-          <div>
-            <h3 className="text-sm font-bold text-gray-900">{chapter.title}</h3>
+          <div className="min-w-0 flex flex-col justify-center">
+            <h3 className="text-sm font-bold text-gray-900 leading-5 truncate">{chapter.title}</h3>
             <div className="text-xs text-gray-500 mt-0.5">{chapter.children.length} 个小节</div>
           </div>
         </button>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-shrink-0">
           <button onClick={() => openAddNode(chapter.id, 1)} className="px-3 py-1.5 bg-white text-teal-600 text-xs font-medium rounded-lg hover:bg-teal-50 transition-colors whitespace-nowrap cursor-pointer">
             <i className="ri-add-line mr-1"></i>新增小节
           </button>
           <button onClick={() => askDeleteNode(chapter)} className="px-3 py-1.5 bg-white text-red-500 text-xs font-medium rounded-lg hover:bg-red-50 transition-colors whitespace-nowrap cursor-pointer">
             <i className="ri-delete-bin-line mr-1"></i>删除
           </button>
-          <i className={`${expanded[chapter.id] ? 'ri-arrow-up-s-line' : 'ri-arrow-down-s-line'} text-gray-400 text-lg`}></i>
+          <button type="button" onClick={() => setExpanded((prev) => ({ ...prev, [chapter.id]: !prev[chapter.id] }))} className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:bg-white hover:text-teal-600 transition-colors cursor-pointer">
+            <i className={`${expanded[chapter.id] ? 'ri-arrow-up-s-line' : 'ri-arrow-down-s-line'} text-lg`}></i>
+          </button>
         </div>
       </div>
       {expanded[chapter.id] && (
@@ -668,27 +689,58 @@ export default function CourseManagement() {
     </div>
   );
 
+  const renderCourseActions = () => (
+    <div className="flex items-center gap-2 flex-shrink-0">
+      <button onClick={() => setKnowledgeDialogOpen(true)} className="px-4 py-2 bg-white border border-teal-200 text-teal-600 text-sm font-medium rounded-xl hover:bg-teal-50 transition-colors whitespace-nowrap cursor-pointer">
+        <i className="ri-price-tag-3-line mr-1.5"></i>知识点维护
+      </button>
+      <button onClick={() => openAddNode(null, 0)} className="px-4 py-2 bg-teal-500 text-white text-sm font-medium rounded-xl hover:bg-teal-600 transition-colors whitespace-nowrap cursor-pointer">
+        <i className="ri-add-line mr-1.5"></i>新增章节
+      </button>
+    </div>
+  );
+
   return (
     <div className="space-y-5">
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
-        <div className="  border-gray-100 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3 overflow-x-auto">
-            {modules.map((mod) => (
-              <button key={mod.key} onClick={() => setSelectedModule(mod.key)} className={`px-5 py-2.5 rounded-xl font-medium transition-all whitespace-nowrap text-sm ${selectedModule === mod.key ? `${mod.color} text-white shadow-lg` : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
-                {mod.shortName}
+        {!hideModuleTabs && (
+          <div className="border-gray-100 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3 overflow-x-auto">
+              {modules.map((mod) => (
+                <button key={mod.key} type="button" onClick={() => setInternalSelectedModule(mod.key)} className={`px-5 py-2.5 rounded-xl font-medium transition-all whitespace-nowrap text-sm ${selectedModule === mod.key ? `${mod.color} text-white shadow-lg` : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+                  {mod.shortName}
+                </button>
+              ))}
+            </div>
+            {!supportsInstanceLibraryTab && renderCourseActions()}
+          </div>
+        )}
+        {hideModuleTabs && !supportsInstanceLibraryTab && resourceContentTab === 'course' && (
+          <div className="flex items-center justify-end">
+            {renderCourseActions()}
+          </div>
+        )}
+        {supportsInstanceLibraryTab && <div className="  border-gray-100 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            {[
+              { key: 'course' as ResourceContentTab, label: '课程资源' },
+              { key: 'instance' as ResourceContentTab, label: instanceLibraryLabel },
+            ].map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => setResourceContentTab(tab.key)}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer whitespace-nowrap ${
+                  resourceContentTab === tab.key ? 'bg-teal-500 text-white shadow-sm' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
+              >
+                {tab.label}
               </button>
             ))}
           </div>
-          <div className="flex items-center gap-2 flex-shrink-0">
-            <button onClick={() => setKnowledgeDialogOpen(true)} className="px-4 py-2 bg-white border border-teal-200 text-teal-600 text-sm font-medium rounded-xl hover:bg-teal-50 transition-colors whitespace-nowrap cursor-pointer">
-              <i className="ri-price-tag-3-line mr-1.5"></i>知识点维护
-            </button>
-            <button onClick={() => openAddNode(null, 0)} className="px-4 py-2 bg-teal-500 text-white text-sm font-medium rounded-xl hover:bg-teal-600 transition-colors whitespace-nowrap cursor-pointer">
-              <i className="ri-add-line mr-1.5"></i>新增章节
-            </button>
-          </div>
-        </div>
-        <div className="mt-4 pt-4 border-t border-gray-100 grid grid-cols-5 gap-3">
+          {resourceContentTab === 'course' && renderCourseActions()}
+        </div>}
+        {resourceContentTab === 'course' && <div className="mt-4 pt-4 border-t border-gray-100 grid grid-cols-5 gap-3">
           {[
             ['课程章节', stats.chapters, 'ri-book-line', 'bg-teal-50', 'text-teal-500', 'text-teal-700'],
             ['课程小节', stats.sections, 'ri-list-check', 'bg-indigo-50', 'text-indigo-500', 'text-indigo-700'],
@@ -704,10 +756,10 @@ export default function CourseManagement() {
               </div>
             </div>
           ))}
-        </div>
+        </div>}
       </div>
 
-      <div className="space-y-3">
+      {resourceContentTab === 'course' ? <div className="space-y-3">
         {loading ? (
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-10 text-center text-gray-400 text-sm">课程资源加载中...</div>
         ) : nodes.length ? (
@@ -718,7 +770,7 @@ export default function CourseManagement() {
             当前环节暂无课程章节
           </div>
         )}
-      </div>
+      </div> : <TrainingModuleResources selectedModule={selectedModule} hideModuleTabs />}
 
       {addNodeState && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">

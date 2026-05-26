@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
-import { notification, Tree } from 'antd';
+import { Modal, notification, Tree, Upload } from 'antd';
+import type { UploadFile } from 'antd';
 import { clearPortalToken, getPortalToken, parseJwtPayload } from '../../lib/authApi';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useSiteBrand } from '../../lib/publicSite';
@@ -13,7 +14,7 @@ import {
 } from '../../lib/teamFormationApi';
 import StudentClassSwitcher from './components/StudentClassSwitcher';
 import TeamFormationModule from './components/TeamFormationModule';
-import IdeationModule from './components/IdeationModule';
+import IdeationModule, { type IdeationLearningResource } from './components/IdeationModule';
 import MarketResearchModule from './components/MarketResearchModule';
 import ProductDesignModule from './components/ProductDesignModule';
 import BusinessModelModule from './components/BusinessModelModule';
@@ -38,6 +39,7 @@ import {
   TRAINING_ID_TO_TAB,
   type StudentTodoTask,
 } from '../../lib/personalClassTaskApi';
+import { fetchStudentIdeationTeamPrerequisites } from '../../lib/studentIdeationApi';
 
 const TRAINING_MODULE_ORDER = ['team', 'ideation', 'market', 'product', 'business', 'simulation', 'plan'] as const;
 
@@ -228,6 +230,9 @@ export default function StudentCenterPage() {
   const [studentTodoTasks, setStudentTodoTasks] = useState<StudentTodoTask[]>([]);
   const [activeCourseTaskId, setActiveCourseTaskId] = useState<string | null>(null);
   const [activeTrainingTask, setActiveTrainingTask] = useState<{ id: string; moduleId: string } | null>(null);
+  const [activeTodoDialogTask, setActiveTodoDialogTask] = useState<TodoListItem | null>(null);
+  const [taskSubmitFiles, setTaskSubmitFiles] = useState<File[]>([]);
+  const [taskSubmitting, setTaskSubmitting] = useState(false);
   const [resourceProgressOverrides, setResourceProgressOverrides] = useState<Record<string, ResourceProgress>>({});
   const [overviewMyTeam, setOverviewMyTeam] = useState<GroupingTeam | null>(null);
   const [overviewPanelTab, setOverviewPanelTab] = useState<'notifications' | 'tasks'>('notifications');
@@ -253,8 +258,9 @@ export default function StudentCenterPage() {
         setEnrollments(list);
         if (list.length === 0) return;
         const saved = sessionStorage.getItem('jiada_student_selected_class_id');
-        const valid = saved && list.some((e) => e.classId === saved);
-        setSelectedClassId(valid ? saved! : list[0].classId);
+        const available = list.filter((e) => e.canEnterTraining);
+        const valid = saved && available.some((e) => e.classId === saved);
+        setSelectedClassId(valid ? saved! : available[0]?.classId || '');
       })
       .catch(() => setEnrollments([]));
   }, []);
@@ -323,6 +329,15 @@ export default function StudentCenterPage() {
   }, [selectedClassId, tabParam]);
 
   const handleClassChange = (classId: string) => {
+    const target = enrollments.find((item) => item.classId === classId);
+    if (!target?.canEnterTraining) {
+      notification.warning({
+        message: '班级暂未开放',
+        description: target?.unavailableReason || '未到团队组建日期',
+        placement: 'topRight',
+      });
+      return;
+    }
     setSelectedClassId(classId);
     sessionStorage.setItem('jiada_student_selected_class_id', classId);
   };
@@ -344,10 +359,32 @@ export default function StudentCenterPage() {
     const name = realName || studentNo || loginUsername || '学生';
     return { studentDisplayName: name, studentAvatarChar: [...name][0] || '学' };
   }, [studentProfile]);
+  const currentStudentId = useMemo(() => {
+    const token = getPortalToken('student');
+    return token ? String(parseJwtPayload(token)?.sub || '') : '';
+  }, []);
   const isModuleCompletedByProgress = (moduleId: string) => {
     if (moduleId === 'team') return teamFormationComplete;
     const val = moduleProgressState[moduleId] || 0;
     return val >= (MODULE_COMPLETE_THRESHOLD[moduleId] ?? 99);
+  };
+
+  const getStageDateSetting = (moduleId: string) =>
+    selectedEnrollment?.courseSettings?.find((setting) => setting.moduleKey === moduleId) || null;
+
+  const isBeforeStageStart = (moduleId: string) => {
+    const startDate = getStageDateSetting(moduleId)?.startDate;
+    if (!startDate) return true;
+    const start = new Date(`${startDate}T00:00:00`);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return start.getTime() > today.getTime();
+  };
+
+  const getStageStartLockedHint = (moduleId: string) => {
+    const setting = getStageDateSetting(moduleId);
+    if (!setting?.startDate) return '该实训阶段尚未配置开始日期';
+    return `该实训阶段将于 ${setting.startDate} 开放`;
   };
 
   const getModuleProgressPercent = (moduleId: string): number => {
@@ -362,6 +399,9 @@ export default function StudentCenterPage() {
       return { locked: true, status: 'locked' as const, displayPercent: 0, isTeam: false };
     }
     const isTeam = moduleId === 'team';
+    if (isBeforeStageStart(moduleId)) {
+      return { locked: true, status: 'locked' as const, displayPercent: 0, isTeam };
+    }
     if (isTeam) {
       if (teamFormationComplete) {
         return { locked: false, status: 'completed' as const, displayPercent: null, isTeam: true };
@@ -417,6 +457,9 @@ export default function StudentCenterPage() {
     const idx = TRAINING_MODULE_ORDER.indexOf(targetModuleId as (typeof TRAINING_MODULE_ORDER)[number]);
     if (idx < 0) return null;
     if (getSidebarModuleUi(targetModuleId).locked) {
+      if (isBeforeStageStart(targetModuleId)) {
+        return getStageStartLockedHint(targetModuleId);
+      }
       if (!teamFormationComplete) {
         const teamName = moduleProgress.find((m) => m.moduleId === 'team')?.moduleName ?? '组队与团队管理';
         return `请完成实训模块第1阶段任务：${teamName}`;
@@ -710,8 +753,7 @@ export default function StudentCenterPage() {
   const courseTaskSource = activeCourseTaskId
     ? studentTodoTasks.filter((task) => task.id === activeCourseTaskId)
     : studentTodoTasks;
-  const shouldShowCourseNode = (node: StudentTodoTask['resourceNodes'][number]) =>
-    !activeCourseTaskId || node.knowledgePoints.some((point) => !completedKnowledgeIds.has(point.id));
+  const shouldShowCourseNode: (node: StudentTodoTask['resourceNodes'][number]) => boolean = () => true;
 
   const knowledgeChapterData = (() => {
     const nodeMap = new Map<string, ChapterTreeNode>();
@@ -794,7 +836,6 @@ export default function StudentCenterPage() {
     ? knowledgePoints.filter((kp) =>
       kp.module === selectedModule
       && kp.nodeIds.some((nodeId) => selectedChapterLeafIds.has(nodeId))
-      && (!activeCourseTaskId || !completedKnowledgeIds.has(kp.id))
     )
     : [];
   const selectedChapterResources = (() => {
@@ -861,6 +902,40 @@ export default function StudentCenterPage() {
     }
   };
 
+  const getNodeChapterTags = (node: StudentTodoTask['resourceNodes'][number]) => {
+    const unitLabels = ['章', '节', '小节'];
+    return [...(node.ancestors || []), node].map((item, index) => {
+      const order = Number(item.sortOrder);
+      const n = Number.isFinite(order) && order > 0 ? order : index + 1;
+      return `第${n}${unitLabels[index] || '层'} ${item.title}`;
+    });
+  };
+
+  const ideationLearningResources: IdeationLearningResource[] = (() => {
+    const byKey = new Map<string, IdeationLearningResource>();
+    studentTodoTasks.forEach((task) => {
+      if ((task.moduleId || '') !== 'ideation') return;
+      (task.resourceNodes || []).forEach((node) => {
+        const moduleId = node.moduleKey || task.moduleId || '';
+        if (moduleId !== 'ideation') return;
+        node.resources.forEach((resource) => {
+          const progress = normalizeResourceProgress(
+            mergeResourceProgress(resource.progress, resourceProgressOverrides[resource.id])
+          ).progressPercent;
+          byKey.set(`${node.id}:${resource.id}`, {
+            id: resource.id,
+            nodeId: node.id,
+            title: resource.name,
+            type: getResourceTypeText(resource.type),
+            progress,
+            chapterTags: getNodeChapterTags(node),
+          });
+        });
+      });
+    });
+    return Array.from(byKey.values());
+  })();
+
   const openLearningResources = (resources: LearningDetailResource[]) => {
     if (resources.length === 0) return;
     closingLearningRef.current = false;
@@ -885,6 +960,29 @@ export default function StudentCenterPage() {
         description: point.description,
       })),
     });
+  };
+
+  const openIdeationLearningResource = (item: IdeationLearningResource) => {
+    const task = studentTodoTasks.find((row) =>
+      (row.moduleId || '') === 'ideation' &&
+      row.resourceNodes.some((node) => node.id === item.nodeId && node.resources.some((resource) => resource.id === item.id))
+    );
+    const node = task?.resourceNodes.find((row) => row.id === item.nodeId);
+    if (!task || !node) return;
+    closingLearningRef.current = true;
+    const params = new URLSearchParams(searchParams);
+    params.set('tab', 'knowledge');
+    params.delete('learning');
+    params.delete('learningModule');
+    params.delete('learningChapter');
+    params.delete('resource');
+    setSearchParams(params);
+    setActiveTab('knowledge');
+    setKnowledgeSubTab('knowledge');
+    setActiveCourseTaskId(null);
+    setSelectedModule('ideation');
+    setSelectedChapterId(node.id);
+    setActiveLearningKnowledge(null);
   };
 
   useEffect(() => {
@@ -987,12 +1085,14 @@ export default function StudentCenterPage() {
   type TodoListItem = {
     id: string;
     title: string;
+    description: string;
     module: string;
     moduleKey: TabType;
     trainingModuleId?: string;
     daysLeft: number;
     priority: 'urgent' | 'high' | 'normal' | 'low';
     attachments: StudentTodoTask['attachments'];
+    requiresStudentAttachment: boolean;
     resourceNodes: StudentTodoTask['resourceNodes'];
     knowledgePointIds: string[];
     completed: boolean;
@@ -1007,18 +1107,45 @@ export default function StudentCenterPage() {
   const todoTasks: TodoListItem[] = studentTodoTasks.map((t) => ({
     id: t.id,
     title: t.title,
+    description: t.description,
     module: t.module,
     moduleKey: (t.moduleId && (TRAINING_ID_TO_TAB[t.moduleId] as TabType)) || 'overview',
     trainingModuleId: t.moduleId ?? undefined,
     daysLeft: t.daysLeft,
     priority: t.priority,
     attachments: t.attachments ?? [],
+    requiresStudentAttachment: Boolean(t.requiresStudentAttachment),
     resourceNodes: t.resourceNodes ?? [],
     knowledgePointIds: getTaskKnowledgePointIds(t),
     completed: t.status === 'completed',
   }));
   const activeTodoTasks = todoTasks.filter((task) => !task.completed);
   const completedTodoTasks = todoTasks.filter((task) => task.completed);
+  const linkedCourseTasks = todoTasks.filter((task) => task.resourceNodes.length > 0);
+  const learningResourceCount = new Set(
+    studentTodoTasks.flatMap((task) =>
+      (task.resourceNodes || []).flatMap((node) => (node.resources || []).map((resource) => resource.id))
+    )
+  ).size;
+  const completedKnowledgeCount = knowledgePoints.filter((kp) => kp.status === 'completed').length;
+  const knowledgeCompletionPercent = knowledgePoints.length
+    ? Math.round((completedKnowledgeCount / knowledgePoints.length) * 100)
+    : 0;
+  const pendingLinkedTaskCount = linkedCourseTasks.filter((task) => !isTaskKnowledgeCompleted(task)).length;
+
+  const getModulePrerequisiteTask = (moduleId: string) =>
+    todoTasks.find(
+      (task) =>
+        task.trainingModuleId === moduleId &&
+        task.resourceNodes.length > 0 &&
+        task.knowledgePointIds.length > 0 &&
+        !isTaskKnowledgeCompleted(task)
+    );
+
+  const activeTrainingModuleId = activeTab.startsWith('module-') ? TAB_TO_MODULE_ID[activeTab] : undefined;
+  const activeModulePrerequisiteTask = activeTrainingModuleId
+    ? getModulePrerequisiteTask(activeTrainingModuleId)
+    : undefined;
 
   const completedStagesCount = useMemo(() => {
     let n = 0;
@@ -1045,6 +1172,13 @@ export default function StudentCenterPage() {
 
   const overviewHeroTitle =
     overviewMyTeam?.name?.trim() || selectedEnrollment?.className?.trim() || '我的实训项目';
+  const isCurrentStudentTeamLeader = Boolean(
+    overviewMyTeam?.leaderStudentId === currentStudentId ||
+    overviewMyTeam?.members.some((member) => {
+      const memberId = String(member.studentId || member.id || '');
+      return memberId === currentStudentId && member.isTeamLeader;
+    })
+  );
 
   const formatTeamCreatedAt = (iso?: string) => {
     if (!iso) return '';
@@ -1102,6 +1236,11 @@ export default function StudentCenterPage() {
       });
       return;
     }
+    const prerequisiteTask = getModulePrerequisiteTask(moduleId);
+    if (prerequisiteTask) {
+      setActiveTab(moduleKey);
+      return;
+    }
     changeActiveTab(moduleKey);
     if (moduleKey === 'module-team') {
       refreshTeamFormationComplete();
@@ -1126,6 +1265,45 @@ export default function StudentCenterPage() {
       });
   };
 
+  const openTodoDialog = (task: TodoListItem) => {
+    setActiveTodoDialogTask(task);
+    setTaskSubmitFiles([]);
+  };
+
+  const completeTodoDialogTask = async () => {
+    if (!selectedClassId || !activeTodoDialogTask) return;
+    if (activeTodoDialogTask.resourceNodes.length > 0 && !isTaskKnowledgeCompleted(activeTodoDialogTask)) {
+      notification.warning({ message: '请先完成课程资源学习与知识点检测', placement: 'topRight' });
+      return;
+    }
+    if (activeTodoDialogTask.requiresStudentAttachment && taskSubmitFiles.length === 0) {
+      notification.warning({ message: '请上传任务反馈附件', placement: 'topRight' });
+      return;
+    }
+    setTaskSubmitting(true);
+    try {
+      await completeStudentTodoTask(selectedClassId, activeTodoDialogTask.id, taskSubmitFiles);
+      setStudentTodoTasks((prev) => prev.map((task) => (task.id === activeTodoDialogTask.id ? { ...task, status: 'completed' } : task)));
+      setActiveTodoDialogTask(null);
+      setTaskSubmitFiles([]);
+      notification.success({ message: '任务已完成', placement: 'topRight' });
+    } catch (e) {
+      notification.warning({
+        message: '任务完成失败',
+        description: e instanceof Error ? e.message : '请稍后重试',
+        placement: 'topRight',
+      });
+    } finally {
+      setTaskSubmitting(false);
+    }
+  };
+
+  const checkIdeationTeamPrerequisites = async () => {
+    if (!selectedClassId) return [];
+    const res = await fetchStudentIdeationTeamPrerequisites(selectedClassId);
+    return res.incompleteMembers;
+  };
+
   const renderModuleContent = () => {
     switch (activeTab) {
       case 'module-team':
@@ -1144,7 +1322,17 @@ export default function StudentCenterPage() {
           />
         );
       case 'module-ideation':
-        return <IdeationModule key={selectedClassId} classId={selectedClassId} onTaskComplete={() => completeActiveTrainingTask('ideation')} />;
+        return (
+          <IdeationModule
+            key={selectedClassId}
+            classId={selectedClassId}
+            learningResources={ideationLearningResources}
+            isTeamLeader={isCurrentStudentTeamLeader}
+            onCheckTeamPrerequisites={checkIdeationTeamPrerequisites}
+            onOpenLearningResource={openIdeationLearningResource}
+            onTaskComplete={() => completeActiveTrainingTask('ideation')}
+          />
+        );
       case 'module-market':
         return <MarketResearchModule key={selectedClassId} onTaskComplete={() => completeActiveTrainingTask('market')} />;
       case 'module-product':
@@ -1267,18 +1455,7 @@ export default function StudentCenterPage() {
           </div>
         </nav>
 
-        {!sidebarCollapsed && (
-          <div className="px-3 pb-3">
-            <div className="p-3 bg-gray-50 rounded-xl">
-              <div className="text-xs text-gray-500 mb-2">实训进度</div>
-              <div className="grid grid-cols-3 gap-1">
-                <div className="text-center"><div className="text-base font-bold text-green-600">{completedCount}</div><div className="text-xs text-gray-400">已完成</div></div>
-                <div className="text-center"><div className="text-base font-bold text-teal-500">{inProgressCount}</div><div className="text-xs text-gray-400">进行中</div></div>
-                <div className="text-center"><div className="text-base font-bold text-gray-400">{7 - completedCount - inProgressCount}</div><div className="text-xs text-gray-400">未解锁</div></div>
-              </div>
-            </div>
-          </div>
-        )}
+       
 
         <div className="p-3 border-t border-gray-100 shrink-0 space-y-2">
           <div className={`flex items-center gap-2.5 ${sidebarCollapsed ? 'justify-center' : ''}`}>
@@ -1550,22 +1727,7 @@ export default function StudentCenterPage() {
                           const actionDisabled = Boolean(lockHint);
                           const goTodo = () => {
                             if (actionDisabled) return;
-                            if (task.resourceNodes.length > 0 && task.trainingModuleId) {
-                              if (!isTaskKnowledgeCompleted(task)) {
-                                setActiveCourseTaskId(task.id);
-                                setActiveTab('knowledge');
-                                setKnowledgeSubTab('knowledge');
-                                setSelectedModule(task.trainingModuleId);
-                                return;
-                              }
-                              setActiveCourseTaskId(null);
-                              setActiveTrainingTask({ id: task.id, moduleId: task.trainingModuleId });
-                              handleModuleClick(task.moduleKey);
-                              return;
-                            }
-                            setActiveCourseTaskId(null);
-                            if (task.trainingModuleId) setActiveTrainingTask({ id: task.id, moduleId: task.trainingModuleId });
-                            handleModuleClick(task.moduleKey);
+                            openTodoDialog(task);
                           };
                           return (
                             <div
@@ -1765,16 +1927,12 @@ export default function StudentCenterPage() {
               {knowledgeSubTab === 'overview' && (
                 <div className="space-y-6">
                   <div className="bg-gradient-to-br from-teal-500 to-cyan-600 rounded-2xl shadow-xl p-8 text-white">
-                    <div className="flex items-center justify-between mb-6">
-                      <div><h3 className="text-2xl font-bold mb-2">我的学习进度</h3><p className="text-teal-100">持续学习，不断成长</p></div>
-                      <div className="w-20 h-20 bg-white/20 rounded-full flex items-center justify-center backdrop-blur-sm"><i className="ri-trophy-line text-4xl"></i></div>
-                    </div>
                     <div className="grid grid-cols-4 gap-6">
                       {[
-                        { value: `${knowledgePoints.filter(k => k.status === 'completed').length}/${knowledgePoints.length}`, label: '知识点完成' },
-                        { value: `${knowledgeModules.filter((m) => !getSidebarModuleUi(m.id).locked).length}/${knowledgeModules.length}`, label: '已解锁模块' },
-                        { value: `${knowledgePoints.length ? Math.round((knowledgePoints.filter(k => k.status === 'completed').length / knowledgePoints.length) * 100) : 0}%`, label: '整体完成度' },
-                        { value: `${activeTodoTasks.filter((t) => t.resourceNodes.length > 0).length}`, label: '关联任务' },
+                        { value: `${completedKnowledgeCount}/${knowledgePoints.length}`, label: '知识点完成' },
+                        { value: `${learningResourceCount}`, label: '学习资源' },
+                        { value: `${knowledgeCompletionPercent}%`, label: '检测通过率' },
+                        { value: `${pendingLinkedTaskCount}/${linkedCourseTasks.length}`, label: '待完成关联任务' },
                       ].map((item, i) => (
                         <div key={i} className="bg-white/10 rounded-xl p-4 backdrop-blur-sm text-center"><div className="text-2xl font-bold mb-1">{item.value}</div><div className="text-sm text-teal-100">{item.label}</div></div>
                       ))}
@@ -2079,7 +2237,7 @@ export default function StudentCenterPage() {
           {/* 实训模块内容 */}
           {activeTab.startsWith('module-') && (
             <div>
-              {renderModuleContent()}
+              {!activeModulePrerequisiteTask && renderModuleContent()}
             </div>
           )}
 
@@ -2217,6 +2375,127 @@ export default function StudentCenterPage() {
           onPass={(knowledgeId, moduleId, score, answers) => { handleQuizPass(knowledgeId, moduleId, score, answers); setActiveQuizId(null); setActiveQuizConfig(null); }}
         />
       )}
+
+      <Modal
+        open={!!activeTodoDialogTask}
+        title="任务详情"
+        onCancel={() => setActiveTodoDialogTask(null)}
+        onOk={() => void completeTodoDialogTask()}
+        okText={taskSubmitting ? '提交中...' : '已完成'}
+        cancelText="取消"
+        okButtonProps={{ disabled: taskSubmitting }}
+        width={720}
+      >
+        {activeTodoDialogTask && (
+          <div className="space-y-4">
+            <div>
+              <div className="flex items-center gap-2 mb-2">
+                <h3 className="text-base font-bold text-gray-900">{activeTodoDialogTask.title}</h3>
+                <span className="px-2 py-0.5 rounded-lg bg-teal-50 text-teal-700 text-xs">{activeTodoDialogTask.module}</span>
+              </div>
+              <p className="text-sm text-gray-600 leading-relaxed whitespace-pre-wrap">{activeTodoDialogTask.description || '暂无任务描述'}</p>
+            </div>
+            {activeTodoDialogTask.attachments.length > 0 && (
+              <div>
+                <div className="text-xs text-gray-400 mb-2">教师附件</div>
+                <div className="flex flex-wrap gap-2">
+                  {activeTodoDialogTask.attachments.map((file) => (
+                    <button
+                      key={file.id}
+                      type="button"
+                      onClick={() => selectedClassId && void downloadStudentTaskAttachment(selectedClassId, activeTodoDialogTask.id, file.id, file.fileName)}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-gray-50 border border-gray-200 text-xs text-teal-700 hover:bg-teal-50 cursor-pointer"
+                    >
+                      <i className="ri-attachment-2"></i>
+                      <span className="max-w-[180px] truncate">{file.fileName}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {activeTodoDialogTask.resourceNodes.length > 0 && !isTaskKnowledgeCompleted(activeTodoDialogTask) && (
+              <div className="rounded-xl bg-teal-50 border border-teal-100 p-4">
+                <p className="text-sm text-teal-700 leading-relaxed">
+                  当前任务所属实训阶段已配置课程资源，请先完成课程资源学习与知识点检测后再标记完成。
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const moduleId = activeTodoDialogTask.trainingModuleId || 'ideation';
+                    setActiveCourseTaskId(activeTodoDialogTask.id);
+                    setActiveTab('knowledge');
+                    setKnowledgeSubTab('knowledge');
+                    setSelectedModule(moduleId);
+                    setActiveTodoDialogTask(null);
+                  }}
+                  className="mt-3 px-4 py-2 bg-teal-500 text-white text-sm rounded-xl hover:bg-teal-600 cursor-pointer"
+                >
+                  前往实践课程
+                </button>
+              </div>
+            )}
+            {activeTodoDialogTask.requiresStudentAttachment && (
+              <div>
+                <div className="text-xs text-gray-500 mb-2">提交附件</div>
+                <Upload
+                  beforeUpload={(file) => {
+                    setTaskSubmitFiles((prev) => [...prev, file]);
+                    return false;
+                  }}
+                  fileList={taskSubmitFiles.map((file, index): UploadFile => ({
+                    uid: `${index}`,
+                    name: file.name,
+                    status: 'done',
+                  }))}
+                  onRemove={(file) => {
+                    const idx = Number(file.uid);
+                    setTaskSubmitFiles((prev) => prev.filter((_, index) => index !== idx));
+                  }}
+                >
+                  <button type="button" className="px-4 py-2 rounded-xl border border-teal-200 text-teal-700 text-sm hover:bg-teal-50 cursor-pointer">
+                    选择文件
+                  </button>
+                </Upload>
+              </div>
+            )}
+          </div>
+        )}
+      </Modal>
+
+      <Modal
+        open={Boolean(activeModulePrerequisiteTask)}
+        title={
+          <div className="flex items-center gap-2 text-gray-900">
+            <span>请先完成实践课程</span>
+          </div>
+        }
+        closable={false}
+        maskClosable={false}
+        keyboard={false}
+        footer={null}
+        centered
+      >
+        <div className="space-y-5">
+          <p className="text-sm text-gray-600 leading-relaxed">
+            当前实训阶段已关联实践课程，您需要先学习相关课程并完成知识点检测后才能进行实训任务。
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              const moduleId = activeModulePrerequisiteTask?.trainingModuleId || activeTrainingModuleId || 'ideation';
+              const taskId = activeModulePrerequisiteTask?.id || null;
+              setActiveCourseTaskId(taskId);
+              setActiveTab('knowledge');
+              setKnowledgeSubTab('knowledge');
+              setSelectedModule(moduleId);
+              setActiveLearningKnowledge(null);
+            }}
+            className="w-full py-2.5 bg-gradient-to-r from-teal-500 to-cyan-600 text-white text-sm font-semibold rounded-xl hover:shadow-md transition-all cursor-pointer"
+          >
+            前往实践课程
+          </button>
+        </div>
+      </Modal>
 
       {logoutModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">

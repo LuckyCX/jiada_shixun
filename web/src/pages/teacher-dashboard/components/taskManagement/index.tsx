@@ -8,6 +8,10 @@ import {
   listPersonalClassTasks,
   deletePersonalClassTask,
   updatePersonalClassTask,
+  fetchTaskSubmissionDetail,
+  downloadTaskSubmissionAttachment,
+  type TaskSubmissionDetail,
+  type TaskSubmissionStudent,
 } from '../../../../lib/personalClassTaskApi';
 import dayjs from 'dayjs';
 import CreateTaskModal from './CreateTaskModal';
@@ -34,6 +38,9 @@ export default function TaskManagement({ personalClass }: Props) {
   const [filterStatus, setFilterStatus] = useState<'all' | 'published' | 'draft' | 'expired'>('all');
   const [filterModule, setFilterModule] = useState<string>('all');
   const [searchText, setSearchText] = useState('');
+  const [submissionDetail, setSubmissionDetail] = useState<TaskSubmissionDetail | null>(null);
+  const [submissionLoading, setSubmissionLoading] = useState(false);
+  const [submissionView, setSubmissionView] = useState<'class' | 'team'>('class');
 
   const loadTasks = useCallback(async () => {
     setLoading(true);
@@ -75,8 +82,9 @@ export default function TaskManagement({ personalClass }: Props) {
         scope: task.scope,
         teamIds: task.targetTeamIds,
         attachmentsEnabled: task.attachmentsEnabled,
-        resourceLinkEnabled: task.resourceLinkEnabled,
-        resourceNodeIds: task.resourceNodeIds,
+        requiresStudentAttachment: task.requiresStudentAttachment,
+        resourceLinkEnabled: false,
+        resourceNodeIds: [],
         status: 'published',
       });
       message.success('已发布');
@@ -115,6 +123,49 @@ export default function TaskManagement({ personalClass }: Props) {
     setEditTaskId(taskId);
     setShowModal(true);
   };
+
+  const openSubmissionDetail = async (task: PersonalClassTask) => {
+    setSubmissionLoading(true);
+    setSubmissionView(task.scope === 'all' ? 'class' : 'team');
+    try {
+      setSubmissionDetail(await fetchTaskSubmissionDetail(classId, task.id));
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '加载提交详情失败');
+    } finally {
+      setSubmissionLoading(false);
+    }
+  };
+
+  const renderStudentSubmission = (student: TaskSubmissionStudent, requiresAttachment: boolean) => (
+    <div key={student.studentId} className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-gray-900 truncate">{student.name || student.studentNo || '学生'}</div>
+          <div className="text-xs text-gray-400 mt-0.5">
+            {student.studentNo || '无学号'} · {student.teamName || '未分组'}
+          </div>
+        </div>
+        <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${student.completed ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+          {student.completed ? '已完成' : '未完成'}
+        </span>
+      </div>
+      {requiresAttachment && student.attachments.length > 0 && (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {student.attachments.map((file) => (
+            <button
+              key={file.id}
+              type="button"
+              onClick={() => void downloadTaskSubmissionAttachment(classId, submissionDetail?.taskId || '', file.id, file.fileName)}
+              className="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg bg-white border border-gray-200 text-xs text-teal-700 hover:bg-teal-50 cursor-pointer"
+            >
+              <i className="ri-attachment-2"></i>
+              <span className="max-w-[180px] truncate">{file.fileName}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 
   return (
     <div>
@@ -218,6 +269,13 @@ export default function TaskManagement({ personalClass }: Props) {
                     <p className="text-sm text-gray-600 line-clamp-2">{task.description}</p>
                   </div>
                   <div className="flex gap-2 flex-shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => void openSubmissionDetail(task)}
+                      className="px-3 py-1.5 bg-teal-50 text-teal-700 text-xs rounded-lg cursor-pointer"
+                    >
+                      提交详情
+                    </button>
                     {task.status === 'draft' && (
                       <button
                         type="button"
@@ -263,6 +321,20 @@ export default function TaskManagement({ personalClass }: Props) {
                     <p className="font-medium">{task.publishedBy || '—'}</p>
                   </div>
                 </div>
+                {task.attachments.length > 0 && (
+                  <div className="mt-3 pt-3 border-t border-gray-100">
+                    <p className="text-xs text-gray-400 mb-2">附件（{task.attachments.length}）</p>
+                    <div className="flex flex-wrap gap-2">
+                      {task.attachments.map((file) => (
+                        <span key={file.id} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-gray-50 border border-gray-100 text-xs text-gray-600">
+                          <i className="ri-file-line text-teal-600"></i>
+                          <span className="max-w-[180px] truncate">{file.fileName}</span>
+                          <span className="text-gray-400">{file.size}</span>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 {task.scope === 'specific' && task.teamProgress.length > 0 && (
                   <div className="mt-4 pt-3 border-t border-gray-100">
                     <p className="text-xs text-gray-500 mb-2">各团队完成进度</p>
@@ -303,6 +375,58 @@ export default function TaskManagement({ personalClass }: Props) {
         onClose={() => setShowModal(false)}
         onSuccess={() => void loadTasks()}
       />
+      <Modal
+        title="提交详情"
+        open={!!submissionDetail || submissionLoading}
+        onCancel={() => setSubmissionDetail(null)}
+        footer={null}
+        width={920}
+      >
+        {submissionLoading || !submissionDetail ? (
+          <div className="py-12 text-center text-sm text-gray-400">加载中...</div>
+        ) : (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between gap-4">
+              <div className="text-sm text-gray-600">
+                已完成 {submissionDetail.completedCount} / {submissionDetail.totalTargets}
+              </div>
+              {submissionDetail.scope === 'all' && (
+                <div className="flex items-center gap-1 bg-gray-100 rounded-xl p-1">
+                  {[
+                    { key: 'class' as const, label: '全班视图' },
+                    { key: 'team' as const, label: '小组视图' },
+                  ].map((item) => (
+                    <button
+                      key={item.key}
+                      type="button"
+                      onClick={() => setSubmissionView(item.key)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer ${submissionView === item.key ? 'bg-white text-teal-600 shadow-sm' : 'text-gray-500'}`}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            {submissionDetail.scope === 'all' && submissionView === 'class' ? (
+              <div className="grid grid-cols-2 gap-3 max-h-[60vh] overflow-y-auto pr-1">
+                {submissionDetail.students.map((student) => renderStudentSubmission(student, submissionDetail.requiresStudentAttachment))}
+              </div>
+            ) : (
+              <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-1">
+                {submissionDetail.teams.map((team) => (
+                  <div key={team.teamId} className="rounded-2xl border border-gray-100 p-4">
+                    <div className="text-sm font-bold text-gray-900 mb-3">{team.teamName}</div>
+                    <div className="grid grid-cols-2 gap-3">
+                      {team.members.map((student) => renderStudentSubmission(student, submissionDetail.requiresStudentAttachment))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }

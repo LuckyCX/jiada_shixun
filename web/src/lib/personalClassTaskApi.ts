@@ -22,6 +22,7 @@ export const TRAINING_ID_TO_TAB: Record<string, string> = {
 export type StudentTodoTask = {
   id: string;
   title: string;
+  description: string;
   module: string;
   moduleId: string | null;
   priority: TaskPriority;
@@ -29,6 +30,7 @@ export type StudentTodoTask = {
   daysLeft: number;
   status: string;
   attachments: TaskAttachment[];
+  requiresStudentAttachment: boolean;
   resourceLinkEnabled: boolean;
   resourceNodes: TaskResourceNode[];
 };
@@ -46,11 +48,18 @@ export async function fetchStudentTodoTasks(classId: string): Promise<{
   }>;
 }
 
-export async function completeStudentTodoTask(classId: string, taskId: string): Promise<void> {
-  const { portalAuthenticatedFetch } = await import('./authApi');
-  await portalAuthenticatedFetch('student', `/api/student/personal-classes/${classId}/tasks/${taskId}/complete`, {
+export async function completeStudentTodoTask(classId: string, taskId: string, files: File[] = []): Promise<void> {
+  const { getPortalToken } = await import('./authApi');
+  const fd = new FormData();
+  files.forEach((file) => fd.append('files', file));
+  const token = getPortalToken('student') || '';
+  const r = await fetch(`/api/student/personal-classes/${classId}/tasks/${taskId}/complete`, {
     method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: fd,
   });
+  const j = await r.json().catch(() => ({ code: -1, message: '无效 JSON' }));
+  if (!r.ok || j.code !== 0) throw new Error(typeof j.message === 'string' ? j.message : `HTTP ${r.status}`);
 }
 
 export async function downloadStudentTaskAttachment(classId: string, taskId: string, attachmentId: string, fileName: string) {
@@ -170,6 +179,7 @@ export type PersonalClassTask = {
   scope: 'all' | 'specific';
   status: 'published' | 'draft' | 'expired';
   attachmentsEnabled: boolean;
+  requiresStudentAttachment: boolean;
   resourceLinkEnabled: boolean;
   resourceNodeIds: string[];
   resourceNodes: TaskResourceNode[];
@@ -180,6 +190,34 @@ export type PersonalClassTask = {
   teamProgress: TaskTeamProgress[];
   completedCount: number;
   totalTargets: number;
+};
+
+export type TaskSubmissionStudent = {
+  studentId: string;
+  name: string;
+  studentNo: string;
+  teamId: string;
+  teamName: string;
+  completed: boolean;
+  completedAt: string;
+  attachments: TaskAttachment[];
+};
+
+export type TaskSubmissionTeam = {
+  teamId: string;
+  teamName: string;
+  members: TaskSubmissionStudent[];
+};
+
+export type TaskSubmissionDetail = {
+  taskId: string;
+  title: string;
+  scope: 'all' | 'specific';
+  requiresStudentAttachment: boolean;
+  totalTargets: number;
+  completedCount: number;
+  students: TaskSubmissionStudent[];
+  teams: TaskSubmissionTeam[];
 };
 
 export type TeamForTask = { id: string; name: string; memberCount: number };
@@ -255,4 +293,34 @@ export async function deleteTaskAttachment(
     `/api/teacher/personal-classes/${classId}/tasks/${taskId}/attachments/${attachmentId}`,
     { method: 'DELETE' }
   );
+}
+
+export async function fetchTaskSubmissionDetail(classId: string, taskId: string): Promise<TaskSubmissionDetail> {
+  return teacherFetch(`/api/teacher/personal-classes/${classId}/tasks/${taskId}/submissions`) as Promise<TaskSubmissionDetail>;
+}
+
+export async function downloadTaskSubmissionAttachment(
+  classId: string,
+  taskId: string,
+  attachmentId: string,
+  fileName: string
+) {
+  const token = getPortalToken('teacher') || '';
+  const r = await fetch(
+    `/api/teacher/personal-classes/${classId}/tasks/${taskId}/submission-attachments/${attachmentId}/download`,
+    { headers: token ? { Authorization: `Bearer ${token}` } : {} }
+  );
+  if (!r.ok) {
+    const j = await r.json().catch(() => ({ message: `HTTP ${r.status}` }));
+    throw new Error(typeof j.message === 'string' ? j.message : `HTTP ${r.status}`);
+  }
+  const blob = await r.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fileName || '附件';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }

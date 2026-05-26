@@ -29,6 +29,10 @@ const trainingModules = [
 ] as const;
 
 type TrainingModuleKey = (typeof trainingModules)[number]['key'];
+type TrainingModuleResourcesProps = {
+  selectedModule?: string;
+  hideModuleTabs?: boolean;
+};
 
 const DEFAULT_CATEGORY_COLOR = '#8b5cf6';
 const DEFAULT_CATEGORY_ICON = 'FolderOutlined';
@@ -60,8 +64,12 @@ function CategoryIcon({ icon, className }: { icon?: string; className?: string }
   return <Icon className={className} />;
 }
 
-export default function TrainingModuleResources() {
-  const [selectedModule, setSelectedModule] = useState<TrainingModuleKey>('ideation');
+function normalizeModuleKey(key?: string): TrainingModuleKey {
+  return trainingModules.some((mod) => mod.key === key) ? (key as TrainingModuleKey) : 'ideation';
+}
+
+export default function TrainingModuleResources({ selectedModule: selectedModuleProp, hideModuleTabs = false }: TrainingModuleResourcesProps) {
+  const [internalSelectedModule, setInternalSelectedModule] = useState<TrainingModuleKey>('ideation');
   const [categories, setCategories] = useState<InstanceLibraryCategory[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedCategoryId, setSelectedCategoryId] = useState<string>('');
@@ -77,6 +85,7 @@ export default function TrainingModuleResources() {
   const [categoryIconOpen, setCategoryIconOpen] = useState(false);
   const [categoryForm] = Form.useForm();
   const [caseForm] = Form.useForm();
+  const selectedModule = normalizeModuleKey(selectedModuleProp || internalSelectedModule);
   const currentModule = trainingModules.find((mod) => mod.key === selectedModule) || trainingModules[0];
   const selectedCategory = useMemo(
     () => categories.find((item) => item.id === selectedCategoryId) || categories[0],
@@ -104,7 +113,7 @@ export default function TrainingModuleResources() {
   }, [loadLibrary]);
 
   const handleModuleChange = (key: TrainingModuleKey) => {
-    setSelectedModule(key);
+    setInternalSelectedModule(key);
     if (key === 'ideation') setSelectedCategoryId(categories[0]?.id || '');
   };
 
@@ -242,30 +251,32 @@ export default function TrainingModuleResources() {
 
   return (
     <div className="space-y-5">
-      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
-        <div className="flex items-center gap-3 overflow-x-auto">
-          {trainingModules.map((mod) => (
-            <button
-              key={mod.key}
-              type="button"
-              onClick={() => handleModuleChange(mod.key)}
-              className={`px-5 py-2.5 rounded-xl font-medium transition-all whitespace-nowrap text-sm cursor-pointer ${
-                selectedModule === mod.key ? `bg-gradient-to-r ${mod.color} text-white shadow-lg` : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              }`}
-            >
-              <i className={`${mod.icon} mr-1.5`}></i>
-              {mod.label}
-            </button>
-          ))}
+      {!hideModuleTabs && (
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+          <div className="flex items-center gap-3 overflow-x-auto">
+            {trainingModules.map((mod) => (
+              <button
+                key={mod.key}
+                type="button"
+                onClick={() => handleModuleChange(mod.key)}
+                className={`px-5 py-2.5 rounded-xl font-medium transition-all whitespace-nowrap text-sm cursor-pointer ${
+                  selectedModule === mod.key ? `bg-gradient-to-r ${mod.color} text-white shadow-lg` : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
+              >
+                <i className={`${mod.icon} mr-1.5`}></i>
+                {mod.label}
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
       {selectedModule === 'ideation' ? (
         <div className="grid grid-cols-4 gap-6 min-h-[calc(100vh-250px)]">
           <div className="col-span-1">
             <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 sticky top-6 max-h-[calc(100vh-260px)] overflow-y-auto">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-base font-bold text-gray-900">实例库方向</h3>
+                <h3 className="text-base font-bold text-gray-900">垂直方向</h3>
                 <button type="button" onClick={() => openCategoryModal()} className="text-sm font-medium text-teal-600 cursor-pointer">
                   新增
                 </button>

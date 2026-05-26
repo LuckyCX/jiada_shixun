@@ -191,6 +191,23 @@ async function countTaskCompletions(pool, taskId) {
   return rows[0]?.c ?? 0;
 }
 
+async function loadSubmissionAttachments(pool, taskId, studentId) {
+  const { rows } = await pool.query(
+    `SELECT id, storage_key AS "storageKey", file_name AS "fileName", file_size AS "fileSize"
+     FROM student_personal_class_task_completion_attachments
+     WHERE task_id = $1 AND student_id = $2
+     ORDER BY sort_order ASC, id ASC`,
+    [taskId, studentId]
+  );
+  return rows.map((r) => ({
+    id: String(r.id),
+    storageKey: r.storageKey,
+    fileName: r.fileName,
+    fileSize: Number(r.fileSize),
+    size: formatSize(Number(r.fileSize)),
+  }));
+}
+
 async function teamProgressForTask(pool, taskId, teamIds) {
   if (!teamIds?.length) return [];
   const { rows } = await pool.query(
@@ -396,6 +413,134 @@ async function loadTaskResourceNodes(pool, taskId, { publishedLeavesOnly = false
   }));
 }
 
+async function loadModuleResourceNodes(pool, moduleName, { studentId = null } = {}) {
+  const moduleKey = TASK_MODULE_TO_TRAINING_ID[moduleName];
+  if (!moduleKey) return [];
+  const { rows } = await pool.query(
+    `SELECT id, parent_id, level, module_key, module_name, title, status, sort_order
+     FROM course_resource_nodes
+     WHERE module_key = $1 AND level = 3 AND status = 'published'
+     ORDER BY sort_order ASC, id ASC`,
+    [moduleKey]
+  );
+  if (!rows.length) return [];
+  const nodeIds = rows.map((r) => r.id);
+  const { rows: fileRows } = await pool.query(
+    `SELECT id, node_id, origin_name, resource_type, mime_type, size_bytes, created_at,
+            content_hash, preview_mime_type, preview_status
+     FROM course_resource_files
+     WHERE node_id = ANY($1::bigint[])
+     ORDER BY created_at DESC, id DESC`,
+    [nodeIds]
+  );
+  const hashes = fileRows.map((row) => row.content_hash).filter(Boolean);
+  const progressByHash = new Map();
+  if (studentId && hashes.length) {
+    const { rows: progressRows } = await pool.query(
+      `SELECT content_hash, progress_percent, last_position, completed_at
+       FROM student_course_resource_progress
+       WHERE user_id = $1 AND content_hash = ANY($2::varchar[])`,
+      [studentId, hashes]
+    );
+    progressRows.forEach((row) => {
+      progressByHash.set(row.content_hash, {
+        progressPercent: Number(row.progress_percent || 0),
+        lastPosition: row.last_position || {},
+        completed: Boolean(row.completed_at),
+      });
+    });
+  }
+  const { rows: linkRows } = await pool.query(
+    `SELECT l.node_id, k.id, k.title, k.description, k.module_key, k.module_name, k.sort_order
+     FROM course_resource_node_knowledge_points l
+     JOIN knowledge_points k ON k.id = l.knowledge_point_id
+     WHERE l.node_id = ANY($1::bigint[])
+     ORDER BY k.sort_order ASC, k.id ASC`,
+    [nodeIds]
+  );
+  const { rows: ancestorRows } = await pool.query(
+    `WITH RECURSIVE ancestors AS (
+       SELECT leaf.id AS leaf_id, parent.id, parent.parent_id, parent.level,
+              parent.module_key, parent.module_name, parent.title, parent.status, parent.sort_order
+       FROM course_resource_nodes leaf
+       JOIN course_resource_nodes parent ON parent.id = leaf.parent_id
+       WHERE leaf.id = ANY($1::bigint[])
+       UNION ALL
+       SELECT a.leaf_id, parent.id, parent.parent_id, parent.level,
+              parent.module_key, parent.module_name, parent.title, parent.status, parent.sort_order
+       FROM ancestors a
+       JOIN course_resource_nodes parent ON parent.id = a.parent_id
+     )
+     SELECT *
+     FROM ancestors
+     ORDER BY leaf_id ASC, level ASC, sort_order ASC, id ASC`,
+    [nodeIds]
+  );
+  const resourcesByNode = new Map();
+  for (const row of fileRows) {
+    const key = String(row.node_id);
+    const items = resourcesByNode.get(key) || [];
+    items.push({
+      id: String(row.id),
+      nodeId: String(row.node_id),
+      name: row.origin_name,
+      type: row.resource_type,
+      previewType: previewTypeFromMime(row.preview_mime_type || row.mime_type, row.resource_type),
+      previewStatus: row.preview_status || 'ready',
+      contentHash: row.content_hash || '',
+      mimeType: row.mime_type || '',
+      sizeBytes: Number(row.size_bytes || 0),
+      size: formatSize(Number(row.size_bytes || 0)),
+      canPreview: (row.preview_status || 'ready') === 'ready' && row.resource_type !== 'archive' && canPreviewCourseResource(row.preview_mime_type || row.mime_type, row.origin_name),
+      progress: progressByHash.get(row.content_hash) || { progressPercent: 0, lastPosition: {}, completed: false },
+    });
+    resourcesByNode.set(key, items);
+  }
+  const ancestorsByNode = new Map();
+  for (const row of ancestorRows) {
+    const key = String(row.leaf_id);
+    const items = ancestorsByNode.get(key) || [];
+    items.push({
+      id: String(row.id),
+      parentId: row.parent_id ? String(row.parent_id) : null,
+      level: Number(row.level),
+      moduleKey: row.module_key,
+      moduleName: row.module_name,
+      title: row.title,
+      status: row.status,
+      sortOrder: Number(row.sort_order || 0),
+    });
+    ancestorsByNode.set(key, items);
+  }
+  const knowledgeByNode = new Map();
+  for (const row of linkRows) {
+    const key = String(row.node_id);
+    const items = knowledgeByNode.get(key) || [];
+    items.push({
+      id: String(row.id),
+      title: row.title,
+      description: row.description || '',
+      moduleKey: row.module_key || '',
+      moduleName: row.module_name || '',
+      sortOrder: Number(row.sort_order || 0),
+    });
+    knowledgeByNode.set(key, items);
+  }
+  return rows.map((row) => ({
+    id: String(row.id),
+    parentId: row.parent_id ? String(row.parent_id) : null,
+    level: Number(row.level),
+    moduleKey: row.module_key,
+    moduleName: row.module_name,
+    title: row.title,
+    status: row.status,
+    sortOrder: Number(row.sort_order || 0),
+    ancestors: ancestorsByNode.get(String(row.id)) || [],
+    resources: resourcesByNode.get(String(row.id)) || [],
+    knowledgePoints: knowledgeByNode.get(String(row.id)) || [],
+  }));
+}
+
 function previewTypeFromMime(mime, resourceType) {
   const m = String(mime || '').toLowerCase();
   if (m.startsWith('video/')) return 'video';
@@ -438,7 +583,8 @@ function validateTaskBody(body) {
   const scope = body?.scope === 'specific' ? 'specific' : 'all';
   const status = body?.status === 'published' ? 'published' : 'draft';
   const attachmentsEnabled = Boolean(body?.attachmentsEnabled);
-  const resourceLinkEnabled = Boolean(body?.resourceLinkEnabled);
+  const requiresStudentAttachment = Boolean(body?.requiresStudentAttachment);
+  const resourceLinkEnabled = false;
   const teamIds = Array.isArray(body?.teamIds)
     ? body.teamIds.map(String).filter(Boolean)
     : [];
@@ -452,7 +598,6 @@ function validateTaskBody(body) {
   if (!TASK_PRIORITIES.includes(priority)) return { error: '请选择紧急程度' };
   if (!deadline) return { error: '请选择截止时间' };
   if (scope === 'specific' && !teamIds.length) return { error: '请选择目标团队' };
-  if (resourceLinkEnabled && !resourceNodeIds.length) return { error: '请选择课程资源' };
 
   return {
     title,
@@ -463,6 +608,7 @@ function validateTaskBody(body) {
     scope,
     status,
     attachmentsEnabled,
+    requiresStudentAttachment,
     resourceLinkEnabled,
     teamIds,
     resourceNodeIds,
@@ -499,6 +645,7 @@ async function mapTaskRow(pool, classId, row) {
     scope: row.scope,
     status: displayStatus(row),
     attachmentsEnabled: row.attachments_enabled,
+    requiresStudentAttachment: Boolean(row.requires_student_attachment),
     resourceLinkEnabled: row.resource_link_enabled,
     resourceNodeIds,
     resourceNodes,
@@ -515,6 +662,7 @@ async function mapTaskRow(pool, classId, row) {
 async function mapStudentTodoTaskRow(pool, row, studentId, forceStatus = null) {
   const moduleId = TASK_MODULE_TO_TRAINING_ID[row.module] || null;
   const dl = formatDateOnly(row.deadline);
+  const resourceNodes = await loadModuleResourceNodes(pool, row.module, { studentId });
   let status = forceStatus || row.status;
   if (status === 'published' && dl) {
     const disp = displayStatus({ status: 'published', deadline: row.deadline });
@@ -523,6 +671,7 @@ async function mapStudentTodoTaskRow(pool, row, studentId, forceStatus = null) {
   return {
     id: String(row.id),
     title: row.title,
+    description: row.description || '',
     module: row.module,
     moduleId,
     priority: row.priority,
@@ -530,10 +679,9 @@ async function mapStudentTodoTaskRow(pool, row, studentId, forceStatus = null) {
     daysLeft: dl ? daysUntilDeadline(dl) : 0,
     status,
     attachments: row.attachmentsEnabled ? await loadTaskAttachments(pool, row.id) : [],
-    resourceLinkEnabled: row.resourceLinkEnabled,
-    resourceNodes: row.resourceLinkEnabled
-      ? await loadTaskResourceNodes(pool, row.id, { publishedLeavesOnly: true, studentId })
-      : [],
+    requiresStudentAttachment: Boolean(row.requiresStudentAttachment),
+    resourceLinkEnabled: resourceNodes.length > 0,
+    resourceNodes,
   };
 }
 
@@ -611,6 +759,104 @@ const uploadAttachment = multer({
   storage,
   limits: { fileSize: MAX_TASK_ATTACHMENT_BYTES },
 });
+
+const studentSubmissionStorage = multer.diskStorage({
+  destination(req, file, cb) {
+    const classId = parseId(req.params.classId);
+    const taskId = parseId(req.params.taskId);
+    const sid = studentIdFromReq(req);
+    if (!classId || !taskId || !sid) return cb(new Error('参数无效'));
+    const dir = path.join(UPLOAD_ROOT, 'student-submissions', String(classId), String(taskId), String(sid));
+    fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
+  filename(req, file, cb) {
+    const safe = String(file.originalname || 'file').replace(/[/\\]/g, '_');
+    cb(null, `${randomUUID()}_${safe}`);
+  },
+});
+
+const uploadStudentSubmission = multer({
+  storage: studentSubmissionStorage,
+  limits: { fileSize: MAX_TASK_ATTACHMENT_BYTES },
+});
+
+function submissionAttachmentAbsPath(storageKey) {
+  return path.join(UPLOAD_ROOT, storageKey);
+}
+
+async function targetStudentsForTask(pool, classId, taskId, scope) {
+  if (scope === 'specific') {
+    const { rows } = await pool.query(
+      `SELECT DISTINCT u.id, COALESCE(u.real_name, u.username) AS name, COALESCE(u.student_no, '') AS "studentNo",
+              t.id AS "teamId", t.name AS "teamName"
+       FROM teacher_personal_class_task_teams tt
+       JOIN teacher_personal_class_teams t ON t.id = tt.team_id
+       JOIN teacher_personal_class_team_members m ON m.team_id = t.id
+       JOIN users u ON u.id = m.student_id
+       WHERE tt.task_id = $1
+       ORDER BY t.id ASC, u.id ASC`,
+      [taskId]
+    );
+    return rows;
+  }
+  const { rows } = await pool.query(
+    `SELECT u.id, COALESCE(u.real_name, u.username) AS name, COALESCE(u.student_no, '') AS "studentNo",
+            t.id AS "teamId", t.name AS "teamName"
+     FROM teacher_personal_class_students s
+     JOIN users u ON u.id = s.student_id
+     LEFT JOIN teacher_personal_class_team_members m ON m.student_id = u.id
+     LEFT JOIN teacher_personal_class_teams t
+       ON t.id = m.team_id AND t.teacher_personal_class_id = s.teacher_personal_class_id
+     WHERE s.teacher_personal_class_id = $1
+     ORDER BY t.id NULLS LAST, u.id ASC`,
+    [classId]
+  );
+  return rows;
+}
+
+async function mapSubmissionDetail(pool, classId, task) {
+  const students = await targetStudentsForTask(pool, classId, task.id, task.scope);
+  const { rows: completions } = await pool.query(
+    `SELECT student_id AS "studentId", completed_at AS "completedAt"
+     FROM student_personal_class_task_completions
+     WHERE task_id = $1`,
+    [task.id]
+  );
+  const completedByStudent = new Map(completions.map((row) => [String(row.studentId), row.completedAt]));
+  const items = [];
+  for (const row of students) {
+    const studentId = String(row.id);
+    const completedAt = completedByStudent.get(studentId);
+    items.push({
+      studentId,
+      name: row.name || '',
+      studentNo: row.studentNo || '',
+      teamId: row.teamId ? String(row.teamId) : '',
+      teamName: row.teamName || '未分组',
+      completed: Boolean(completedAt),
+      completedAt: completedAt ? new Date(completedAt).toISOString() : '',
+      attachments: task.requires_student_attachment ? await loadSubmissionAttachments(pool, task.id, studentId) : [],
+    });
+  }
+  const teams = Array.from(new Map(items.map((item) => [item.teamId || 'none', {
+    teamId: item.teamId || 'none',
+    teamName: item.teamName || '未分组',
+  }])).values()).map((team) => ({
+    ...team,
+    members: items.filter((item) => (item.teamId || 'none') === team.teamId),
+  }));
+  return {
+    taskId: String(task.id),
+    title: task.title,
+    scope: task.scope,
+    requiresStudentAttachment: Boolean(task.requires_student_attachment),
+    totalTargets: items.length,
+    completedCount: items.filter((item) => item.completed).length,
+    students: items,
+    teams,
+  };
+}
 
 router.get(
   '/teacher/personal-classes/:classId/teams-for-task',
@@ -732,8 +978,8 @@ router.post(
         const { rows: ins } = await client.query(
           `INSERT INTO teacher_personal_class_tasks
              (teacher_personal_class_id, teacher_id, title, description, module, priority, deadline,
-              scope, status, attachments_enabled, resource_link_enabled, published_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+              scope, status, attachments_enabled, requires_student_attachment, resource_link_enabled, published_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
            RETURNING *`,
           [
             classId,
@@ -746,13 +992,13 @@ router.post(
             v.scope,
             v.status,
             v.attachmentsEnabled,
+            v.requiresStudentAttachment,
             v.resourceLinkEnabled,
             v.status === 'published' ? new Date() : null,
           ]
         );
         const taskId = ins[0].id;
         if (v.scope === 'specific') await saveTaskTeams(client, taskId, v.teamIds);
-        if (v.resourceLinkEnabled) await saveTaskResourceNodes(client, taskId, v.resourceNodeIds);
         if (v.status === 'published') {
           await notifyTaskTargets(client, { classId, teacherId: tid, task: { ...ins[0], scope: v.scope }, action: 'published' });
         }
@@ -810,8 +1056,8 @@ router.put(
         const { rows: upd } = await client.query(
           `UPDATE teacher_personal_class_tasks SET
              title = $3, description = $4, module = $5, priority = $6, deadline = $7,
-             scope = $8, status = $9, attachments_enabled = $10, resource_link_enabled = $11,
-             published_at = $12, updated_at = now()
+             scope = $8, status = $9, attachments_enabled = $10, requires_student_attachment = $11,
+             resource_link_enabled = $12, published_at = $13, updated_at = now()
            WHERE id = $1 AND teacher_personal_class_id = $2
            RETURNING *`,
           [
@@ -825,13 +1071,14 @@ router.put(
             v.scope,
             v.status,
             v.attachmentsEnabled,
+            v.requiresStudentAttachment,
             v.resourceLinkEnabled,
             publishedAt,
           ]
         );
         if (v.scope === 'specific') await saveTaskTeams(client, taskId, v.teamIds);
         else await client.query(`DELETE FROM teacher_personal_class_task_teams WHERE task_id = $1`, [taskId]);
-        await saveTaskResourceNodes(client, taskId, v.resourceLinkEnabled ? v.resourceNodeIds : []);
+        await saveTaskResourceNodes(client, taskId, []);
         if (hasAddedResourceNodes) {
           await client.query(`DELETE FROM student_personal_class_task_completions WHERE task_id = $1`, [taskId]);
         }
@@ -1000,6 +1247,63 @@ router.delete(
 );
 
 router.get(
+  '/teacher/personal-classes/:classId/tasks/:taskId/submissions',
+  requireAuth(),
+  requireTeacher(),
+  async (req, res) => {
+    try {
+      const tid = teacherIdFromReq(req);
+      const classId = parseId(req.params.classId);
+      const taskId = parseId(req.params.taskId);
+      if (!tid || !classId || !taskId) return bad(req, res, 400, 40003, '参数无效');
+      const pool = getPool();
+      if (!(await ownsPersonalClass(pool, tid, classId))) {
+        return bad(req, res, 404, 40402, '班级不存在或无权操作');
+      }
+      const { rows } = await pool.query(
+        `SELECT * FROM teacher_personal_class_tasks WHERE id = $1 AND teacher_personal_class_id = $2`,
+        [taskId, classId]
+      );
+      if (!rows.length) return bad(req, res, 404, 40403, '任务不存在');
+      return ok(req, res, await mapSubmissionDetail(pool, classId, rows[0]));
+    } catch (e) {
+      logError(`GET task submissions traceId=${req.traceId}`, e);
+      return bad(req, res, 500, 50000, e.message);
+    }
+  }
+);
+
+router.get(
+  '/teacher/personal-classes/:classId/tasks/:taskId/submission-attachments/:attachmentId/download',
+  requireAuth(),
+  requireTeacher(),
+  async (req, res) => {
+    try {
+      const tid = teacherIdFromReq(req);
+      const classId = parseId(req.params.classId);
+      const taskId = parseId(req.params.taskId);
+      const attachmentId = parseId(req.params.attachmentId);
+      if (!tid || !classId || !taskId || !attachmentId) return bad(req, res, 400, 40003, '参数无效');
+      const pool = getPool();
+      if (!(await ownsPersonalClass(pool, tid, classId))) {
+        return bad(req, res, 404, 40402, '班级不存在或无权操作');
+      }
+      const { rows } = await pool.query(
+        `SELECT storage_key, file_name
+         FROM student_personal_class_task_completion_attachments
+         WHERE id = $1 AND task_id = $2`,
+        [attachmentId, taskId]
+      );
+      if (!rows.length) return bad(req, res, 404, 40404, '附件不存在');
+      return res.download(submissionAttachmentAbsPath(rows[0].storage_key), rows[0].file_name);
+    } catch (e) {
+      logError(`GET submission attachment traceId=${req.traceId}`, e);
+      return bad(req, res, 500, 50000, e.message);
+    }
+  }
+);
+
+router.get(
   '/student/personal-classes/:classId/tasks/todos',
   requireAuth(),
   requireStudent(),
@@ -1012,8 +1316,9 @@ router.get(
       if (!(await studentEnrolledInClass(pool, sid, classId))) {
         return bad(req, res, 403, 40301, '未加入该班级');
       }
-      const baseQuery = `SELECT t.id, t.title, t.module, t.priority, t.deadline, t.status,
+      const baseQuery = `SELECT t.id, t.title, t.description, t.module, t.priority, t.deadline, t.status,
                 t.attachments_enabled AS "attachmentsEnabled",
+                t.requires_student_attachment AS "requiresStudentAttachment",
                 t.resource_link_enabled AS "resourceLinkEnabled"
          FROM teacher_personal_class_tasks t
          WHERE t.teacher_personal_class_id = $1
@@ -1028,8 +1333,9 @@ router.get(
              )
            )`;
       const { rows } = await pool.query(
-        `SELECT t.id, t.title, t.module, t.priority, t.deadline, t.status,
+        `SELECT t.id, t.title, t.description, t.module, t.priority, t.deadline, t.status,
                 t.attachments_enabled AS "attachmentsEnabled",
+                t.requires_student_attachment AS "requiresStudentAttachment",
                 t.resource_link_enabled AS "resourceLinkEnabled"
          FROM teacher_personal_class_tasks t
          WHERE t.teacher_personal_class_id = $1
@@ -1076,6 +1382,7 @@ router.post(
   '/student/personal-classes/:classId/tasks/:taskId/complete',
   requireAuth(),
   requireStudent(),
+  uploadStudentSubmission.array('files', MAX_TASK_ATTACHMENTS),
   async (req, res) => {
     try {
       const sid = studentIdFromReq(req);
@@ -1089,13 +1396,50 @@ router.post(
       if (!(await studentCanViewTask(pool, sid, classId, taskId))) {
         return bad(req, res, 403, 40302, '无权查看该任务');
       }
-      await pool.query(
-        `INSERT INTO student_personal_class_task_completions (task_id, student_id)
-         VALUES ($1, $2)
-         ON CONFLICT (task_id, student_id)
-         DO UPDATE SET completed_at = now()`,
-        [taskId, sid]
+      const { rows: taskRows } = await pool.query(
+        `SELECT requires_student_attachment FROM teacher_personal_class_tasks
+         WHERE id = $1 AND teacher_personal_class_id = $2`,
+        [taskId, classId]
       );
+      if (!taskRows.length) return bad(req, res, 404, 40403, '任务不存在');
+      const files = Array.isArray(req.files) ? req.files : [];
+      if (taskRows[0].requires_student_attachment && files.length === 0) {
+        return bad(req, res, 400, 40015, '请上传任务反馈附件');
+      }
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query(
+          `INSERT INTO student_personal_class_task_completions (task_id, student_id)
+           VALUES ($1, $2)
+           ON CONFLICT (task_id, student_id)
+           DO UPDATE SET completed_at = now()`,
+          [taskId, sid]
+        );
+        if (taskRows[0].requires_student_attachment) {
+          await client.query(
+            `DELETE FROM student_personal_class_task_completion_attachments
+             WHERE task_id = $1 AND student_id = $2`,
+            [taskId, sid]
+          );
+          for (let i = 0; i < files.length; i += 1) {
+            const file = files[i];
+            const relKey = path.join('student-submissions', String(classId), String(taskId), String(sid), file.filename);
+            await client.query(
+              `INSERT INTO student_personal_class_task_completion_attachments
+                (task_id, student_id, storage_key, file_name, file_size, sort_order)
+               VALUES ($1, $2, $3, $4, $5, $6)`,
+              [taskId, sid, relKey, file.originalname, file.size, i]
+            );
+          }
+        }
+        await client.query('COMMIT');
+      } catch (e) {
+        await client.query('ROLLBACK');
+        throw e;
+      } finally {
+        client.release();
+      }
       return ok(req, res, { completed: true });
     } catch (e) {
       logError(`POST student task complete traceId=${req.traceId}`, e);

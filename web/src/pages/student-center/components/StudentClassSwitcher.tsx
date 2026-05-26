@@ -19,9 +19,21 @@ export default function StudentClassSwitcher({ enrollments, selectedClassId, onC
   return (
     <Dropdown
       menu={{
-        items: enrollments.map((e) => ({ key: e.classId, label: e.className })),
+        items: enrollments.map((e) => ({
+          key: e.classId,
+          disabled: !e.canEnterTraining,
+          label: (
+            <span className="flex items-center justify-between gap-3">
+              <span>{e.className}</span>
+              {!e.canEnterTraining && <span className="text-xs text-gray-400">未到团队组建日期</span>}
+            </span>
+          ),
+        })),
         selectedKeys: selectedClassId ? [selectedClassId] : [],
-        onClick: ({ key }) => onClassChange(String(key)),
+        onClick: ({ key }) => {
+          const target = enrollments.find((item) => item.classId === String(key));
+          if (target?.canEnterTraining) onClassChange(String(key));
+        },
       }}
       trigger={['click']}
       disabled={!canSwitch}

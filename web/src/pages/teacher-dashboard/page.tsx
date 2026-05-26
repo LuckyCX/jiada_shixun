@@ -25,14 +25,12 @@ import ClassProjectOverview from '../class-project-overview/page';
 import TeacherGuide from '../teacher-guide/page';
 import CourseSettings from '../course-settings/page';
 import EvaluationPanel from './components/EvaluationPanel';
-import TrainingModuleResources from './components/trainingModuleResources';
 import {
   getTeacherProfile,
   listTeacherPersonalClasses,
   type TeacherPersonalClassRow,
   type TeacherProfile,
 } from './teacherPortalApi';
-import CourseResourceManagement from '../admin-dashboard/components/courseResource';
 
 type TabKey =
   | 'monitor'
@@ -47,9 +45,7 @@ type TabKey =
   | 'businessPlanReview'
   | 'classProjectOverview'
   | 'teacherGuide'
-  | 'courseSettings'
-  | 'courseResources'
-  | 'trainingModuleResources';
+  | 'courseSettings';
 
 type SidebarGroup = {
   groupLabel?: string;
@@ -70,19 +66,18 @@ const sidebarGroups: SidebarGroup[] = [
     ],
   },
   {
+    groupLabel: '课程建设',
+    items: [
+      { key: 'courseSettings', label: '课程设置', icon: 'ri-book-open-line', type: 'tab' },
+    ],
+  },
+  {
     groupLabel: '教学监控',
     items: [
       { key: 'monitor', label: '全局项目监控', icon: 'ri-radar-line', type: 'tab' },
       { key: 'analysis', label: '评价智能体分析', icon: 'ri-brain-line', type: 'tab' },
       { key: 'guidance', label: '动态引导工具', icon: 'ri-compass-3-line', type: 'tab' },
       { key: 'evaluation', label: '教学评价', icon: 'ri-star-line', type: 'tab' },
-    ],
-  },
-  {
-    groupLabel: '课程建设',
-    items: [
-      { key: 'courseResources', label: '课程资源', icon: 'ri-book-open-line', type: 'tab' },
-      { key: 'trainingModuleResources', label: '实训模块资源', icon: 'ri-layout-grid-line', type: 'tab' },
     ],
   },
   {
@@ -132,8 +127,6 @@ const ALL_TAB_KEYS: TabKey[] = [
   'classProjectOverview',
   'teacherGuide',
   'courseSettings',
-  'courseResources',
-  'trainingModuleResources',
 ];
 
 function isTabKey(v: string): v is TabKey {
@@ -677,13 +670,7 @@ export default function TeacherDashboard() {
         return <TeacherGuide />;
 
       case 'courseSettings':
-        return <CourseSettings embedded={true} />;
-
-      case 'courseResources':
-        return <CourseResourceManagement />;
-
-      case 'trainingModuleResources':
-        return <TrainingModuleResources />;
+        return <CourseSettings embedded={true} personalClass={selectedPersonalClass} />;
 
       case 'evaluation':
         return <EvaluationPanel />;
@@ -837,7 +824,6 @@ export default function TeacherDashboard() {
               {activeTab === 'classProjectOverview' && '多维度查看全班项目进度'}
               {activeTab === 'teacherGuide' && '掌握监控、分析、引导、评价的完整教学流程'}
               {activeTab === 'courseSettings' && '配置实训任务截止时间与评分标准'}
-              {activeTab === 'courseResources' && '管理课程章节、知识点库与案例库'}
               {activeTab === 'evaluation' && '双维评价体系 · 项目完成 + 迭代增值'}
             </p>
             </div>
