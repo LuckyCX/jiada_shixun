@@ -1,9 +1,9 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
-import { Modal, notification } from 'antd';
+import { notification, Tree } from 'antd';
 import { clearPortalToken, getPortalToken, parseJwtPayload } from '../../lib/authApi';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useSiteBrand } from '../../lib/publicSite';
-import LearningDetail from '../knowledge-system/components/LearningDetail';
+import LearningDetail, { type LearningDetailResource } from '../knowledge-system/components/LearningDetail';
 import QuizModal, { type QuizConfig } from './components/QuizModal';
 import { fetchStudentKnowledgeQuiz } from '../../lib/courseResourceApi';
 import {
@@ -78,16 +78,104 @@ interface KnowledgeQuizState {
   [knowledgeId: string]: 'not_started' | 'passed' | 'failed';
 }
 
+type LearningKnowledge = {
+  id: string;
+  name: string;
+  module: string;
+  moduleName: string;
+  description: string;
+  resources: LearningDetailResource[];
+  knowledgePoints: {
+    id: string;
+    title: string;
+    description: string;
+  }[];
+};
+
+type KnowledgeCardData = {
+  id: string;
+  name: string;
+  module: string;
+  moduleName: string;
+  description: string;
+  status: 'completed' | 'learning' | 'locked';
+  progress: number;
+  abilityPoints: string[];
+  resources: LearningDetailResource[];
+  nodeIds: string[];
+  quizId: string;
+  sortOrder: number;
+};
+
+type ResourceProgress = NonNullable<LearningDetailResource['progress']>;
+
+const clampProgressPercent = (value: number) => Math.min(100, Math.max(0, Number.isFinite(value) ? value : 0));
+
+const normalizeResourceProgress = (progress?: LearningDetailResource['progress']): ResourceProgress => {
+  const progressPercent = clampProgressPercent(progress?.progressPercent || 0);
+  const completed = Boolean(progress?.completed) || progressPercent >= 100;
+  return {
+    progressPercent: completed ? 100 : progressPercent,
+    lastPosition: progress?.lastPosition || {},
+    completed,
+  };
+};
+
+const mergeResourceProgress = (
+  base?: LearningDetailResource['progress'],
+  next?: LearningDetailResource['progress'],
+): ResourceProgress => {
+  const current = normalizeResourceProgress(base);
+  if (!next) return current;
+
+  const incoming = normalizeResourceProgress(next);
+  const progressPercent = Math.max(current.progressPercent, incoming.progressPercent);
+  return {
+    progressPercent,
+    lastPosition: incoming.progressPercent >= current.progressPercent ? incoming.lastPosition : current.lastPosition,
+    completed: current.completed || incoming.completed || progressPercent >= 100,
+  };
+};
+
+const isTrackableLearningResource = (resource: LearningDetailResource) =>
+  resource.type !== 'archive' && resource.previewType !== 'archive';
+
+const isRealLearningResource = (resource: LearningDetailResource) =>
+  !resource.id.startsWith('node-');
+
+const calculateKnowledgeResourceProgress = (resources: LearningDetailResource[]) => {
+  const trackable = resources.filter(isTrackableLearningResource);
+  if (trackable.length === 0) return 0;
+  return Math.round(
+    trackable.reduce((sum, resource) => sum + normalizeResourceProgress(resource.progress).progressPercent, 0) / trackable.length,
+  );
+};
+
+type ChapterTreeNode = {
+  id: string;
+  parentId: string | null;
+  title: string;
+  level: number;
+  sortOrder: number;
+  children: ChapterTreeNode[];
+};
+
+type AntdTreeNode = {
+  title: string;
+  key: string;
+  children?: AntdTreeNode[];
+};
+
 export default function StudentCenterPage() {
   const { logoUrl, siteTitle } = useSiteBrand();
   const brandTitle = siteTitle.trim() || '学生工作台';
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
+  const tabParam = searchParams.get('tab');
   const initialModule = searchParams.get('module');
 
   const getInitialTab = (): TabType => {
     // 优先读取 tab 参数（直接传入 tab key，如 module-business）
-    const tabParam = searchParams.get('tab');
     if (tabParam) {
       return tabParam as TabType;
     }
@@ -109,14 +197,15 @@ export default function StudentCenterPage() {
 
   const [activeTab, setActiveTab] = useState<TabType>(getInitialTab());
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [showLearningDetail, setShowLearningDetail] = useState(false);
   const [knowledgeSubTab, setKnowledgeSubTab] = useState<'overview' | 'knowledge' | 'ability' | 'progress'>('overview');
-  const [selectedModule, setSelectedModule] = useState<string>('all');
+  const [selectedModule, setSelectedModule] = useState<string>('ideation');
+  const [selectedChapterId, setSelectedChapterId] = useState<string | null>(null);
+  const [activeLearningKnowledge, setActiveLearningKnowledge] = useState<LearningKnowledge | null>(null);
   const [activeQuizId, setActiveQuizId] = useState<string | null>(null);
   const [activeQuizConfig, setActiveQuizConfig] = useState<QuizConfig | null>(null);
   const [quizLoadingId, setQuizLoadingId] = useState<string | null>(null);
   const [quizStates, setQuizStates] = useState<KnowledgeQuizState>({});
-  const [completedKnowledgeIds, setCompletedKnowledgeIds] = useState<Set<string>>(new Set(['k_ideation_1']));
+  const [completedKnowledgeIds, setCompletedKnowledgeIds] = useState<Set<string>>(new Set());
   const [moduleProgressState, setModuleProgressState] = useState<Record<string, number>>({
     team: 0,
     ideation: 0,
@@ -136,9 +225,11 @@ export default function StudentCenterPage() {
   const [enrollments, setEnrollments] = useState<StudentPersonalEnrollment[]>([]);
   const [selectedClassId, setSelectedClassId] = useState<string>('');
   const [studentTodoTasks, setStudentTodoTasks] = useState<StudentTodoTask[]>([]);
+  const [resourceProgressOverrides, setResourceProgressOverrides] = useState<Record<string, ResourceProgress>>({});
   const [overviewMyTeam, setOverviewMyTeam] = useState<GroupingTeam | null>(null);
   const [overviewPanelTab, setOverviewPanelTab] = useState<'notifications' | 'tasks'>('notifications');
   const teamGuideShownRef = useRef(false);
+  const closingLearningRef = useRef(false);
 
   const selectedEnrollment = useMemo(
     () => enrollments.find((e) => e.classId === selectedClassId) ?? enrollments[0],
@@ -209,7 +300,7 @@ export default function StudentCenterPage() {
   }, [selectedClassId]);
 
   useEffect(() => {
-    if (!selectedClassId || teamGuideShownRef.current) return;
+    if (!selectedClassId || teamGuideShownRef.current || tabParam) return;
     void fetchTeamSubmission(selectedClassId)
       .then((sub) => {
         if (isTeamFormationDone(sub.status)) return;
@@ -223,7 +314,7 @@ export default function StudentCenterPage() {
         });
       })
       .catch(() => {});
-  }, [selectedClassId]);
+  }, [selectedClassId, tabParam]);
 
   const handleClassChange = (classId: string) => {
     setSelectedClassId(classId);
@@ -336,16 +427,70 @@ export default function StudentCenterPage() {
     return null;
   };
 
-  const knowledgePoints = [
-    { id: 'k_ideation_1', name: '头脑风暴法', module: 'ideation', description: '掌握头脑风暴、延迟判断等核心创新思维工具', status: completedKnowledgeIds.has('k_ideation_1') ? 'completed' : 'learning', progress: completedKnowledgeIds.has('k_ideation_1') ? 100 : 65, abilityPoints: ['创新思维'], resources: [{ type: 'video', name: '头脑风暴法导论' }, { type: 'document', name: '实施指南' }], quizId: 'k_ideation_1' },
-    { id: 'k_ideation_2', name: 'SCAMPER创新法', module: 'ideation', description: '掌握SCAMPER七大创新维度，学会系统化创新', status: completedKnowledgeIds.has('k_ideation_2') ? 'completed' : 'learning', progress: completedKnowledgeIds.has('k_ideation_2') ? 100 : 40, abilityPoints: ['创新思维', '系统思维'], resources: [{ type: 'video', name: 'SCAMPER方法详解' }, { type: 'document', name: '实战手册' }], quizId: 'k_ideation_2' },
-    { id: 'k_market_1', name: '市场调研方法', module: 'market', description: '学习问卷设计、访谈技巧、数据分析方法', status: completedKnowledgeIds.has('k_market_1') ? 'completed' : 'learning', progress: completedKnowledgeIds.has('k_market_1') ? 100 : 75, abilityPoints: ['用户洞察', '数据分析'], resources: [{ type: 'video', name: '市场调研基础' }, { type: 'case', name: '成功调研案例' }], quizId: 'k_market_1' },
-    { id: 'k_market_2', name: '用户画像构建', module: 'market', description: '学习如何构建精准的用户画像', status: completedKnowledgeIds.has('k_market_2') ? 'completed' : 'learning', progress: completedKnowledgeIds.has('k_market_2') ? 100 : 60, abilityPoints: ['用户洞察'], resources: [{ type: 'document', name: '用户画像模板' }], quizId: 'k_market_2' },
-    { id: 'k_product_1', name: '产品原型设计', module: 'product', description: '掌握原型设计工具与方法，理解MVP概念', status: completedKnowledgeIds.has('k_product_1') ? 'completed' : 'locked', progress: completedKnowledgeIds.has('k_product_1') ? 100 : 0, abilityPoints: ['产品设计'], resources: [{ type: 'video', name: '原型设计入门' }], quizId: 'k_product_1' },
-    { id: 'k_business_1', name: '商业模式画布', module: 'business', description: '学习商业模式画布的9大模块，系统构建商业模式', status: completedKnowledgeIds.has('k_business_1') ? 'completed' : 'locked', progress: completedKnowledgeIds.has('k_business_1') ? 100 : 0, abilityPoints: ['商业思维'], resources: [{ type: 'video', name: '商业模式画布详解' }], quizId: 'k_business_1' },
-    { id: 'k_simulation_1', name: 'AI角色推荐方法', module: 'simulation', description: '了解创业团队角色分工与AI智能推荐逻辑', status: completedKnowledgeIds.has('k_simulation_1') ? 'completed' : 'locked', progress: completedKnowledgeIds.has('k_simulation_1') ? 100 : 0, abilityPoints: ['角色认知', '项目管理'], resources: [{ type: 'video', name: 'AI角色推荐原理' }], quizId: 'k_simulation_1' },
-    { id: 'k_plan_1', name: '商业计划书撰写', module: 'plan', description: '掌握商业计划书结构与路演PPT制作技巧', status: completedKnowledgeIds.has('k_plan_1') ? 'completed' : 'locked', progress: completedKnowledgeIds.has('k_plan_1') ? 100 : 0, abilityPoints: ['文案撰写', '演讲表达'], resources: [{ type: 'document', name: '商业计划书模板' }], quizId: 'k_plan_1' },
-  ];
+  const knowledgePoints = (() => {
+    const byId = new Map<string, KnowledgeCardData>();
+
+    studentTodoTasks.forEach((task) => {
+      (task.resourceNodes || []).forEach((node) => {
+        const moduleId = node.moduleKey || task.moduleId || '';
+        node.knowledgePoints.forEach((point) => {
+          const completed = completedKnowledgeIds.has(point.id);
+          const locked = getSidebarModuleUi(moduleId).locked;
+          const existing = byId.get(point.id);
+          const resources = node.resources.map((resource) => {
+            const meta = resource as typeof resource & Partial<LearningDetailResource>;
+            return {
+              id: resource.id,
+              nodeId: resource.nodeId,
+              title: resource.name,
+              type: resource.type,
+              previewType: meta.previewType,
+              previewStatus: meta.previewStatus,
+              contentHash: meta.contentHash,
+              mimeType: resource.mimeType,
+              size: resource.size,
+              canPreview: resource.canPreview,
+              progress: mergeResourceProgress(meta.progress, resourceProgressOverrides[resource.id]),
+            };
+          });
+          if (existing) {
+            if (!existing.nodeIds.includes(node.id)) existing.nodeIds.push(node.id);
+            resources.forEach((resource) => {
+              if (!existing.resources.some((item) => item.id === resource.id)) {
+                existing.resources.push(resource);
+              }
+            });
+            if (!resources.length && !existing.resources.some((item) => item.id === `node-${node.id}`)) {
+              existing.resources.push({ id: `node-${node.id}`, nodeId: node.id, title: node.title, type: 'case', mimeType: '', size: '', canPreview: false });
+            }
+            return;
+          }
+          byId.set(point.id, {
+            id: point.id,
+            name: point.title,
+            module: moduleId,
+            moduleName: node.moduleName || task.module,
+            description: point.description,
+            status: completed ? 'completed' : locked ? 'locked' : 'learning',
+            progress: completed ? 100 : calculateKnowledgeResourceProgress(resources),
+            abilityPoints: [],
+            resources: resources.length ? resources : [{ id: `node-${node.id}`, nodeId: node.id, title: node.title, type: 'case', mimeType: '', size: '', canPreview: false }],
+            nodeIds: [node.id],
+            quizId: point.id,
+            sortOrder: point.sortOrder,
+          });
+        });
+      });
+    });
+
+    return Array.from(byId.values()).map((item) => ({
+      ...item,
+      progress: item.status === 'completed' ? 100 : calculateKnowledgeResourceProgress(item.resources),
+    })).sort((a, b) => {
+      const moduleDiff = TRAINING_MODULE_ORDER.indexOf(a.module as (typeof TRAINING_MODULE_ORDER)[number]) - TRAINING_MODULE_ORDER.indexOf(b.module as (typeof TRAINING_MODULE_ORDER)[number]);
+      return moduleDiff || a.sortOrder - b.sortOrder || Number(a.id) - Number(b.id);
+    });
+  })();
 
   const abilityPointsData = [
     { id: 'a1', name: '创新思维', category: '核心能力', level: 4, maxLevel: 5, description: '发散思维、创意生成、创新方法运用', obtainedFrom: '创新思维与创意生成 - 创意筛选报告审核通过', obtainedDate: '2024-12-15' },
@@ -357,7 +502,6 @@ export default function StudentCenterPage() {
   ];
 
   const knowledgeModules = [
-    { id: 'all', name: '全部模块', color: 'bg-gradient-to-r from-gray-500 to-gray-600' },
     { id: 'ideation', name: '创新思维', color: 'bg-gradient-to-r from-teal-500 to-teal-600' },
     { id: 'market', name: '市场调研', color: 'bg-gradient-to-r from-green-500 to-green-600' },
     { id: 'product', name: '产品设计', color: 'bg-gradient-to-r from-orange-500 to-orange-600' },
@@ -397,6 +541,23 @@ export default function StudentCenterPage() {
     }
   };
 
+  const handleKnowledgeQuizClick = (kp: KnowledgeCardData) => {
+    if (completedKnowledgeIds.has(kp.id)) {
+      void startKnowledgeQuiz(kp.id);
+      return;
+    }
+    const hasLearningResource = selectedChapterResources.some((resource) => isRealLearningResource(resource) && isTrackableLearningResource(resource));
+    const learningProgress = calculateKnowledgeResourceProgress(selectedChapterResources);
+    if (hasLearningResource && learningProgress <= 80) {
+      notification.warning({
+        message: '学习进度不足',
+        description: '进度不够，请先去学习。',
+      });
+      return;
+    }
+    void startKnowledgeQuiz(kp.id);
+  };
+
   const unreadCount = notificationList.filter(n => !n.isRead).length;
   const completedCount = moduleProgress.filter(m => m.status === 'completed').length;
   const inProgressCount = moduleProgress.filter(m => m.status === 'in_progress').length;
@@ -431,6 +592,13 @@ export default function StudentCenterPage() {
     navigate({ pathname: pathname || '/student-center', search: params.toString() ? `?${params.toString()}` : '' });
   };
 
+  const changeActiveTab = (tab: TabType) => {
+    setActiveTab(tab);
+    const params = new URLSearchParams(searchParams);
+    params.set('tab', tab);
+    navigate({ pathname: '/student-center', search: `?${params.toString()}` });
+  };
+
   const filteredNotifications = notificationList.filter(n => {
     if (notificationFilter !== 'all' && n.type !== notificationFilter) return false;
     if (notificationReadFilter === 'unread' && n.isRead) return false;
@@ -447,9 +615,8 @@ export default function StudentCenterPage() {
   }, [activeTab, loadNotifications]);
 
   useEffect(() => {
-    const tab = searchParams.get('tab');
-    if (tab) setActiveTab(tab as TabType);
-  }, [searchParams]);
+    if (tabParam) setActiveTab(tabParam as TabType);
+  }, [tabParam]);
 
   const getNotificationTypeStyle = (type: string) => {
     switch (type) {
@@ -528,7 +695,270 @@ export default function StudentCenterPage() {
     }
   };
 
-  const filteredKnowledge = selectedModule === 'all' ? knowledgePoints : knowledgePoints.filter(k => k.module === selectedModule);
+  const knowledgeChapterData = (() => {
+    const nodeMap = new Map<string, ChapterTreeNode>();
+    const leafIds = new Set<string>();
+
+    const ensureNode = (item: { id: string; parentId: string | null; title: string; level: number; sortOrder: number }) => {
+      if (!nodeMap.has(item.id)) {
+        nodeMap.set(item.id, {
+          id: item.id,
+          parentId: item.parentId,
+          title: item.title,
+          level: item.level,
+          sortOrder: item.sortOrder,
+          children: [],
+        });
+      }
+    };
+
+    studentTodoTasks.forEach((task) => {
+      (task.resourceNodes || []).forEach((node) => {
+        const moduleId = node.moduleKey || task.moduleId || '';
+        if (moduleId !== selectedModule) return;
+        leafIds.add(node.id);
+        [...(node.ancestors || []), node].forEach((item) => {
+          ensureNode({
+            id: item.id,
+            parentId: item.parentId,
+            title: item.title,
+            level: item.level,
+            sortOrder: item.sortOrder,
+          });
+        });
+      });
+    });
+
+    const roots: ChapterTreeNode[] = [];
+    nodeMap.forEach((node) => {
+      if (node.parentId && nodeMap.has(node.parentId)) {
+        const parent = nodeMap.get(node.parentId);
+        if (parent && !parent.children.some((child) => child.id === node.id)) parent.children.push(node);
+      } else {
+        roots.push(node);
+      }
+    });
+
+    const sortTree = (nodes: ChapterTreeNode[]) => {
+      nodes.sort((a, b) => a.level - b.level || a.sortOrder - b.sortOrder || Number(a.id) - Number(b.id));
+      nodes.forEach((node) => sortTree(node.children));
+    };
+    sortTree(roots);
+
+    const toTreeData = (nodes: ChapterTreeNode[]): AntdTreeNode[] =>
+      nodes.map((node) => ({
+        title: node.title,
+        key: node.id,
+        children: node.children.length ? toTreeData(node.children) : undefined,
+      }));
+
+    const collectLeafIds = (nodeId: string) => {
+      const ids = new Set<string>();
+      const walk = (node?: ChapterTreeNode) => {
+        if (!node) return;
+        if (leafIds.has(node.id)) ids.add(node.id);
+        node.children.forEach(walk);
+      };
+      walk(nodeMap.get(nodeId));
+      return Array.from(ids);
+    };
+
+    return { treeData: toTreeData(roots), nodeMap, collectLeafIds };
+  })();
+  const activeChapterId = selectedChapterId && knowledgeChapterData.nodeMap.has(selectedChapterId)
+    ? selectedChapterId
+    : String(knowledgeChapterData.treeData[0]?.key || '');
+  const activeChapterNode = activeChapterId ? knowledgeChapterData.nodeMap.get(activeChapterId) : undefined;
+  const activeChapterIsLeaf = Boolean(activeChapterNode && activeChapterNode.children.length === 0);
+  const selectedChapterLeafIds = new Set(activeChapterIsLeaf && activeChapterId ? knowledgeChapterData.collectLeafIds(activeChapterId) : []);
+  const selectedChapterKnowledge = selectedChapterLeafIds.size
+    ? knowledgePoints.filter((kp) => kp.module === selectedModule && kp.nodeIds.some((nodeId) => selectedChapterLeafIds.has(nodeId)))
+    : [];
+  const selectedChapterResources = (() => {
+    const byId = new Map<string, LearningDetailResource>();
+    studentTodoTasks.forEach((task) => {
+      (task.resourceNodes || []).forEach((node) => {
+        if (!selectedChapterLeafIds.has(node.id)) return;
+        node.resources.forEach((resource) => {
+          const meta = resource as typeof resource & Partial<LearningDetailResource>;
+          byId.set(resource.id, {
+            id: resource.id,
+            nodeId: resource.nodeId,
+            title: resource.name,
+            type: resource.type,
+            previewType: meta.previewType,
+            previewStatus: meta.previewStatus,
+            contentHash: meta.contentHash,
+            mimeType: resource.mimeType,
+            size: resource.size,
+            canPreview: resource.canPreview,
+            progress: mergeResourceProgress(meta.progress, resourceProgressOverrides[resource.id]),
+          });
+        });
+      });
+    });
+    return Array.from(byId.values());
+  })();
+
+  useEffect(() => {
+    if (searchParams.get('learning') !== 'resource') return;
+    const moduleParam = searchParams.get('learningModule');
+    const chapterParam = searchParams.get('learningChapter');
+    if (moduleParam && moduleParam !== selectedModule) {
+      setSelectedModule(moduleParam);
+      return;
+    }
+    if (chapterParam && chapterParam !== selectedChapterId) {
+      setSelectedChapterId(chapterParam);
+    }
+  }, [searchParams, selectedModule, selectedChapterId]);
+
+  const getResourceTypeText = (type: LearningDetailResource['type']) => {
+    switch (type) {
+      case 'video': return '视频';
+      case 'audio': return '音频';
+      case 'pdf': return '文档';
+      case 'image': return '图片';
+      case 'archive': return '压缩包';
+      case 'case': return '案例';
+      default: return '资源';
+    }
+  };
+
+  const getResourceIcon = (type: LearningDetailResource['type']) => {
+    switch (type) {
+      case 'video': return 'ri-video-line';
+      case 'audio': return 'ri-volume-up-line';
+      case 'pdf': return 'ri-file-pdf-2-line';
+      case 'image': return 'ri-image-line';
+      case 'archive': return 'ri-file-zip-line';
+      case 'case': return 'ri-book-open-line';
+      default: return 'ri-file-list-line';
+    }
+  };
+
+  const openLearningResources = (resources: LearningDetailResource[]) => {
+    if (resources.length === 0) return;
+    closingLearningRef.current = false;
+    const chapterTitle = knowledgeChapterData.nodeMap.get(activeChapterId)?.title || '';
+    const params = new URLSearchParams(searchParams);
+    params.set('tab', 'knowledge');
+    params.set('learning', 'resource');
+    params.set('learningModule', selectedModule);
+    if (activeChapterId) params.set('learningChapter', activeChapterId);
+    if (!params.get('resource')) params.set('resource', resources[0].id);
+    setSearchParams(params);
+    setActiveLearningKnowledge({
+      id: activeChapterId || resources[0].id,
+      name: chapterTitle || resources[0].title,
+      module: selectedModule,
+      moduleName: knowledgeModules.find((mod) => mod.id === selectedModule)?.name || selectedModule,
+      description: `${resources.length} 个学习资源`,
+      resources,
+      knowledgePoints: selectedChapterKnowledge.map((point) => ({
+        id: point.id,
+        title: point.name,
+        description: point.description,
+      })),
+    });
+  };
+
+  useEffect(() => {
+    if (searchParams.get('learning') !== 'resource') {
+      closingLearningRef.current = false;
+      if (activeLearningKnowledge) setActiveLearningKnowledge(null);
+      return;
+    }
+    if (closingLearningRef.current || activeLearningKnowledge) return;
+    if (!activeChapterIsLeaf || selectedChapterResources.length === 0) return;
+    const chapterTitle = knowledgeChapterData.nodeMap.get(activeChapterId)?.title || '';
+    setActiveLearningKnowledge({
+      id: activeChapterId || selectedChapterResources[0].id,
+      name: chapterTitle || selectedChapterResources[0].title,
+      module: selectedModule,
+      moduleName: knowledgeModules.find((mod) => mod.id === selectedModule)?.name || selectedModule,
+      description: `${selectedChapterResources.length} 个学习资源`,
+      resources: selectedChapterResources,
+      knowledgePoints: selectedChapterKnowledge.map((point) => ({
+        id: point.id,
+        title: point.name,
+        description: point.description,
+      })),
+    });
+  }, [
+    searchParams,
+    activeLearningKnowledge,
+    activeChapterIsLeaf,
+    activeChapterId,
+    selectedChapterResources,
+    selectedChapterKnowledge,
+    selectedModule,
+  ]);
+
+  const renderChapterResourceCard = (resources: LearningDetailResource[]) => {
+    const firstResource = resources[0];
+    const chapterTitle = knowledgeChapterData.nodeMap.get(activeChapterId)?.title || firstResource.title;
+    const resourceTypeText = Array.from(new Set(resources.map((resource) => getResourceTypeText(resource.type)))).join('、');
+    return (
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5 hover:shadow-md transition-all">
+        <div className="flex items-center gap-4">
+          <div className="w-11 h-11 rounded-xl bg-teal-50 text-teal-600 flex items-center justify-center flex-shrink-0">
+            <i className={`${getResourceIcon(firstResource.type)} text-xl`}></i>
+          </div>
+          <div className="min-w-0 flex-1">
+            <h4 className="text-sm font-bold text-gray-900 line-clamp-2 h-10">{chapterTitle}</h4>
+            <div className="flex items-center gap-2 mt-2 text-xs text-gray-400">
+              <span>{resources.length} 个资源</span>
+              {resourceTypeText && <><span>·</span><span>{resourceTypeText}</span></>}
+            </div>
+            <div className="text-xs text-gray-500 mt-2 line-clamp-1">
+              {resources.map((resource) => resource.title).join('、')}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => openLearningResources(resources)}
+            className="px-4 py-2 bg-gradient-to-r from-teal-500 to-cyan-600 text-white rounded-lg text-sm font-medium hover:shadow-md transition-all whitespace-nowrap cursor-pointer flex-shrink-0"
+          >
+            <i className="ri-play-circle-line mr-1"></i>去学习
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  const renderChapterKnowledgeCard = (kp: KnowledgeCardData) => {
+    const isCompleted = kp.status === 'completed';
+    const isLocked = kp.status === 'locked';
+    const quizState = quizStates[kp.id];
+    const hasQuiz = Boolean(kp.quizId);
+    return (
+      <div
+        key={kp.id}
+        className={`bg-white rounded-2xl shadow-sm border p-5 transition-all ${isLocked ? 'opacity-60 border-gray-100' : isCompleted ? 'border-green-200' : 'border-gray-100 hover:border-teal-200 hover:shadow-md'}`}
+      >
+        <div className="flex items-center gap-2 mb-2 flex-wrap">
+          <h3 className="text-base font-bold text-gray-900">{kp.name}</h3>
+          <span className={`px-2 py-0.5 rounded-lg text-xs font-medium border ${getKnowledgeStatusColor(kp.status)}`}>{getStatusText(kp.status)}</span>
+          {isCompleted && <span className="flex items-center gap-1 px-2 py-0.5 bg-green-100 text-green-700 rounded-lg text-xs font-medium"><i className="ri-checkbox-circle-fill"></i>检测已通过</span>}
+          {quizState === 'failed' && !isCompleted && <span className="flex items-center gap-1 px-2 py-0.5 bg-red-100 text-red-600 rounded-lg text-xs font-medium"><i className="ri-close-circle-line"></i>未通过</span>}
+        </div>
+        <p className="text-sm text-gray-600 line-clamp-2 h-10 mb-4">{kp.description}</p>
+        <div className="flex justify-end">
+          {!isLocked && (
+            hasQuiz && (
+              <button onClick={() => handleKnowledgeQuizClick(kp)}
+                disabled={quizLoadingId === kp.id}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all whitespace-nowrap cursor-pointer ${isCompleted ? 'bg-green-100 text-green-700 hover:bg-green-200' : 'bg-gradient-to-r from-teal-500 to-cyan-600 text-white hover:shadow-md'}`}
+              >
+                <i className={`${isCompleted ? 'ri-refresh-line' : 'ri-edit-2-line'} mr-1`}></i>{quizLoadingId === kp.id ? '加载中' : isCompleted ? '重新检测' : '开始检测'}
+              </button>
+            )
+          )}
+        </div>
+      </div>
+    );
+  };
 
   type TodoListItem = {
     id: string;
@@ -539,9 +969,17 @@ export default function StudentCenterPage() {
     daysLeft: number;
     priority: 'urgent' | 'high' | 'normal' | 'low';
     attachments: StudentTodoTask['attachments'];
+    resourceNodes: StudentTodoTask['resourceNodes'];
+    completed: boolean;
   };
 
-  const activeTodoTasks: TodoListItem[] = studentTodoTasks.map((t) => ({
+  const isModuleKnowledgeCompleted = (moduleId?: string) => {
+    if (!moduleId) return false;
+    const moduleKnowledge = knowledgePoints.filter((kp) => kp.module === moduleId);
+    return moduleKnowledge.length > 0 && moduleKnowledge.every((kp) => kp.status === 'completed');
+  };
+
+  const todoTasks: TodoListItem[] = studentTodoTasks.map((t) => ({
     id: t.id,
     title: t.title,
     module: t.module,
@@ -550,7 +988,11 @@ export default function StudentCenterPage() {
     daysLeft: t.daysLeft,
     priority: t.priority,
     attachments: t.attachments ?? [],
+    resourceNodes: t.resourceNodes ?? [],
+    completed: t.status === 'completed' || isModuleKnowledgeCompleted(t.moduleId ?? undefined),
   }));
+  const activeTodoTasks = todoTasks.filter((task) => !task.completed);
+  const completedTodoTasks = todoTasks.filter((task) => task.completed);
 
   const completedStagesCount = useMemo(() => {
     let n = 0;
@@ -587,14 +1029,40 @@ export default function StudentCenterPage() {
 
   const urgentCount = activeTodoTasks.filter((t) => t.priority === 'urgent' || t.priority === 'high').length;
 
-  if (showLearningDetail) {
-    return <LearningDetail onBack={() => setShowLearningDetail(false)} />;
+  if (activeLearningKnowledge) {
+    return (
+      <LearningDetail
+        knowledgeTitle={activeLearningKnowledge.name}
+        knowledgeDescription={activeLearningKnowledge.description}
+        moduleName={activeLearningKnowledge.moduleName}
+        resources={activeLearningKnowledge.resources}
+        knowledgePoints={activeLearningKnowledge.knowledgePoints}
+        onResourceProgressChange={(resourceId, progress) => {
+          setResourceProgressOverrides((prev) => ({
+            ...prev,
+            [resourceId]: mergeResourceProgress(prev[resourceId], progress),
+          }));
+        }}
+        onBack={() => {
+          closingLearningRef.current = true;
+          const params = new URLSearchParams(searchParams);
+          params.delete('learning');
+          params.delete('learningModule');
+          params.delete('learningChapter');
+          params.delete('resource');
+          setSearchParams(params);
+          setActiveTab('knowledge');
+          setKnowledgeSubTab('knowledge');
+          setActiveLearningKnowledge(null);
+        }}
+      />
+    );
   }
 
   const handleModuleClick = (moduleKey: TabType) => {
     const moduleId = TAB_TO_MODULE_ID[moduleKey];
     if (!moduleId) {
-      setActiveTab(moduleKey);
+      changeActiveTab(moduleKey);
       return;
     }
     const ui = getSidebarModuleUi(moduleId);
@@ -608,7 +1076,7 @@ export default function StudentCenterPage() {
       });
       return;
     }
-    setActiveTab(moduleKey);
+    changeActiveTab(moduleKey);
     if (moduleKey === 'module-team') {
       refreshTeamFormationComplete();
     }
@@ -685,7 +1153,7 @@ export default function StudentCenterPage() {
           {!sidebarCollapsed && <div className="px-4 py-2"><span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">学习管理</span></div>}
           <div className="px-2 space-y-0.5 mb-2">
             {learningMenuItems.map((item) => (
-              <button key={item.key} onClick={() => setActiveTab(item.key)} title={sidebarCollapsed ? item.label : undefined}
+              <button key={item.key} onClick={() => changeActiveTab(item.key)} title={sidebarCollapsed ? item.label : undefined}
                 className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all cursor-pointer whitespace-nowrap relative ${activeTab === item.key ? 'bg-gradient-to-r from-teal-500 to-cyan-600 text-white shadow-sm' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'} ${sidebarCollapsed ? 'justify-center' : ''}`}
               >
                 <div className="w-5 h-5 flex items-center justify-center flex-shrink-0"><i className={`${item.icon} text-base`}></i></div>
@@ -743,11 +1211,6 @@ export default function StudentCenterPage() {
                         )}
                         {ui.status === 'in_progress' && ui.isTeam && (
                           <i className={`ri-time-line text-sm ${isActive ? 'text-white/90' : ''}`}></i>
-                        )}
-                        {ui.status === 'in_progress' && !ui.isTeam && (
-                          <span className={`text-xs font-bold ${isActive ? 'text-white/90' : 'text-teal-500'}`}>
-                            {ui.displayPercent ?? 0}%
-                          </span>
                         )}
                         {ui.status === 'locked' && <i className="ri-lock-line text-sm"></i>}
                       </span>
@@ -848,7 +1311,6 @@ export default function StudentCenterPage() {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-3 mb-1">
                       <h1 className="text-2xl font-bold text-white truncate">{overviewHeroTitle}</h1>
-                      <span className="px-2.5 py-0.5 bg-white/20 text-white rounded-full text-xs font-medium border border-white/30 whitespace-nowrap">创新创业实训课程</span>
                     </div>
                     <div className="flex items-center gap-5 text-sm text-white/80 flex-wrap">
                       <span className="flex items-center gap-1.5">
@@ -1043,6 +1505,12 @@ export default function StudentCenterPage() {
                           const actionDisabled = Boolean(lockHint);
                           const goTodo = () => {
                             if (actionDisabled) return;
+                            if (task.resourceNodes.length > 0 && task.trainingModuleId) {
+                              setActiveTab('knowledge');
+                              setKnowledgeSubTab('knowledge');
+                              setSelectedModule(task.trainingModuleId);
+                              return;
+                            }
                             handleModuleClick(task.moduleKey);
                           };
                           return (
@@ -1089,6 +1557,21 @@ export default function StudentCenterPage() {
                                     ))}
                                   </div>
                                 )}
+                                {task.resourceNodes.length > 0 && (
+                                  <div className="flex flex-wrap gap-2 mt-2">
+                                    {task.resourceNodes.slice(0, 4).map((node) => (
+                                      <span key={node.id} className="inline-flex items-center gap-1.5 px-2 py-1 bg-teal-50 border border-teal-100 rounded-lg text-xs text-teal-700">
+                                        <i className="ri-book-open-line"></i>
+                                        <span className="max-w-[160px] truncate">{node.title}</span>
+                                      </span>
+                                    ))}
+                                    {task.resourceNodes.length > 4 && (
+                                      <span className="inline-flex items-center px-2 py-1 bg-gray-100 rounded-lg text-xs text-gray-500">
+                                        +{task.resourceNodes.length - 4}
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
                               </div>
                               <button
                                 type="button"
@@ -1114,11 +1597,42 @@ export default function StudentCenterPage() {
                         })}
                       </div>
                     )}
+                    {completedTodoTasks.length > 0 && (
+                      <div className={`${activeTodoTasks.length > 0 ? 'mt-4 pt-4 border-t border-gray-100' : 'mt-3'}`}>
+                        <div className="flex items-center gap-2 mb-2">
+                          <i className="ri-checkbox-circle-line text-gray-400"></i>
+                          <span className="text-xs font-semibold text-gray-500">已完成任务</span>
+                        </div>
+                        <div className="space-y-2">
+                          {completedTodoTasks.map((task) => (
+                            <div
+                              key={task.id}
+                              className="flex items-center gap-3 p-3.5 rounded-xl border border-gray-100 bg-gray-50/70 opacity-70"
+                            >
+                              <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 bg-gray-200 text-gray-500">
+                                <i className="ri-task-line text-sm"></i>
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2 mb-0.5 flex-wrap">
+                                  <span className="font-semibold text-gray-600 text-sm truncate">{task.title}</span>
+                                  <span className="px-1.5 py-0.5 rounded text-xs font-medium flex-shrink-0 bg-gray-100 text-gray-500">
+                                    已完成
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-3 text-xs text-gray-400">
+                                  <span className="truncate"><i className="ri-folder-line mr-1"></i>{task.module}</span>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                     {activeTodoTasks.length > 0 && (
                       <div className="mt-3 pt-3 border-t border-gray-100">
                         <p className="text-xs text-gray-400">
                           <i className="ri-information-line mr-1"></i>
-                          待办来自教师发布的实训任务；标记完成后将从列表移除（功能对接中）
+                          待办来自教师发布的实训任务
                         </p>
                       </div>
                     )}
@@ -1213,9 +1727,9 @@ export default function StudentCenterPage() {
                     <div className="grid grid-cols-4 gap-6">
                       {[
                         { value: `${knowledgePoints.filter(k => k.status === 'completed').length}/${knowledgePoints.length}`, label: '知识点完成' },
-                        { value: `${abilityPointsData.length}`, label: '能力点获得' },
-                        { value: `${Math.round(knowledgePoints.filter(k => k.status === 'completed').length / knowledgePoints.length * 100)}%`, label: '整体完成度' },
-                        { value: overallProgress.currentLevel, label: '当前等级' },
+                        { value: `${knowledgeModules.filter((m) => !getSidebarModuleUi(m.id).locked).length}/${knowledgeModules.length}`, label: '已解锁模块' },
+                        { value: `${knowledgePoints.length ? Math.round((knowledgePoints.filter(k => k.status === 'completed').length / knowledgePoints.length) * 100) : 0}%`, label: '整体完成度' },
+                        { value: `${activeTodoTasks.filter((t) => t.resourceNodes.length > 0).length}`, label: '关联任务' },
                       ].map((item, i) => (
                         <div key={i} className="bg-white/10 rounded-xl p-4 backdrop-blur-sm text-center"><div className="text-2xl font-bold mb-1">{item.value}</div><div className="text-sm text-teal-100">{item.label}</div></div>
                       ))}
@@ -1256,103 +1770,75 @@ export default function StudentCenterPage() {
                       ))}
                     </div>
                   </div>
-                  <div className="grid grid-cols-2 gap-6">
-                    {filteredKnowledge.map((kp) => {
-                      const isCompleted = kp.status === 'completed';
-                      const isLocked = kp.status === 'locked';
-                      const quizState = quizStates[kp.id];
-                      const hasQuiz = Boolean(kp.quizId);
-                      return (
-                        <div key={kp.id}
-                          className={`bg-white rounded-2xl shadow-sm border-2 p-6 transition-all ${isLocked ? 'opacity-60 border-gray-100' : isCompleted ? 'border-green-200 hover:shadow-xl' : 'border-gray-100 hover:shadow-xl hover:border-teal-200'} cursor-pointer`}
-                          onClick={() => !isLocked && setShowLearningDetail(true)}
-                        >
-                          <div className="flex items-start justify-between mb-4">
-                            <div className="flex-1">
-                              <div className="flex items-center gap-2 mb-2 flex-wrap">
-                                <h3 className="text-base font-bold text-gray-900">{kp.name}</h3>
-                                <span className={`px-2 py-0.5 rounded-lg text-xs font-medium border ${getKnowledgeStatusColor(kp.status)}`}>{getStatusText(kp.status)}</span>
-                                {isCompleted && <span className="flex items-center gap-1 px-2 py-0.5 bg-green-100 text-green-700 rounded-lg text-xs font-medium"><i className="ri-checkbox-circle-fill"></i>检测已通过</span>}
-                                {quizState === 'failed' && !isCompleted && <span className="flex items-center gap-1 px-2 py-0.5 bg-red-100 text-red-600 rounded-lg text-xs font-medium"><i className="ri-close-circle-line"></i>未通过</span>}
-                              </div>
-                              <p className="text-sm text-gray-600 mb-3">{kp.description}</p>
-                              <div className="flex items-center gap-2 flex-wrap">
-                                {kp.abilityPoints.map((ap, idx) => (
-                                  <span key={idx} className="px-2 py-0.5 bg-teal-50 text-teal-700 rounded-lg text-xs font-medium"><i className="ri-medal-line mr-1"></i>{ap}</span>
-                                ))}
-                              </div>
+                  <div className="grid grid-cols-[280px_1fr] gap-6">
+                    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 min-h-[360px]">
+                      <div className="text-sm font-bold text-gray-900 mb-3 flex items-center gap-2">
+                        <i className="ri-node-tree text-teal-600"></i>章节目录
+                      </div>
+                      {knowledgeChapterData.treeData.length > 0 ? (
+                        <Tree
+                          treeData={knowledgeChapterData.treeData}
+                          selectedKeys={activeChapterId ? [activeChapterId] : []}
+                          defaultExpandAll
+                          onSelect={(keys) => setSelectedChapterId(String(keys[0] || ''))}
+                        />
+                      ) : (
+                        <div className="py-12 text-center text-sm text-gray-400">当前模块暂无关联章节</div>
+                      )}
+                    </div>
+                    <div className="space-y-5 min-w-0">
+                      {activeChapterIsLeaf ? (
+                        <>
+                          <div className="space-y-3">
+                            <div className="flex items-center justify-between">
+                              <h3 className="text-base font-bold text-gray-900 flex items-center gap-2">
+                                <i className="ri-book-open-line text-teal-600"></i>学习资源
+                              </h3>
                             </div>
-                            {isLocked && <div className="w-10 h-10 bg-gray-100 rounded-full flex items-center justify-center ml-4"><i className="ri-lock-line text-xl text-gray-400"></i></div>}
-                            {isCompleted && <div className="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center ml-4"><i className="ri-checkbox-circle-fill text-xl text-green-500"></i></div>}
-                          </div>
-                          <div className="mb-4">
-                            <div className="flex items-center justify-between mb-2">
-                              <span className="text-sm font-medium text-gray-700">学习进度</span>
-                              <span className="text-sm font-bold text-teal-600">{kp.progress}%</span>
-                            </div>
-                            <div className="w-full bg-gray-100 rounded-full h-2 overflow-hidden">
-                              <div className={`h-full rounded-full transition-all duration-500 ${isCompleted ? 'bg-gradient-to-r from-green-400 to-teal-500' : 'bg-gradient-to-r from-teal-500 to-cyan-600'}`} style={{ width: `${kp.progress}%` }}></div>
-                            </div>
-                          </div>
-                          <div className="flex items-center justify-between">
-                            <span className="text-sm text-gray-500"><i className="ri-file-list-line mr-1"></i>{kp.resources.length} 个学习资源</span>
-                            {!isLocked && (
-                              <div className="flex items-center gap-2">
-                                <button onClick={(e) => { e.stopPropagation(); setShowLearningDetail(true); }} className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-xs font-medium transition-all whitespace-nowrap cursor-pointer">
-                                  <i className="ri-play-circle-line mr-1"></i>{isCompleted ? '复习' : '学习'}
-                                </button>
-                                {hasQuiz && (
-                                  <button onClick={(e) => { e.stopPropagation(); startKnowledgeQuiz(kp.id); }}
-                                    disabled={quizLoadingId === kp.id}
-                                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all whitespace-nowrap cursor-pointer ${isCompleted ? 'bg-green-100 text-green-700 hover:bg-green-200' : 'bg-gradient-to-r from-teal-500 to-cyan-600 text-white hover:shadow-md'}`}
-                                  >
-                                    <i className={`${isCompleted ? 'ri-refresh-line' : 'ri-edit-2-line'} mr-1`}></i>{quizLoadingId === kp.id ? '加载中' : isCompleted ? '重新检测' : '开始检测'}
-                                  </button>
-                                )}
+                            {selectedChapterResources.length > 0 ? (
+                              renderChapterResourceCard(selectedChapterResources)
+                            ) : (
+                              <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-10 text-center text-sm text-gray-400">
+                                当前章节暂无学习资源
                               </div>
                             )}
                           </div>
+
+                          <div className="space-y-3">
+                            <h3 className="text-base font-bold text-gray-900 flex items-center gap-2">
+                              <i className="ri-lightbulb-line text-teal-600"></i>章节关联知识点
+                            </h3>
+                            {selectedChapterKnowledge.length > 0 ? (
+                              <div className="grid grid-cols-2 gap-5">
+                                {selectedChapterKnowledge.map(renderChapterKnowledgeCard)}
+                              </div>
+                            ) : (
+                              <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-10 text-center text-sm text-gray-400">
+                                当前章节暂无关联知识点
+                              </div>
+                            )}
+                          </div>
+                        </>
+                      ) : (
+                        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-10 text-center text-sm text-gray-400">
+                          <div className="w-12 h-12 rounded-full bg-teal-50 text-teal-600 flex items-center justify-center mx-auto mb-3">
+                            <i className="ri-node-tree text-xl"></i>
+                          </div>
+                          <div className="font-medium text-gray-600">请选择最下级章节</div>
                         </div>
-                      );
-                    })}
+                      )}
+                    </div>
                   </div>
                 </div>
               )}
 
               {knowledgeSubTab === 'ability' && (
-                <div className="space-y-6">
-                  <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8">
-                    <h3 className="text-xl font-bold text-gray-900 mb-6 flex items-center gap-2"><i className="ri-radar-line text-teal-600"></i>能力雷达图</h3>
-                    <div className="flex items-center justify-center py-8">
-                      <div className="relative w-80 h-80">
-                        <svg className="w-full h-full" viewBox="0 0 400 400">
-                          {[1,2,3,4,5].map((level) => (<circle key={level} cx="200" cy="200" r={level * 32} fill="none" stroke="#e5e7eb" strokeWidth="1" />))}
-                          {abilityPointsData.map((_, index) => { const angle = (index * 360) / abilityPointsData.length - 90; const x = 200 + 160 * Math.cos((angle * Math.PI) / 180); const y = 200 + 160 * Math.sin((angle * Math.PI) / 180); return <line key={index} x1="200" y1="200" x2={x} y2={y} stroke="#e5e7eb" strokeWidth="1" />; })}
-                          <polygon points={abilityPointsData.map((ability, index) => { const angle = (index * 360) / abilityPointsData.length - 90; const radius = (ability.level / ability.maxLevel) * 160; const x = 200 + radius * Math.cos((angle * Math.PI) / 180); const y = 200 + radius * Math.sin((angle * Math.PI) / 180); return `${x},${y}`; }).join(' ')} fill="rgba(20,184,166,0.2)" stroke="rgb(20,184,166)" strokeWidth="2" />
-                        </svg>
-                        {abilityPointsData.map((ability, index) => { const angle = (index * 360) / abilityPointsData.length - 90; const x = 200 + 195 * Math.cos((angle * Math.PI) / 180); const y = 200 + 195 * Math.sin((angle * Math.PI) / 180); return (<div key={index} className="absolute text-xs font-semibold text-gray-700 whitespace-nowrap" style={{ left: `${x}px`, top: `${y}px`, transform: 'translate(-50%, -50%)' }}>{ability.name}</div>); })}
-                      </div>
-                    </div>
+                <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-10 text-center">
+                  <div className="w-16 h-16 rounded-2xl bg-teal-50 flex items-center justify-center mx-auto mb-4">
+                    <i className="ri-radar-line text-3xl text-teal-500"></i>
                   </div>
-                  <div className="grid grid-cols-2 gap-6">
-                    {['核心能力', '专业能力', '通用能力'].map((category) => (
-                      <div key={category} className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
-                        <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2"><i className="ri-star-line text-teal-600"></i>{category}</h3>
-                        <div className="space-y-4">
-                          {abilityPointsData.filter(a => a.category === category).map((ability) => (
-                            <div key={ability.id} className="border-b border-gray-100 pb-4 last:border-0">
-                              <div className="flex items-center justify-between mb-2">
-                                <div className="flex items-center gap-2"><span className="font-semibold text-gray-900 text-sm">{ability.name}</span><span className="text-xs text-gray-500">Lv.{ability.level}</span></div>
-                                <span className="text-sm font-medium text-teal-600">{ability.level}/{ability.maxLevel}</span>
-                              </div>
-                              <p className="text-xs text-gray-600 mb-2">{ability.description}</p>
-                              <div className="w-full bg-gray-100 rounded-full h-2 overflow-hidden"><div className="h-full bg-gradient-to-r from-teal-500 to-cyan-600 rounded-full" style={{ width: `${(ability.level / ability.maxLevel) * 100}%` }}></div></div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+                  <h3 className="text-lg font-bold text-gray-900 mb-2">暂无能力雷达数据</h3>
+                  <p className="text-sm text-gray-500">完成课程学习、检测和教师评价后，将在此展示能力成长情况。</p>
                 </div>
               )}
 
@@ -1363,12 +1849,12 @@ export default function StudentCenterPage() {
                     <div className="relative">
                       <div className="absolute left-8 top-0 bottom-0 w-0.5 bg-gradient-to-b from-teal-500 to-cyan-600"></div>
                       <div className="space-y-8">
-                        {knowledgeModules.filter(m => m.id !== 'all').map((mod) => {
+                        {knowledgeModules.map((mod) => {
                           const modKnowledge = knowledgePoints.filter(k => k.module === mod.id);
                           const completed = modKnowledge.filter(k => k.status === 'completed').length;
                           const total = modKnowledge.length;
-                          const isActive = modKnowledge.some(k => k.status === 'learning');
-                          const isLocked = modKnowledge.every(k => k.status === 'locked');
+                          const isLocked = getSidebarModuleUi(mod.id).locked;
+                          const isActive = !isLocked && total > 0 && completed < total;
                           return (
                             <div key={mod.id} className="relative pl-20">
                               <div className={`absolute left-0 w-16 h-16 ${mod.color} rounded-2xl flex items-center justify-center shadow-lg ${isActive ? 'ring-4 ring-teal-200' : ''} ${isLocked ? 'opacity-50' : ''}`}>
@@ -1381,7 +1867,7 @@ export default function StudentCenterPage() {
                                     <span className={`px-3 py-1 rounded-lg text-sm font-medium ${isLocked ? 'bg-gray-200 text-gray-600' : completed === total && total > 0 ? 'bg-green-100 text-green-700' : isActive ? 'bg-teal-100 text-teal-700' : 'bg-yellow-100 text-yellow-700'}`}>
                                       {isLocked ? '未解锁' : completed === total && total > 0 ? '已完成' : isActive ? '进行中' : '待开始'}
                                     </span>
-                                    {!isLocked && <button onClick={() => setShowLearningDetail(true)} className="px-4 py-2 bg-gradient-to-r from-teal-500 to-cyan-600 text-white rounded-lg text-sm font-medium hover:shadow-md transition-all whitespace-nowrap cursor-pointer">进入学习</button>}
+                                    {!isLocked && <button onClick={() => { setKnowledgeSubTab('knowledge'); setSelectedModule(mod.id); }} className="px-4 py-2 bg-gradient-to-r from-teal-500 to-cyan-600 text-white rounded-lg text-sm font-medium hover:shadow-md transition-all whitespace-nowrap cursor-pointer">进入学习</button>}
                                   </div>
                                 </div>
                                 <div className="flex items-center justify-between mb-3">
@@ -1397,40 +1883,30 @@ export default function StudentCenterPage() {
                     </div>
                   </div>
                   <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8">
-                    <h3 className="text-xl font-bold text-gray-900 mb-6 flex items-center gap-2"><i className="ri-checkbox-circle-line text-teal-600"></i>达标检测状态</h3>
+                    <h3 className="text-xl font-bold text-gray-900 mb-6 flex items-center gap-2"><i className="ri-checkbox-circle-line text-teal-600"></i>关联任务资源</h3>
                     <div className="grid grid-cols-3 gap-6">
-                      {[
-                        { moduleId: 'ideation', module: '创新思维', knowledgeIds: ['k_ideation_1', 'k_ideation_2'], required: 2 },
-                        { moduleId: 'market', module: '市场调研', knowledgeIds: ['k_market_1', 'k_market_2'], required: 2 },
-                        { moduleId: 'product', module: '产品设计', knowledgeIds: ['k_product_1'], required: 1 },
-                        { moduleId: 'business', module: '商业模式', knowledgeIds: ['k_business_1'], required: 1 },
-                        { moduleId: 'simulation', module: 'AI角色仿真', knowledgeIds: ['k_simulation_1'], required: 1 },
-                        { moduleId: 'plan', module: '商业计划', knowledgeIds: ['k_plan_1'], required: 1 },
-                      ].map((item) => {
-                        const passedCount = item.knowledgeIds.filter(id => completedKnowledgeIds.has(id)).length;
-                        const isPassed = passedCount >= item.required;
-                        const isLocked = item.knowledgeIds.every(id => knowledgePoints.find(k => k.id === id)?.status === 'locked');
+                      {knowledgeModules.map((mod) => {
+                        const linkedTasks = activeTodoTasks.filter((task) => task.trainingModuleId === mod.id && task.resourceNodes.length > 0);
+                        const linkedResources = new Set(linkedTasks.flatMap((task) => task.resourceNodes.map((node) => node.id)));
+                        const linkedKnowledge = knowledgePoints.filter((kp) => kp.module === mod.id);
+                        const isLocked = getSidebarModuleUi(mod.id).locked;
                         return (
-                          <div key={item.moduleId} className={`border-2 rounded-xl p-6 ${isPassed ? 'border-green-400 bg-green-50' : isLocked ? 'border-gray-200 bg-gray-50' : 'border-teal-300 bg-teal-50'}`}>
+                          <div key={mod.id} className={`border-2 rounded-xl p-6 ${isLocked ? 'border-gray-200 bg-gray-50' : 'border-teal-300 bg-teal-50'}`}>
                             <div className="flex items-center justify-between mb-4">
-                              <h4 className="font-bold text-gray-900">{item.module}</h4>
-                              {isPassed ? <i className="ri-checkbox-circle-fill text-2xl text-green-600"></i> : isLocked ? <i className="ri-lock-line text-2xl text-gray-400"></i> : <i className="ri-time-line text-2xl text-teal-600"></i>}
+                              <h4 className="font-bold text-gray-900">{mod.name}</h4>
+                              <i className={`${isLocked ? 'ri-lock-line text-gray-400' : 'ri-book-open-line text-teal-600'} text-2xl`}></i>
                             </div>
-                            <div className="mb-3">
-                              <div className="flex items-center justify-between mb-2">
-                                <span className="text-sm text-gray-600">检测通过</span>
-                                <span className="text-sm font-bold text-teal-600">{passedCount}/{item.required}</span>
-                              </div>
-                              <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
-                                <div className={`h-full rounded-full ${isPassed ? 'bg-green-500' : 'bg-gradient-to-r from-teal-500 to-cyan-600'}`} style={{ width: `${(passedCount / item.required) * 100}%` }}></div>
-                              </div>
+                            <div className="space-y-2 text-sm text-gray-600">
+                              <div className="flex items-center justify-between"><span>关联任务</span><span className="font-bold text-teal-600">{linkedTasks.length}</span></div>
+                              <div className="flex items-center justify-between"><span>关联课时</span><span className="font-bold text-teal-600">{linkedResources.size}</span></div>
+                              <div className="flex items-center justify-between"><span>知识点</span><span className="font-bold text-teal-600">{linkedKnowledge.length}</span></div>
                             </div>
-                            <div className={`text-xs font-medium ${isPassed ? 'text-green-700' : isLocked ? 'text-gray-500' : 'text-teal-700'}`}>
-                              {isPassed ? '✓ 已达标，实训模块已解锁' : isLocked ? '完成前置环节后解锁' : `还需通过 ${item.required - passedCount} 个知识点检测`}
+                            <div className={`mt-4 text-xs font-medium ${isLocked ? 'text-gray-500' : 'text-teal-700'}`}>
+                              {isLocked ? '完成前置环节后解锁' : linkedKnowledge.length ? '可进入知识点库学习' : '暂无关联知识点'}
                             </div>
-                            {!isPassed && !isLocked && (
-                              <button onClick={() => { setKnowledgeSubTab('knowledge'); setSelectedModule(item.moduleId); }} className="mt-3 w-full py-1.5 bg-teal-500 hover:bg-teal-600 text-white rounded-lg text-xs font-medium transition-all whitespace-nowrap cursor-pointer">
-                                <i className="ri-edit-2-line mr-1"></i>去完成检测
+                            {!isLocked && linkedKnowledge.length > 0 && (
+                              <button onClick={() => { setKnowledgeSubTab('knowledge'); setSelectedModule(mod.id); }} className="mt-3 w-full py-1.5 bg-teal-500 hover:bg-teal-600 text-white rounded-lg text-xs font-medium transition-all whitespace-nowrap cursor-pointer">
+                                <i className="ri-book-open-line mr-1"></i>查看知识点
                               </button>
                             )}
                           </div>
@@ -1697,22 +2173,41 @@ export default function StudentCenterPage() {
         />
       )}
 
-      <Modal
-        title="确认退出登录"
-        open={logoutModalOpen}
-        onCancel={() => setLogoutModalOpen(false)}
-        onOk={() => {
-          setLogoutModalOpen(false);
-          clearPortalToken('student');
-          navigate('/');
-        }}
-        okText="确认退出"
-        cancelText="取消"
-        okButtonProps={{ danger: true }}
-        centered
-      >
-        <p className="text-sm text-gray-600">退出后将返回首页。</p>
-      </Modal>
+      {logoutModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm mx-4 overflow-hidden">
+            <div className="p-6">
+              <div className="flex items-center gap-4 mb-5">
+                <div className="w-12 h-12 flex items-center justify-center bg-red-50 rounded-full flex-shrink-0">
+                  <i className="ri-logout-box-r-line text-2xl text-red-500"></i>
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-gray-900">确认退出登录</h3>
+                  <p className="text-sm text-gray-500 mt-0.5">退出后将返回首页</p>
+                </div>
+              </div>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setLogoutModalOpen(false)}
+                  className="flex-1 py-2.5 border border-gray-200 text-gray-600 text-sm font-medium rounded-xl hover:bg-gray-50 transition-colors cursor-pointer whitespace-nowrap"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={() => {
+                    setLogoutModalOpen(false);
+                    clearPortalToken('student');
+                    navigate('/');
+                  }}
+                  className="flex-1 py-2.5 bg-red-500 text-white text-sm font-medium rounded-xl hover:bg-red-600 transition-colors cursor-pointer whitespace-nowrap"
+                >
+                  确认退出
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

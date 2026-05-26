@@ -75,6 +75,8 @@ export default function TaskManagement({ personalClass }: Props) {
         scope: task.scope,
         teamIds: task.targetTeamIds,
         attachmentsEnabled: task.attachmentsEnabled,
+        resourceLinkEnabled: task.resourceLinkEnabled,
+        resourceNodeIds: task.resourceNodeIds,
         status: 'published',
       });
       message.success('已发布');

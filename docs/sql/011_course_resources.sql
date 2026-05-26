@@ -54,8 +54,17 @@ CREATE TABLE IF NOT EXISTS course_resource_files (
   created_at    timestamptz NOT NULL DEFAULT now()
 );
 
+ALTER TABLE course_resource_files
+  ADD COLUMN IF NOT EXISTS content_hash varchar(64),
+  ADD COLUMN IF NOT EXISTS preview_storage_path varchar(500),
+  ADD COLUMN IF NOT EXISTS preview_mime_type varchar(128),
+  ADD COLUMN IF NOT EXISTS preview_status varchar(32) NOT NULL DEFAULT 'ready';
+
 CREATE INDEX IF NOT EXISTS idx_course_resource_files_node
   ON course_resource_files (node_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_course_resource_files_hash
+  ON course_resource_files (content_hash);
 
 CREATE TABLE IF NOT EXISTS course_resource_node_knowledge_points (
   node_id            bigint NOT NULL REFERENCES course_resource_nodes (id) ON DELETE CASCADE,
@@ -63,6 +72,31 @@ CREATE TABLE IF NOT EXISTS course_resource_node_knowledge_points (
   created_at         timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (node_id, knowledge_point_id)
 );
+
+CREATE TABLE IF NOT EXISTS student_course_resource_progress (
+  id               bigserial PRIMARY KEY,
+  user_id          bigint NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  content_hash     varchar(64) NOT NULL,
+  progress_percent numeric(5,2) NOT NULL DEFAULT 0,
+  last_position    jsonb NOT NULL DEFAULT '{}'::jsonb,
+  completed_at     timestamptz,
+  updated_at       timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (user_id, content_hash)
+);
+
+CREATE INDEX IF NOT EXISTS idx_student_course_resource_progress_user
+  ON student_course_resource_progress (user_id, updated_at DESC);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger WHERE tgname = 'trg_student_course_resource_progress_updated_at'
+  ) THEN
+    CREATE TRIGGER trg_student_course_resource_progress_updated_at
+      BEFORE UPDATE ON student_course_resource_progress
+      FOR EACH ROW EXECUTE PROCEDURE trg_set_updated_at();
+  END IF;
+END $$;
 
 ALTER TABLE quiz_questions
   ADD COLUMN IF NOT EXISTS correct_answer jsonb,

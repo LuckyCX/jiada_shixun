@@ -42,11 +42,14 @@ services:
       REDIS_HOST: redis
       PORT: "4000"
       PG_POOL_MAX: "30"
+      LIBREOFFICE_BIN: /usr/bin/soffice
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+    volumes:
+      - node_uploads:/app/uploads
     expose:
       - "4000"
 
@@ -62,3 +65,4 @@ services:
 volumes:
   jiada_shixun:
   redisdata:
+  node_uploads:

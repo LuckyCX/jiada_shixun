@@ -242,6 +242,183 @@ async function loadTaskAttachments(pool, taskId) {
   }));
 }
 
+async function loadTaskResourceNodeIds(pool, taskId) {
+  const { rows } = await pool.query(
+    `SELECT node_id AS "nodeId"
+     FROM teacher_personal_class_task_resource_nodes
+     WHERE task_id = $1
+     ORDER BY node_id ASC`,
+    [taskId]
+  );
+  return rows.map((r) => String(r.nodeId));
+}
+
+async function loadTaskResourceNodes(pool, taskId, { publishedLeavesOnly = false, studentId = null } = {}) {
+  const query = publishedLeavesOnly
+    ? `WITH RECURSIVE selected AS (
+         SELECT n.id, n.parent_id, n.level, n.module_key, n.module_name, n.title, n.status, n.sort_order,
+                true AS direct_selected
+         FROM course_resource_nodes n
+         JOIN teacher_personal_class_task_resource_nodes trn ON trn.node_id = n.id
+         WHERE trn.task_id = $1
+         UNION ALL
+         SELECT child.id, child.parent_id, child.level, child.module_key, child.module_name, child.title, child.status, child.sort_order,
+                false AS direct_selected
+         FROM course_resource_nodes child
+         JOIN selected parent ON child.parent_id = parent.id
+       )
+       SELECT DISTINCT id, parent_id, level, module_key, module_name, title, status, sort_order
+       FROM selected
+       WHERE (direct_selected = true AND level < 3)
+          OR (level = 3 AND status = 'published')
+       ORDER BY sort_order ASC, id ASC`
+    : `SELECT n.id, n.parent_id, n.level, n.module_key, n.module_name, n.title, n.status, n.sort_order
+       FROM teacher_personal_class_task_resource_nodes trn
+       JOIN course_resource_nodes n ON n.id = trn.node_id
+       WHERE trn.task_id = $1
+       ORDER BY n.sort_order ASC, n.id ASC`;
+  const { rows } = await pool.query(query, [taskId]);
+  if (!rows.length) return [];
+  const nodeIds = rows.map((r) => r.id);
+  const { rows: fileRows } = await pool.query(
+    `SELECT id, node_id, origin_name, resource_type, mime_type, size_bytes, created_at,
+            content_hash, preview_mime_type, preview_status
+     FROM course_resource_files
+     WHERE node_id = ANY($1::bigint[])
+     ORDER BY created_at DESC, id DESC`,
+    [nodeIds]
+  );
+  const hashes = fileRows.map((row) => row.content_hash).filter(Boolean);
+  const progressByHash = new Map();
+  if (studentId && hashes.length) {
+    const { rows: progressRows } = await pool.query(
+      `SELECT content_hash, progress_percent, last_position, completed_at
+       FROM student_course_resource_progress
+       WHERE user_id = $1 AND content_hash = ANY($2::varchar[])`,
+      [studentId, hashes]
+    );
+    progressRows.forEach((row) => {
+      progressByHash.set(row.content_hash, {
+        progressPercent: Number(row.progress_percent || 0),
+        lastPosition: row.last_position || {},
+        completed: Boolean(row.completed_at),
+      });
+    });
+  }
+  const { rows: linkRows } = await pool.query(
+    `SELECT l.node_id, k.id, k.title, k.description, k.module_key, k.module_name, k.sort_order
+     FROM course_resource_node_knowledge_points l
+     JOIN knowledge_points k ON k.id = l.knowledge_point_id
+     WHERE l.node_id = ANY($1::bigint[])
+     ORDER BY k.sort_order ASC, k.id ASC`,
+    [nodeIds]
+  );
+  const { rows: ancestorRows } = await pool.query(
+    `WITH RECURSIVE ancestors AS (
+       SELECT leaf.id AS leaf_id, parent.id, parent.parent_id, parent.level,
+              parent.module_key, parent.module_name, parent.title, parent.status, parent.sort_order
+       FROM course_resource_nodes leaf
+       JOIN course_resource_nodes parent ON parent.id = leaf.parent_id
+       WHERE leaf.id = ANY($1::bigint[])
+       UNION ALL
+       SELECT a.leaf_id, parent.id, parent.parent_id, parent.level,
+              parent.module_key, parent.module_name, parent.title, parent.status, parent.sort_order
+       FROM ancestors a
+       JOIN course_resource_nodes parent ON parent.id = a.parent_id
+     )
+     SELECT *
+     FROM ancestors
+     ORDER BY leaf_id ASC, level ASC, sort_order ASC, id ASC`,
+    [nodeIds]
+  );
+  const resourcesByNode = new Map();
+  for (const row of fileRows) {
+    const key = String(row.node_id);
+    const items = resourcesByNode.get(key) || [];
+    items.push({
+      id: String(row.id),
+      nodeId: String(row.node_id),
+      name: row.origin_name,
+      type: row.resource_type,
+      previewType: previewTypeFromMime(row.preview_mime_type || row.mime_type, row.resource_type),
+      previewStatus: row.preview_status || 'ready',
+      contentHash: row.content_hash || '',
+      mimeType: row.mime_type || '',
+      sizeBytes: Number(row.size_bytes || 0),
+      size: formatSize(Number(row.size_bytes || 0)),
+      canPreview: (row.preview_status || 'ready') === 'ready' && row.resource_type !== 'archive' && canPreviewCourseResource(row.preview_mime_type || row.mime_type, row.origin_name),
+      progress: progressByHash.get(row.content_hash) || { progressPercent: 0, lastPosition: {}, completed: false },
+    });
+    resourcesByNode.set(key, items);
+  }
+  const ancestorsByNode = new Map();
+  for (const row of ancestorRows) {
+    const key = String(row.leaf_id);
+    const items = ancestorsByNode.get(key) || [];
+    items.push({
+      id: String(row.id),
+      parentId: row.parent_id ? String(row.parent_id) : null,
+      level: Number(row.level),
+      moduleKey: row.module_key,
+      moduleName: row.module_name,
+      title: row.title,
+      status: row.status,
+      sortOrder: Number(row.sort_order || 0),
+    });
+    ancestorsByNode.set(key, items);
+  }
+  const knowledgeByNode = new Map();
+  for (const row of linkRows) {
+    const key = String(row.node_id);
+    const items = knowledgeByNode.get(key) || [];
+    items.push({
+      id: String(row.id),
+      title: row.title,
+      description: row.description || '',
+      moduleKey: row.module_key || '',
+      moduleName: row.module_name || '',
+      sortOrder: Number(row.sort_order || 0),
+    });
+    knowledgeByNode.set(key, items);
+  }
+  return rows.map((row) => ({
+    id: String(row.id),
+    parentId: row.parent_id ? String(row.parent_id) : null,
+    level: Number(row.level),
+    moduleKey: row.module_key,
+    moduleName: row.module_name,
+    title: row.title,
+    status: row.status,
+    sortOrder: Number(row.sort_order || 0),
+    ancestors: ancestorsByNode.get(String(row.id)) || [],
+    resources: resourcesByNode.get(String(row.id)) || [],
+    knowledgePoints: knowledgeByNode.get(String(row.id)) || [],
+  }));
+}
+
+function previewTypeFromMime(mime, resourceType) {
+  const m = String(mime || '').toLowerCase();
+  if (m.startsWith('video/')) return 'video';
+  if (m.startsWith('audio/')) return 'audio';
+  if (m.startsWith('image/')) return 'image';
+  if (m === 'application/pdf') return 'pdf';
+  if (resourceType === 'archive') return 'archive';
+  return 'file';
+}
+
+function canPreviewCourseResource(mime, name) {
+  const n = String(name || '').toLowerCase();
+  const m = String(mime || '').toLowerCase();
+  return (
+    m.startsWith('image/') ||
+    m.startsWith('video/') ||
+    m.startsWith('audio/') ||
+    m.startsWith('text/') ||
+    m === 'application/pdf' ||
+    n.endsWith('.pdf')
+  );
+}
+
 function formatSize(bytes) {
   if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
   if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -261,8 +438,12 @@ function validateTaskBody(body) {
   const scope = body?.scope === 'specific' ? 'specific' : 'all';
   const status = body?.status === 'published' ? 'published' : 'draft';
   const attachmentsEnabled = Boolean(body?.attachmentsEnabled);
+  const resourceLinkEnabled = Boolean(body?.resourceLinkEnabled);
   const teamIds = Array.isArray(body?.teamIds)
     ? body.teamIds.map(String).filter(Boolean)
+    : [];
+  const resourceNodeIds = Array.isArray(body?.resourceNodeIds)
+    ? [...new Set(body.resourceNodeIds.map((v) => parseId(v)).filter(Boolean).map(String))]
     : [];
 
   if (!title) return { error: '请填写任务标题' };
@@ -271,6 +452,7 @@ function validateTaskBody(body) {
   if (!TASK_PRIORITIES.includes(priority)) return { error: '请选择紧急程度' };
   if (!deadline) return { error: '请选择截止时间' };
   if (scope === 'specific' && !teamIds.length) return { error: '请选择目标团队' };
+  if (resourceLinkEnabled && !resourceNodeIds.length) return { error: '请选择课程资源' };
 
   return {
     title,
@@ -281,7 +463,9 @@ function validateTaskBody(body) {
     scope,
     status,
     attachmentsEnabled,
+    resourceLinkEnabled,
     teamIds,
+    resourceNodeIds,
   };
 }
 
@@ -289,6 +473,8 @@ async function mapTaskRow(pool, classId, row) {
   const taskId = row.id;
   const teamIds = await loadTaskTeams(pool, taskId);
   const attachments = await loadTaskAttachments(pool, taskId);
+  const resourceNodeIds = await loadTaskResourceNodeIds(pool, taskId);
+  const resourceNodes = await loadTaskResourceNodes(pool, taskId);
   let totalTargets = 0;
   let completedCount = await countTaskCompletions(pool, taskId);
   let teamProgress = [];
@@ -313,6 +499,9 @@ async function mapTaskRow(pool, classId, row) {
     scope: row.scope,
     status: displayStatus(row),
     attachmentsEnabled: row.attachments_enabled,
+    resourceLinkEnabled: row.resource_link_enabled,
+    resourceNodeIds,
+    resourceNodes,
     publishedAt: row.published_at ? String(row.published_at).slice(0, 10) : '',
     publishedBy: pub[0]?.real_name || '',
     attachments,
@@ -329,6 +518,31 @@ async function saveTaskTeams(client, taskId, teamIds) {
     await client.query(
       `INSERT INTO teacher_personal_class_task_teams (task_id, team_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
       [taskId, teamId]
+    );
+  }
+}
+
+async function validateResourceNodesForModule(client, moduleName, nodeIds) {
+  if (!nodeIds.length) return true;
+  const moduleKey = TASK_MODULE_TO_TRAINING_ID[moduleName];
+  if (!moduleKey) return false;
+  const { rows } = await client.query(
+    `SELECT COUNT(*)::int AS c
+     FROM course_resource_nodes
+     WHERE id = ANY($1::bigint[]) AND module_key = $2`,
+    [nodeIds, moduleKey]
+  );
+  return Number(rows[0]?.c || 0) === nodeIds.length;
+}
+
+async function saveTaskResourceNodes(client, taskId, nodeIds) {
+  await client.query(`DELETE FROM teacher_personal_class_task_resource_nodes WHERE task_id = $1`, [taskId]);
+  for (const nodeId of nodeIds) {
+    await client.query(
+      `INSERT INTO teacher_personal_class_task_resource_nodes (task_id, node_id)
+       VALUES ($1, $2)
+       ON CONFLICT DO NOTHING`,
+      [taskId, nodeId]
     );
   }
 }
@@ -467,11 +681,15 @@ router.post(
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
+        if (v.resourceLinkEnabled && !(await validateResourceNodesForModule(client, v.module, v.resourceNodeIds))) {
+          await client.query('ROLLBACK');
+          return bad(req, res, 400, 40014, '课程资源与实训模块不匹配');
+        }
         const { rows: ins } = await client.query(
           `INSERT INTO teacher_personal_class_tasks
              (teacher_personal_class_id, teacher_id, title, description, module, priority, deadline,
-              scope, status, attachments_enabled, published_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+              scope, status, attachments_enabled, resource_link_enabled, published_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
            RETURNING *`,
           [
             classId,
@@ -484,11 +702,13 @@ router.post(
             v.scope,
             v.status,
             v.attachmentsEnabled,
+            v.resourceLinkEnabled,
             v.status === 'published' ? new Date() : null,
           ]
         );
         const taskId = ins[0].id;
         if (v.scope === 'specific') await saveTaskTeams(client, taskId, v.teamIds);
+        if (v.resourceLinkEnabled) await saveTaskResourceNodes(client, taskId, v.resourceNodeIds);
         if (v.status === 'published') {
           await notifyTaskTargets(client, { classId, teacherId: tid, task: { ...ins[0], scope: v.scope }, action: 'published' });
         }
@@ -536,10 +756,15 @@ router.put(
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
+        if (v.resourceLinkEnabled && !(await validateResourceNodesForModule(client, v.module, v.resourceNodeIds))) {
+          await client.query('ROLLBACK');
+          return bad(req, res, 400, 40014, '课程资源与实训模块不匹配');
+        }
         const { rows: upd } = await client.query(
           `UPDATE teacher_personal_class_tasks SET
              title = $3, description = $4, module = $5, priority = $6, deadline = $7,
-             scope = $8, status = $9, attachments_enabled = $10, published_at = $11, updated_at = now()
+             scope = $8, status = $9, attachments_enabled = $10, resource_link_enabled = $11,
+             published_at = $12, updated_at = now()
            WHERE id = $1 AND teacher_personal_class_id = $2
            RETURNING *`,
           [
@@ -553,11 +778,13 @@ router.put(
             v.scope,
             v.status,
             v.attachmentsEnabled,
+            v.resourceLinkEnabled,
             publishedAt,
           ]
         );
         if (v.scope === 'specific') await saveTaskTeams(client, taskId, v.teamIds);
         else await client.query(`DELETE FROM teacher_personal_class_task_teams WHERE task_id = $1`, [taskId]);
+        await saveTaskResourceNodes(client, taskId, v.resourceLinkEnabled ? v.resourceNodeIds : []);
         if (v.status === 'published') {
           const action = existing[0].status === 'published' || existing[0].published_at ? 'updated' : 'published';
           await notifyTaskTargets(client, { classId, teacherId: tid, task: upd[0], action });
@@ -736,7 +963,9 @@ router.get(
         return bad(req, res, 403, 40301, '未加入该班级');
       }
       const { rows } = await pool.query(
-        `SELECT t.id, t.title, t.module, t.priority, t.deadline, t.status, t.attachments_enabled AS "attachmentsEnabled"
+        `SELECT t.id, t.title, t.module, t.priority, t.deadline, t.status,
+                t.attachments_enabled AS "attachmentsEnabled",
+                t.resource_link_enabled AS "resourceLinkEnabled"
          FROM teacher_personal_class_tasks t
          WHERE t.teacher_personal_class_id = $1
            AND t.status = 'published'
@@ -775,6 +1004,10 @@ router.get(
           daysLeft: dl ? daysUntilDeadline(dl) : 0,
           status,
           attachments: row.attachmentsEnabled ? await loadTaskAttachments(pool, row.id) : [],
+          resourceLinkEnabled: row.resourceLinkEnabled,
+          resourceNodes: row.resourceLinkEnabled
+            ? await loadTaskResourceNodes(pool, row.id, { publishedLeavesOnly: true, studentId: sid })
+            : [],
         });
       }
       return ok(req, res, { tasks });

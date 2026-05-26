@@ -4,34 +4,29 @@ interface VideoPlayerProps {
   title: string;
   duration: string;
   resourceId: string; // 新增：课件ID，用于保存进度
-  onProgress?: (percent: number) => void;
+  src?: string;
+  mediaType?: 'video' | 'audio';
+  initialTime?: number;
+  initialCompleted?: boolean;
+  onProgress?: (percent: number, lastPosition?: { currentTime: number; duration: number }) => void;
+  onSaveProgress?: (percent: number, lastPosition: { currentTime: number; duration: number }, completed: boolean) => void;
   onComplete?: () => void;
 }
 
-// 从 localStorage 读取视频进度
-const getVideoProgress = (resourceId: string): { currentTime: number; completed: boolean } => {
-  const key = `video_progress_${resourceId}`;
-  const saved = localStorage.getItem(key);
-  if (saved) {
-    try {
-      return JSON.parse(saved);
-    } catch {
-      return { currentTime: 0, completed: false };
-    }
-  }
-  return { currentTime: 0, completed: false };
-};
-
-// 保存视频进度到 localStorage
-const saveVideoProgress = (resourceId: string, currentTime: number, completed: boolean) => {
-  const key = `video_progress_${resourceId}`;
-  localStorage.setItem(key, JSON.stringify({ currentTime, completed }));
-};
-
-export default function VideoPlayer({ title, duration, resourceId, onProgress, onComplete }: VideoPlayerProps) {
-  const savedProgress = getVideoProgress(resourceId);
+export default function VideoPlayer({
+  title,
+  duration,
+  resourceId,
+  src,
+  mediaType = 'video',
+  initialTime = 0,
+  initialCompleted = false,
+  onProgress,
+  onSaveProgress,
+  onComplete,
+}: VideoPlayerProps) {
   const [isPlaying, setIsPlaying] = useState(false);
-  const [currentTime, setCurrentTime] = useState(savedProgress.currentTime);
+  const [currentTime, setCurrentTime] = useState(initialTime);
   const [totalTime] = useState(900); // 15分钟 = 900秒
   const [speed, setSpeed] = useState(1.0);
   const [showSpeedMenu, setShowSpeedMenu] = useState(false);
@@ -39,44 +34,41 @@ export default function VideoPlayer({ title, duration, resourceId, onProgress, o
   const [showVolumeSlider, setShowVolumeSlider] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showControls, setShowControls] = useState(true);
-  const [completed, setCompleted] = useState(savedProgress.completed);
+  const [completed, setCompleted] = useState(initialCompleted);
+  const mediaRef = useRef<HTMLVideoElement | HTMLAudioElement | null>(null);
+  const maxWatchedRef = useRef(initialTime);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const controlsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const speeds = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
 
-  // 自动保存进度
   useEffect(() => {
-    const saveInterval = setInterval(() => {
-      if (currentTime > 0) {
-        saveVideoProgress(resourceId, currentTime, completed);
-      }
-    }, 5000); // 每5秒保存一次
-
-    return () => clearInterval(saveInterval);
-  }, [resourceId, currentTime, completed]);
+    setCurrentTime(initialTime);
+    setCompleted(initialCompleted);
+    maxWatchedRef.current = initialTime;
+  }, [resourceId, initialTime, initialCompleted]);
 
   useEffect(() => {
+    if (src) return undefined;
     if (isPlaying) {
       intervalRef.current = setInterval(() => {
         setCurrentTime((prev) => {
           const next = prev + speed;
           const percent = Math.min((next / totalTime) * 100, 100);
-          onProgress?.(Math.round(percent));
+          onProgress?.(Math.round(percent), { currentTime: next, duration: totalTime });
           
           // 视频播放完成
           if (next >= totalTime) {
             setIsPlaying(false);
             setCompleted(true);
-            saveVideoProgress(resourceId, totalTime, true);
+            onSaveProgress?.(100, { currentTime: totalTime, duration: totalTime }, true);
             onComplete?.();
             if (intervalRef.current) clearInterval(intervalRef.current);
             return totalTime;
           }
           
-          // 实时保存进度
           if (Math.floor(next) % 10 === 0) {
-            saveVideoProgress(resourceId, next, false);
+            onSaveProgress?.(Math.round(percent), { currentTime: next, duration: totalTime }, false);
           }
           
           return next;
@@ -88,7 +80,18 @@ export default function VideoPlayer({ title, duration, resourceId, onProgress, o
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
-  }, [isPlaying, speed, totalTime, resourceId, onProgress, onComplete]);
+  }, [isPlaying, speed, totalTime, resourceId, onProgress, onSaveProgress, onComplete, src]);
+
+  useEffect(() => {
+    if (!src) return undefined;
+    const saveInterval = setInterval(() => {
+      const media = mediaRef.current;
+      if (!media || !Number.isFinite(media.duration) || media.duration <= 0 || media.currentTime <= 0) return;
+      const percent = Math.round((media.currentTime / media.duration) * 100);
+      onSaveProgress?.(percent, { currentTime: media.currentTime, duration: media.duration }, false);
+    }, 10000);
+    return () => clearInterval(saveInterval);
+  }, [src, resourceId, onSaveProgress]);
 
   const handleMouseMove = () => {
     setShowControls(true);
@@ -106,13 +109,98 @@ export default function VideoPlayer({ title, duration, resourceId, onProgress, o
 
   const progressPercent = (currentTime / totalTime) * 100;
 
+  if (src) {
+    const progressPercent = currentTime > 0 && mediaRef.current?.duration
+      ? Math.min(100, (currentTime / mediaRef.current.duration) * 100)
+      : 0;
+    const MediaTag = mediaType === 'audio' ? 'audio' : 'video';
+    return (
+      <div className="bg-gray-950 rounded-2xl overflow-hidden">
+        <div className={`relative ${mediaType === 'video' ? 'aspect-video' : 'h-56'} bg-black flex items-center justify-center`}>
+          <MediaTag
+          ref={mediaRef as never}
+          src={src}
+          className={mediaType === 'video' ? 'w-full h-full bg-black' : 'hidden'}
+          onLoadedMetadata={(e) => {
+            const media = e.currentTarget;
+            const resumeAt = Math.min(initialTime, Math.max(0, media.duration - 1));
+            if (resumeAt > 0) media.currentTime = resumeAt;
+            setCurrentTime(resumeAt);
+            maxWatchedRef.current = resumeAt;
+          }}
+          onPlay={() => setIsPlaying(true)}
+          onPause={() => setIsPlaying(false)}
+          onSeeking={(e) => {
+            const media = e.currentTarget;
+            if (media.currentTime > maxWatchedRef.current + 1) {
+              media.currentTime = maxWatchedRef.current;
+            }
+          }}
+          onTimeUpdate={(e) => {
+            const media = e.currentTarget;
+            if (media.duration > 0) {
+              maxWatchedRef.current = Math.max(maxWatchedRef.current, media.currentTime);
+              setCurrentTime(media.currentTime);
+              onProgress?.(Math.round((media.currentTime / media.duration) * 100), {
+                currentTime: media.currentTime,
+                duration: media.duration,
+              });
+            }
+          }}
+          onEnded={() => {
+            const media = mediaRef.current;
+            const durationSeconds = media?.duration || totalTime;
+            onSaveProgress?.(100, { currentTime: durationSeconds, duration: durationSeconds }, true);
+            setCompleted(true);
+            onComplete?.();
+          }}
+        />
+          {mediaType === 'audio' && (
+            <div className="text-center text-white">
+              <div className="w-20 h-20 rounded-full bg-white/10 flex items-center justify-center mx-auto mb-4">
+                <i className="ri-volume-up-line text-4xl"></i>
+              </div>
+              <div className="text-sm font-semibold">{title}</div>
+            </div>
+          )}
+        </div>
+        <div className="px-4 py-3 bg-gray-900 text-white">
+          <div className="flex items-center justify-between gap-3">
+            <button
+              type="button"
+              onClick={() => {
+                const media = mediaRef.current;
+                if (!media) return;
+                if (media.paused) void media.play();
+                else media.pause();
+              }}
+              className="w-9 h-9 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20"
+            >
+              <i className={`${isPlaying ? 'ri-pause-fill' : 'ri-play-fill'} text-xl`}></i>
+            </button>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold truncate">{title}</p>
+              <div className="mt-2 h-1.5 bg-white/20 rounded-full overflow-hidden">
+                <div className="h-full bg-gradient-to-r from-teal-400 to-cyan-400 rounded-full" style={{ width: `${progressPercent}%` }}></div>
+              </div>
+            </div>
+            <div className="text-xs text-gray-300 whitespace-nowrap">
+              {formatTime(currentTime)} / {mediaRef.current?.duration ? formatTime(mediaRef.current.duration) : duration}
+            </div>
+          </div>
+          {completed && <p className="text-xs text-green-300 mt-2">已完成学习</p>}
+        </div>
+      </div>
+    );
+  }
+
   const handleProgressClick = (e: React.MouseEvent<HTMLDivElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const percent = x / rect.width;
     const newTime = percent * totalTime;
     setCurrentTime(newTime);
-    saveVideoProgress(resourceId, newTime, completed);
+    onSaveProgress?.(Math.round(percent * 100), { currentTime: newTime, duration: totalTime }, completed);
     onProgress?.(Math.round(percent * 100));
   };
 
@@ -145,7 +233,7 @@ export default function VideoPlayer({ title, duration, resourceId, onProgress, o
               onClick={() => { 
                 setCurrentTime(0); 
                 setCompleted(false); 
-                saveVideoProgress(resourceId, 0, false);
+                onSaveProgress?.(0, { currentTime: 0, duration: totalTime }, false);
               }}
               className="mt-4 px-6 py-2 bg-white/20 hover:bg-white/30 text-white rounded-full text-sm transition-all whitespace-nowrap"
             >

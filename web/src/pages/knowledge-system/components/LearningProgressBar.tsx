@@ -6,6 +6,10 @@ interface LearningProgressBarProps {
   docProgress: number;
   quizPassed: boolean;
   studyMinutes: number;
+  studySeconds?: number;
+  sectionProgress?: number;
+  resourceProgresses?: number[];
+  simple?: boolean;
 }
 
 export default function LearningProgressBar({
@@ -13,15 +17,29 @@ export default function LearningProgressBar({
   docProgress,
   quizPassed,
   studyMinutes,
+  studySeconds,
+  sectionProgress,
+  resourceProgresses,
+  simple = false,
 }: LearningProgressBarProps) {
-  // 防御性检查：确保传入的进度在 0-100 之间
   const clamp = (value: number) => Math.min(100, Math.max(0, value));
+  const formatStudyDuration = (seconds: number) => {
+    const safeSeconds = Math.max(0, Math.floor(seconds));
+    if (safeSeconds < 60) return `${safeSeconds}秒`;
+    const minutes = Math.floor(safeSeconds / 60);
+    if (minutes < 60) return `${minutes}分`;
+    return `${Math.floor(minutes / 60)}小时${minutes % 60}分`;
+  };
 
   const overall = Math.round(
     clamp(videoProgress) * 0.4 +
       clamp(docProgress) * 0.3 +
       (quizPassed ? 100 : 0) * 0.3
   );
+  const resourceOverall = resourceProgresses?.length
+    ? Math.round(resourceProgresses.reduce((sum, progress) => sum + clamp(progress), 0) / resourceProgresses.length)
+    : sectionProgress ?? 0;
+  const displayOverall = simple ? clamp(resourceOverall) : overall;
 
   const steps = [
     {
@@ -56,7 +74,7 @@ export default function LearningProgressBar({
   // 计算圆环进度的 SVG 参数
   const radius = 26;
   const circumference = 2 * Math.PI * radius;
-  const dashOffset = circumference * (1 - overall / 100);
+  const dashOffset = circumference * (1 - displayOverall / 100);
 
   return (
     <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
@@ -70,7 +88,7 @@ export default function LearningProgressBar({
         </div>
         <div className="flex items-center space-x-1 text-xs text-gray-500">
           <i className="ri-time-line"></i>
-          <span>已学习 {studyMinutes} 分钟</span>
+          <span>已学习 {formatStudyDuration(studySeconds ?? studyMinutes * 60)}</span>
         </div>
       </div>
 
@@ -106,23 +124,22 @@ export default function LearningProgressBar({
             </defs>
           </svg>
           <div className="absolute inset-0 flex items-center justify-center">
-            <span className="text-sm font-bold text-teal-600">{overall}%</span>
+            <span className="text-sm font-bold text-teal-600">{displayOverall}%</span>
           </div>
         </div>
         <div className="flex-1">
-          <p className="text-sm font-bold text-gray-900 mb-1">综合学习进度</p>
-          <p className="text-xs text-gray-500 mb-2">视频40% + 文档30% + 检测30%</p>
+          <p className="text-sm font-bold text-gray-900 mb-1">{simple ? '当前小节进度' : '综合学习进度'}</p>
+          <p className="text-xs text-gray-500 mb-2">{simple ? '按课件列表非压缩包资源平均进度统计' : '视频40% + 文档30% + 检测30%'}</p>
           <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
             <div
               className="h-full bg-gradient-to-r from-teal-500 to-cyan-500 rounded-full transition-all duration-700"
-              style={{ width: `${overall}%` }}
+              style={{ width: `${displayOverall}%` }}
             ></div>
           </div>
         </div>
       </div>
 
-      {/* 分项进度 */}
-      <div className="space-y-3">
+      {!simple && <div className="space-y-3">
         {steps.map((step, idx) => (
           <div key={idx} className={`${step.bgColor} rounded-xl p-3`}>
             <div className="flex items-center justify-between mb-2">
@@ -146,10 +163,10 @@ export default function LearningProgressBar({
             </div>
           </div>
         ))}
-      </div>
+      </div>}
 
       {/* 达标提示 */}
-      {overall >= 80 && (
+      {!simple && overall >= 80 && (
         <div className="mt-4 p-3 bg-green-50 border border-green-200 rounded-xl flex items-center space-x-2">
           <i className="ri-award-fill text-green-500 text-lg flex-shrink-0"></i>
           <div>
@@ -158,7 +175,7 @@ export default function LearningProgressBar({
           </div>
         </div>
       )}
-      {overall < 80 && overall > 0 && (
+      {!simple && overall < 80 && overall > 0 && (
         <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-xl flex items-center space-x-2">
           <i className="ri-information-line text-amber-500 text-lg flex-shrink-0"></i>
           <p className="text-xs text-amber-700">

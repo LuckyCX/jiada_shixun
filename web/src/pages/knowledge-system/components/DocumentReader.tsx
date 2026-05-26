@@ -1,44 +1,48 @@
-import { useState, useEffect } from 'react';
+import { useRef, useState, useEffect } from 'react';
+import { Document, Page, pdfjs } from 'react-pdf';
+import 'react-pdf/dist/Page/AnnotationLayer.css';
+import 'react-pdf/dist/Page/TextLayer.css';
+
+pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url).toString();
 
 interface DocumentReaderProps {
   title: string;
   pageCount?: number;
   resourceId: string; // 新增：课件ID，用于保存进度
+  previewUrl?: string;
+  downloadUrl?: string;
+  mimeType?: string;
+  initialPage?: number;
+  initialStudySeconds?: number;
+  initialCompleted?: boolean;
   onProgress?: (percent: number) => void;
+  onSaveProgress?: (percent: number, lastPosition: { page?: number; scrollTop?: number; studySeconds?: number }, completed: boolean) => void;
   onComplete?: () => void;
 }
-
-// 从 localStorage 读取PDF阅读进度
-const getPdfProgress = (resourceId: string): { currentPage: number; completed: boolean } => {
-  const key = `pdf_progress_${resourceId}`;
-  const saved = localStorage.getItem(key);
-  if (saved) {
-    try {
-      return JSON.parse(saved);
-    } catch {
-      return { currentPage: 1, completed: false };
-    }
-  }
-  return { currentPage: 1, completed: false };
-};
-
-// 保存PDF阅读进度到 localStorage
-const savePdfProgress = (resourceId: string, currentPage: number, completed: boolean) => {
-  const key = `pdf_progress_${resourceId}`;
-  localStorage.setItem(key, JSON.stringify({ currentPage, completed }));
-};
 
 export default function DocumentReader({
   title,
   pageCount = 12,
   resourceId,
+  previewUrl,
+  mimeType,
+  initialPage = 1,
+  initialStudySeconds = 0,
+  initialCompleted = false,
   onProgress,
+  onSaveProgress,
   onComplete,
 }: DocumentReaderProps) {
-  const savedProgress = getPdfProgress(resourceId);
-  const [currentPage, setCurrentPage] = useState(savedProgress.currentPage);
+  const [currentPage, setCurrentPage] = useState(initialPage);
+  const [realPageCount, setRealPageCount] = useState(pageCount);
   const [zoom, setZoom] = useState(100);
-  const [completed, setCompleted] = useState(savedProgress.completed);
+  const [completed, setCompleted] = useState(initialCompleted);
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const pageStartedAtRef = useRef(Date.now());
+  const studySecondsRef = useRef(initialStudySeconds);
+  const bottomSavedPageRef = useRef<number | null>(null);
+  const [contentWidth, setContentWidth] = useState(720);
+  const [showContinueTip, setShowContinueTip] = useState(false);
 
   const docPages = [
     {
@@ -123,30 +127,69 @@ export default function DocumentReader({
     },
   ];
 
-  // 自动保存进度
   useEffect(() => {
-    savePdfProgress(resourceId, currentPage, completed);
-  }, [resourceId, currentPage, completed]);
+    setCurrentPage(initialPage);
+    setCompleted(initialCompleted);
+    setShowContinueTip(initialPage > 1 && initialPage < pageCount);
+    pageStartedAtRef.current = Date.now();
+    studySecondsRef.current = initialStudySeconds;
+    bottomSavedPageRef.current = null;
+  }, [resourceId, initialPage, initialStudySeconds, initialCompleted, pageCount]);
+
+  useEffect(() => {
+    if (!showContinueTip) return;
+    const timer = window.setTimeout(() => setShowContinueTip(false), 3000);
+    return () => window.clearTimeout(timer);
+  }, [showContinueTip]);
+
+  useEffect(() => {
+    if (!contentRef.current) return;
+    const updateWidth = () => {
+      const width = contentRef.current?.clientWidth || 720;
+      setContentWidth(Math.max(320, width - 48));
+    };
+    updateWidth();
+    const observer = new ResizeObserver(updateWidth);
+    observer.observe(contentRef.current);
+    return () => observer.disconnect();
+  }, []);
+
+  const commitStudyTime = () => {
+    const now = Date.now();
+    const elapsedSeconds = Math.floor((now - pageStartedAtRef.current) / 1000);
+    if (elapsedSeconds > 0) {
+      studySecondsRef.current += elapsedSeconds;
+    }
+    pageStartedAtRef.current = now;
+    return studySecondsRef.current;
+  };
 
   const handlePageChange = (page: number) => {
-    const newPage = Math.max(1, Math.min(pageCount, page));
+    const totalPages = realPageCount || pageCount;
+    const newPage = Math.max(1, Math.min(totalPages, page));
+    setShowContinueTip(false);
     setCurrentPage(newPage);
-    const percent = Math.round((newPage / pageCount) * 100);
+    bottomSavedPageRef.current = null;
+    const percent = Math.round((newPage / totalPages) * 100);
+    const studySeconds = commitStudyTime();
     onProgress?.(percent);
+    onSaveProgress?.(percent, { page: newPage, studySeconds }, percent >= 100);
     
-    // 阅读到最后一页自动标记完成
-    if (newPage === pageCount && !completed) {
+    if (newPage === totalPages && !completed) {
       setCompleted(true);
-      savePdfProgress(resourceId, newPage, true);
       onComplete?.();
     }
   };
 
   const currentContent = docPages[Math.min(currentPage - 1, docPages.length - 1)];
-  const progressPercent = Math.round((currentPage / pageCount) * 100);
+  const totalPages = realPageCount || pageCount;
+  const progressPercent = Math.round((currentPage / totalPages) * 100);
+  const isImage = String(mimeType || '').startsWith('image/');
+  const isPdf = String(mimeType || '').toLowerCase() === 'application/pdf' || String(previewUrl || '').toLowerCase().includes('.pdf');
+  const pageWidth = Math.max(320, Math.round(contentWidth * (zoom / 100)));
 
   return (
-    <div className="bg-gray-100 rounded-2xl overflow-hidden" style={{ minHeight: '480px' }}>
+    <div className="bg-gray-100 rounded-2xl overflow-hidden flex flex-col h-[calc(100vh-190px)] min-h-[560px]">
       {/* 文档工具栏 */}
       <div className="bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between">
         <div className="flex items-center space-x-3">
@@ -181,24 +224,82 @@ export default function DocumentReader({
           >
             适应宽度
           </button>
-          <button className="w-8 h-8 flex items-center justify-center bg-teal-50 hover:bg-teal-100 text-teal-600 rounded-lg transition-colors">
+          {/* <button
+            onClick={() => {
+              if (downloadUrl) window.open(downloadUrl, '_blank', 'noopener,noreferrer');
+            }}
+            className="w-8 h-8 flex items-center justify-center bg-teal-50 hover:bg-teal-100 text-teal-600 rounded-lg transition-colors"
+          >
             <i className="ri-download-line text-sm"></i>
-          </button>
+          </button> */}
         </div>
       </div>
 
       {/* 文档内容区 */}
-      <div className="p-6 overflow-y-auto" style={{ maxHeight: '380px' }}>
-        <div
-          className="bg-white rounded-xl shadow-md mx-auto p-8 transition-all duration-200"
-          style={{ maxWidth: `${zoom}%`, minWidth: '400px' }}
-        >
+      <div
+        ref={contentRef}
+        className="p-6 overflow-auto flex-1"
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          if (el.scrollTop + el.clientHeight >= el.scrollHeight - 8) {
+            const percent = Math.round((currentPage / totalPages) * 100);
+            const studySeconds = bottomSavedPageRef.current === currentPage
+              ? studySecondsRef.current
+              : commitStudyTime();
+            bottomSavedPageRef.current = currentPage;
+            onSaveProgress?.(percent, { page: currentPage, scrollTop: el.scrollTop, studySeconds }, percent >= 100);
+            if (percent >= 100 && !completed) {
+              setCompleted(true);
+              onComplete?.();
+            }
+          }
+        }}
+      >
+        {previewUrl ? (
+          <div className="bg-white rounded-xl shadow-md mx-auto overflow-hidden w-fit max-w-full">
+            {isImage ? (
+              <img
+                src={previewUrl}
+                alt={title}
+                className="w-full object-contain bg-gray-50"
+                onLoad={() => {
+                  setCompleted(true);
+                  onProgress?.(100);
+                  onSaveProgress?.(100, { page: 1 }, true);
+                  onComplete?.();
+                }}
+              />
+            ) : isPdf ? (
+              <Document
+                file={previewUrl}
+                onLoadSuccess={({ numPages }) => {
+                  setRealPageCount(numPages);
+                  setCurrentPage((prev) => Math.max(1, Math.min(prev, numPages)));
+                }}
+                loading={<div className="py-12 text-center text-sm text-gray-400">文档加载中...</div>}
+                error={<div className="py-12 text-center text-sm text-red-500">文档加载失败</div>}
+              >
+                <Page pageNumber={currentPage} width={pageWidth} />
+              </Document>
+            ) : (
+              <iframe src={previewUrl} title={title} className="w-full h-[340px] bg-white" />
+            )}
+            <div className="px-4 py-3 border-t border-gray-100 flex items-center justify-between">
+              <span className="text-xs text-gray-500">资源预览</span>
+              {completed && <span className="text-xs text-green-600 font-medium"><i className="ri-checkbox-circle-fill mr-1"></i>已完成阅读</span>}
+            </div>
+          </div>
+        ) : (
+          <div
+            className="bg-white rounded-xl shadow-md mx-auto p-8 transition-all duration-200"
+            style={{ width: `${pageWidth}px`, maxWidth: '100%' }}
+          >
           {/* 页眉 */}
           <div className="border-b border-gray-200 pb-4 mb-6">
             <div className="flex items-center justify-between">
               <span className="text-xs text-gray-400">嘉兴大学创业实训平台 · 知识点学习资料</span>
               <span className="text-xs text-gray-400">
-                第 {currentPage} 页 / 共 {pageCount} 页
+                第 {currentPage} 页 / 共 {totalPages} 页
               </span>
             </div>
           </div>
@@ -243,7 +344,8 @@ export default function DocumentReader({
               )}
             </div>
           </div>
-        </div>
+          </div>
+        )}
       </div>
 
       {/* 翻页控制栏 */}
@@ -257,18 +359,8 @@ export default function DocumentReader({
           <span>上一页</span>
         </button>
 
-        {/* 页码跳转 */}
         <div className="flex items-center space-x-2">
-          <span className="text-sm text-gray-500">第</span>
-          <input
-            type="number"
-            value={currentPage}
-            min={1}
-            max={pageCount}
-            onChange={(e) => handlePageChange(Number(e.target.value))}
-            className="w-12 text-center border border-gray-300 rounded-lg py-1 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
-          />
-          <span className="text-sm text-gray-500">/ {pageCount} 页</span>
+          <span className="text-sm text-gray-500">第 {currentPage} 页 / 共 {totalPages} 页</span>
 
           {/* 阅读进度 */}
           <div className="ml-4 flex items-center space-x-2">
@@ -284,7 +376,7 @@ export default function DocumentReader({
 
         <button
           onClick={() => handlePageChange(currentPage + 1)}
-          disabled={currentPage === pageCount}
+          disabled={currentPage === totalPages}
           className="flex items-center space-x-2 px-4 py-2 bg-teal-500 hover:bg-teal-600 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg text-sm transition-all whitespace-nowrap"
         >
           <span>下一页</span>
@@ -293,7 +385,7 @@ export default function DocumentReader({
       </div>
       
       {/* 继续阅读提示 */}
-      {currentPage > 1 && currentPage < pageCount && (
+      {showContinueTip && currentPage > 1 && currentPage < totalPages && (
         <div className="absolute top-20 right-6 bg-teal-500/90 backdrop-blur-sm text-white text-xs px-3 py-2 rounded-lg shadow-lg">
           <i className="ri-bookmark-line mr-1"></i>
           上次阅读到第 {currentPage} 页

@@ -29,6 +29,8 @@ export type StudentTodoTask = {
   daysLeft: number;
   status: string;
   attachments: TaskAttachment[];
+  resourceLinkEnabled: boolean;
+  resourceNodes: TaskResourceNode[];
 };
 
 export async function fetchStudentTodoTasks(classId: string): Promise<{ tasks: StudentTodoTask[] }> {
@@ -92,6 +94,59 @@ export type TaskAttachment = {
   storageKey: string;
 };
 
+export type TaskResourceKnowledgePoint = {
+  id: string;
+  title: string;
+  description: string;
+  moduleKey: string;
+  moduleName: string;
+  sortOrder: number;
+};
+
+export type TaskResourceFile = {
+  id: string;
+  nodeId: string;
+  name: string;
+  type: 'video' | 'audio' | 'pdf' | 'image' | 'archive' | 'case';
+  previewType?: 'video' | 'audio' | 'pdf' | 'image' | 'archive' | 'file';
+  previewStatus?: string;
+  contentHash?: string;
+  mimeType: string;
+  sizeBytes: number;
+  size: string;
+  canPreview: boolean;
+  progress?: {
+    progressPercent: number;
+    lastPosition: Record<string, unknown>;
+    completed: boolean;
+  };
+};
+
+export type TaskResourceNodeAncestor = {
+  id: string;
+  parentId: string | null;
+  level: number;
+  moduleKey: string;
+  moduleName: string;
+  title: string;
+  status: string;
+  sortOrder: number;
+};
+
+export type TaskResourceNode = {
+  id: string;
+  parentId: string | null;
+  level: number;
+  moduleKey: string;
+  moduleName: string;
+  title: string;
+  status: string;
+  sortOrder: number;
+  ancestors: TaskResourceNodeAncestor[];
+  resources: TaskResourceFile[];
+  knowledgePoints: TaskResourceKnowledgePoint[];
+};
+
 export type PersonalClassTask = {
   id: string;
   title: string;
@@ -102,6 +157,9 @@ export type PersonalClassTask = {
   scope: 'all' | 'specific';
   status: 'published' | 'draft' | 'expired';
   attachmentsEnabled: boolean;
+  resourceLinkEnabled: boolean;
+  resourceNodeIds: string[];
+  resourceNodes: TaskResourceNode[];
   publishedAt: string;
   publishedBy: string;
   attachments: TaskAttachment[];

@@ -68,7 +68,7 @@ docker compose stop      # 停止
 docker compose start     # 再启动（沿用原卷）
 ```
 
-**不要**在需要保留数据时使用 `docker compose down -v`（`-v` 会删除命名卷，清空 PostgreSQL 与 Redis 数据）。
+**不要**在需要保留数据时使用 `docker compose down -v`（`-v` 会删除命名卷，清空 PostgreSQL、Redis 与已上传课件文件）。
 
 ### 6）宿主机直连 PG / Redis（本机跑 `npm run dev:local`）
 
@@ -89,7 +89,7 @@ docker compose start     # 再启动（沿用原卷）
 |------|------|--------|
 | `postgres` | 主库 | 命名卷 `jiada_shixun`（表结构 + 业务数据） |
 | `redis` | 缓存 / 会话等 | 命名卷 `redisdata`（AOF 等） |
-| `node` | API | **无业务状态卷**；仅代码镜像 |
+| `node` | API | 命名卷 `node_uploads`（课件、附件等上传文件） |
 | `gateway` | Nginx + 前端静态 | **无状态**；仅代码/构建产物镜像 |
 
 执行常见更新命令时：
@@ -99,7 +99,15 @@ docker compose build --no-cache gateway node   # 仅重建镜像
 docker compose up -d gateway node             # 仅滚动替换这两类容器
 ```
 
-上述操作**默认不会删除** `jiada_shixun`、`redisdata`。只要**没有**对卷执行 `docker volume rm`、也没有带 `down -v` 的全量清理，**PostgreSQL 里已有库表和数据、Redis 里已有数据会原样保留**。
+上述操作**默认不会删除** `jiada_shixun`、`redisdata`、`node_uploads`。只要**没有**对卷执行 `docker volume rm`、也没有带 `down -v` 的全量清理，**PostgreSQL 里已有库表和数据、Redis 里已有数据、已上传课件文件会原样保留**。
+
+后端 `node` 镜像内已安装 LibreOffice 与常用中文字体，用于将 DOC/DOCX/PPT/PPTX/XLS/XLSX 转为 PDF 在线预览。默认环境变量为：
+
+```yaml
+LIBREOFFICE_BIN: /usr/bin/soffice
+```
+
+如自定义后端镜像或基础系统，请确保该路径可执行，或在 `docker-compose.yml` 中调整 `LIBREOFFICE_BIN`。
 
 ---
 
@@ -133,12 +141,12 @@ volumes:
    docker compose build gateway node
    docker compose up -d gateway node
    ```
-2. 若 Compose 未改 `postgres` / `redis` 服务定义，一般**无需**重建数据库容器；数据卷继续挂载在原容器上。
+2. 若 Compose 未改 `postgres` / `redis` 服务定义，一般**无需**重建数据库容器；数据卷继续挂载在原容器上。课件上传文件由 `node_uploads` 卷持久化，只重建 `node` 镜像不会丢失。
 3. **不要**在正式/共享环境使用：
    ```bash
    docker compose down -v
    ```
-   `-v` 会删除命名卷，导致 **PostgreSQL 与 Redis 数据一并清空**。
+   `-v` 会删除命名卷，导致 **PostgreSQL、Redis 与已上传课件文件一并清空**。
 
 Node 进程级环境变量（如 `DATABASE_URL`、`REDIS_URL`）写在 `docker-compose.yml` 的 `environment` 中；**业务配置**仍以库表 `system_config` 等为准，见设计文档与 `docs/sql/README.md`。
 

@@ -11,12 +11,14 @@ import {
   Upload,
   message,
   Spin,
+  TreeSelect,
 } from 'antd';
 import type { UploadFile } from 'antd';
 import dayjs from 'dayjs';
 import type { TaskFormValues } from './types';
 import {
   TASK_MODULES,
+  TASK_MODULE_TO_TRAINING_ID,
   TASK_PRIORITY_OPTIONS,
   type PersonalClassTask,
   type TeamForTask,
@@ -27,6 +29,7 @@ import {
   uploadTaskAttachment,
   deleteTaskAttachment,
 } from '../../../../lib/personalClassTaskApi';
+import { listCourseResources, type CourseResourceNode } from '../../../../lib/courseResourceApi';
 
 type Props = {
   open: boolean;
@@ -38,6 +41,16 @@ type Props = {
 
 const MAX_ATTACH = 5;
 const MAX_BYTES = 100 * 1024 * 1024;
+type ResourceTreeItem = { title: string; value: string; key: string; children?: ResourceTreeItem[] };
+
+function buildResourceTreeData(nodes: CourseResourceNode[]): ResourceTreeItem[] {
+  return nodes.map((node) => ({
+    title: node.title,
+    value: node.id,
+    key: node.id,
+    children: node.children.length ? buildResourceTreeData(node.children) : undefined,
+  }));
+}
 
 export default function CreateTaskModal({ open, classId, taskId, onClose, onSuccess }: Props) {
   const [form] = Form.useForm<TaskFormValues>();
@@ -46,10 +59,15 @@ export default function CreateTaskModal({ open, classId, taskId, onClose, onSucc
   const [saving, setSaving] = useState(false);
   const [existingAttachments, setExistingAttachments] = useState<PersonalClassTask['attachments']>([]);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [resourceNodes, setResourceNodes] = useState<CourseResourceNode[]>([]);
+  const [resourceLoading, setResourceLoading] = useState(false);
   const editMode = Boolean(taskId);
 
   const attachmentsEnabled = Form.useWatch('attachmentsEnabled', form);
+  const resourceLinkEnabled = Form.useWatch('resourceLinkEnabled', form);
+  const moduleValue = Form.useWatch('module', form);
   const scope = Form.useWatch('scope', form);
+  const resourceTreeData = buildResourceTreeData(resourceNodes);
 
   useEffect(() => {
     if (!open) return;
@@ -72,6 +90,8 @@ export default function CreateTaskModal({ open, classId, taskId, onClose, onSucc
             priority: task.priority,
             deadline: task.deadline ? dayjs(task.deadline) : undefined,
             attachmentsEnabled: task.attachmentsEnabled,
+            resourceLinkEnabled: task.resourceLinkEnabled,
+            resourceNodeIds: task.resourceNodeIds,
             scope: task.scope,
             teamIds: task.targetTeamIds,
           });
@@ -84,6 +104,8 @@ export default function CreateTaskModal({ open, classId, taskId, onClose, onSucc
             priority: 'normal',
             deadline: '',
             attachmentsEnabled: false,
+            resourceLinkEnabled: false,
+            resourceNodeIds: [],
             scope: 'all',
             teamIds: [],
           });
@@ -98,6 +120,36 @@ export default function CreateTaskModal({ open, classId, taskId, onClose, onSucc
     };
   }, [open, classId, taskId, editMode, form]);
 
+  useEffect(() => {
+    if (!open || !resourceLinkEnabled || !moduleValue) {
+      setResourceNodes([]);
+      return;
+    }
+    const moduleKey = TASK_MODULE_TO_TRAINING_ID[moduleValue];
+    if (!moduleKey) {
+      setResourceNodes([]);
+      return;
+    }
+    let cancelled = false;
+    setResourceLoading(true);
+    listCourseResources(moduleKey)
+      .then((data) => {
+        if (!cancelled) setResourceNodes(data.nodes);
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          setResourceNodes([]);
+          message.error(e instanceof Error ? e.message : '课程资源加载失败');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setResourceLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, resourceLinkEnabled, moduleValue]);
+
   const buildBody = (values: TaskFormValues, status: 'draft' | 'published') => ({
     title: values.title.trim(),
     description: values.description.trim(),
@@ -107,6 +159,8 @@ export default function CreateTaskModal({ open, classId, taskId, onClose, onSucc
     scope: values.scope,
     teamIds: values.scope === 'specific' ? values.teamIds : [],
     attachmentsEnabled: values.attachmentsEnabled,
+    resourceLinkEnabled: values.resourceLinkEnabled,
+    resourceNodeIds: values.resourceLinkEnabled ? values.resourceNodeIds || [] : [],
     status,
   });
 
@@ -123,6 +177,10 @@ export default function CreateTaskModal({ open, classId, taskId, onClose, onSucc
       const values = await form.validateFields();
       if (values.scope === 'specific' && !values.teamIds?.length) {
         message.warning('请选择目标团队');
+        return;
+      }
+      if (values.resourceLinkEnabled && !values.resourceNodeIds?.length) {
+        message.warning('请选择课程资源');
         return;
       }
       const dl = values.deadline;
@@ -220,7 +278,10 @@ export default function CreateTaskModal({ open, classId, taskId, onClose, onSucc
             <Input placeholder="例如：完成市场调研报告" maxLength={256} />
           </Form.Item>
           <Form.Item name="module" label="实训模块" rules={[{ required: true }]}>
-            <Select options={TASK_MODULES.map((m) => ({ value: m, label: m }))} />
+            <Select
+              options={TASK_MODULES.map((m) => ({ value: m, label: m }))}
+              onChange={() => form.setFieldValue('resourceNodeIds', [])}
+            />
           </Form.Item>
           <Form.Item name="description" label="任务描述" rules={[{ required: true, message: '请输入描述' }]}>
             <Input.TextArea rows={4} placeholder="说明任务要求与交付物" />
@@ -243,9 +304,44 @@ export default function CreateTaskModal({ open, classId, taskId, onClose, onSucc
               />
             </Form.Item>
           </div>
-          <Form.Item name="attachmentsEnabled" label="允许学生查看附件" valuePropName="checked">
-            <Switch />
-          </Form.Item>
+          <div className="space-y-3 mb-4">
+            <div className="flex items-center justify-between rounded-xl border border-gray-100 bg-gray-50 px-4 py-3">
+              <span className="text-sm font-medium text-gray-700">允许学生查看附件</span>
+              <Form.Item name="attachmentsEnabled" valuePropName="checked" noStyle>
+                <Switch />
+              </Form.Item>
+            </div>
+            <div className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-3">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <div className="text-sm font-medium text-gray-700">是否关联课程资源</div>
+                  <div className="text-xs text-gray-400 mt-0.5">关联课程资源后，学生完成任务前需先完成相关课时。</div>
+                </div>
+                <Form.Item name="resourceLinkEnabled" valuePropName="checked" noStyle>
+                  <Switch
+                    onChange={(checked) => {
+                      if (!checked) form.setFieldValue('resourceNodeIds', []);
+                    }}
+                  />
+                </Form.Item>
+              </div>
+            </div>
+          </div>
+          {resourceLinkEnabled && (
+            <Form.Item name="resourceNodeIds" label="关联课程资源" rules={[{ required: true, message: '请选择课程资源' }]}>
+              <TreeSelect
+                treeData={resourceTreeData}
+                treeCheckable
+                showCheckedStrategy={TreeSelect.SHOW_PARENT}
+                placeholder="请选择课程资源章节或课时"
+                loading={resourceLoading}
+                treeDefaultExpandAll
+                maxTagCount="responsive"
+                notFoundContent="当前实训模块暂无课程资源"
+                className="w-full"
+              />
+            </Form.Item>
+          )}
           {attachmentsEnabled && (
             <Form.Item label="附件（最多 5 个，单文件 ≤100MB）">
               <Upload

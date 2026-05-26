@@ -18,6 +18,7 @@ CREATE TABLE teacher_personal_class_tasks (
   status               varchar(16) NOT NULL DEFAULT 'draft'
     CHECK (status IN ('draft', 'published')),
   attachments_enabled  boolean NOT NULL DEFAULT false,
+  resource_link_enabled boolean NOT NULL DEFAULT false,
   published_at         timestamptz,
   created_at           timestamptz NOT NULL DEFAULT now(),
   updated_at           timestamptz NOT NULL DEFAULT now()
@@ -48,6 +49,14 @@ CREATE TABLE teacher_personal_class_task_attachments (
 );
 
 CREATE INDEX idx_pcta_task ON teacher_personal_class_task_attachments (task_id);
+
+CREATE TABLE teacher_personal_class_task_resource_nodes (
+  task_id  bigint NOT NULL REFERENCES teacher_personal_class_tasks (id) ON DELETE CASCADE,
+  node_id  bigint NOT NULL REFERENCES course_resource_nodes (id) ON DELETE CASCADE,
+  PRIMARY KEY (task_id, node_id)
+);
+
+CREATE INDEX idx_pctrn_node ON teacher_personal_class_task_resource_nodes (node_id);
 
 CREATE TABLE student_personal_class_task_completions (
   task_id      bigint NOT NULL REFERENCES teacher_personal_class_tasks (id) ON DELETE CASCADE,

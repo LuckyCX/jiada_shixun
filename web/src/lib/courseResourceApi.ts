@@ -12,12 +12,20 @@ export type CourseResourceFile = {
   id: string;
   nodeId: string;
   name: string;
-  type: 'video' | 'pdf' | 'image' | 'case';
+  type: 'video' | 'audio' | 'pdf' | 'image' | 'archive' | 'case';
   mimeType: string;
+  previewType?: 'video' | 'audio' | 'pdf' | 'image' | 'archive' | 'file';
+  previewStatus?: string;
+  contentHash?: string;
   sizeBytes: number;
   size: string;
   uploadTime: string;
   canPreview: boolean;
+  progress?: {
+    progressPercent: number;
+    lastPosition: Record<string, unknown>;
+    completed: boolean;
+  };
 };
 
 export type CourseKnowledgePoint = {
@@ -125,6 +133,33 @@ export function courseResourceFileUrl(resourceId: string, mode: 'preview' | 'dow
   const token = getPortalToken('teacher') || '';
   const q = token ? `?token=${encodeURIComponent(token)}` : '';
   return `/api/teacher/course-resources/resources/${resourceId}/${mode}${q}`;
+}
+
+export function studentCourseResourceFileUrl(resourceId: string, mode: 'preview' | 'download', tokenOverride?: string): string {
+  const token = tokenOverride ?? getPortalToken('student') ?? '';
+  const q = token ? `?token=${encodeURIComponent(token)}` : '';
+  return `/api/student/course-resources/resources/${resourceId}/${mode}${q}`;
+}
+
+export async function fetchStudentResourceProgress(resourceId: string): Promise<NonNullable<CourseResourceFile['progress']>> {
+  const data = await studentFetch<{ progress: NonNullable<CourseResourceFile['progress']> }>(
+    `/api/student/course-resources/resources/${resourceId}/progress`
+  );
+  return data.progress;
+}
+
+export async function saveStudentResourceProgress(
+  resourceId: string,
+  body: { progressPercent: number; lastPosition?: Record<string, unknown>; completed?: boolean }
+): Promise<NonNullable<CourseResourceFile['progress']>> {
+  const data = await studentFetch<{ progress: NonNullable<CourseResourceFile['progress']> }>(
+    `/api/student/course-resources/resources/${resourceId}/progress`,
+    {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }
+  );
+  return data.progress;
 }
 
 export async function listCourseKnowledgePoints(moduleKey: string): Promise<CourseKnowledgePoint[]> {

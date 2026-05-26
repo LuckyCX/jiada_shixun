@@ -73,17 +73,66 @@ function countNodes(nodes: CourseResourceNode[]) {
 
 const resourceIcon: Record<CourseResourceFile['type'], string> = {
   video: 'ri-video-line',
+  audio: 'ri-volume-up-line',
   pdf: 'ri-file-pdf-line',
   image: 'ri-image-line',
+  archive: 'ri-file-zip-line',
   case: 'ri-file-zip-line',
 };
 
 const resourceColor: Record<CourseResourceFile['type'], string> = {
   video: 'text-red-500 bg-red-50',
+  audio: 'text-purple-500 bg-purple-50',
   pdf: 'text-teal-500 bg-teal-50',
   image: 'text-green-500 bg-green-50',
+  archive: 'text-amber-500 bg-amber-50',
   case: 'text-amber-500 bg-amber-50',
 };
+
+const COURSEWARE_ACCEPT = [
+  '.pdf',
+  '.doc',
+  '.docx',
+  '.ppt',
+  '.pptx',
+  '.xls',
+  '.xlsx',
+  'image/*',
+  'video/*',
+  'audio/*',
+  '.zip',
+  '.rar',
+  '.7z',
+  '.tar',
+  '.gz',
+  '.tgz',
+].join(',');
+const COURSEWARE_ALLOWED_EXTENSIONS = new Set([
+  '.pdf',
+  '.doc',
+  '.docx',
+  '.ppt',
+  '.pptx',
+  '.xls',
+  '.xlsx',
+  '.zip',
+  '.rar',
+  '.7z',
+  '.tar',
+  '.gz',
+  '.tgz',
+]);
+
+function canUploadCourseware(file: File) {
+  const name = file.name.toLowerCase();
+  const ext = name.includes('.') ? `.${name.split('.').pop()}` : '';
+  return (
+    COURSEWARE_ALLOWED_EXTENSIONS.has(ext) ||
+    file.type.startsWith('image/') ||
+    file.type.startsWith('video/') ||
+    file.type.startsWith('audio/')
+  );
+}
 
 const TRAINING_MODULE_TABS: CourseResourceModule[] = [
   { key: 'ideation', name: '创新思维与创意生成', shortName: '创新思维', color: 'bg-gradient-to-r from-teal-500 to-teal-600' },
@@ -241,6 +290,10 @@ export default function CourseManagement() {
 
   const handleUpload = async (file: File) => {
     if (!uploadNode) return;
+    if (!canUploadCourseware(file)) {
+      showToast('仅支持 PDF、Office、图片、视频、音频文件；其他资料请上传压缩包');
+      return;
+    }
     setUploading(true);
     try {
       await uploadCourseResourceFile(uploadNode.id, file);
@@ -703,12 +756,12 @@ export default function CourseManagement() {
             </div>
             <div className="p-6">
               <label className="block border-2 border-dashed border-gray-200 hover:border-teal-300 hover:bg-gray-50 rounded-2xl p-8 text-center cursor-pointer">
-                <input type="file" className="hidden" disabled={uploading} onChange={(e) => e.target.files?.[0] && handleUpload(e.target.files[0])} />
+                <input type="file" accept={COURSEWARE_ACCEPT} className="hidden" disabled={uploading} onChange={(e) => e.target.files?.[0] && handleUpload(e.target.files[0])} />
                 <div className="w-16 h-16 mx-auto mb-4 rounded-2xl bg-gradient-to-br from-teal-500 to-cyan-500 flex items-center justify-center">
                   <i className="ri-upload-cloud-2-line text-white text-3xl"></i>
                 </div>
                 <div className="text-sm font-medium text-gray-900 mb-1">{uploading ? '上传中...' : '点击选择文件'}</div>
-                <div className="text-xs text-gray-400">支持视频、PDF、图片、文档、压缩包等格式</div>
+                <div className="text-xs text-gray-400">支持 PDF、Office、图片、视频、音频；其他资料请上传压缩包</div>
               </label>
             </div>
           </div>

@@ -1,9 +1,33 @@
-import { useState, useEffect } from 'react';
+import { useCallback, useMemo, useState, useEffect, useRef } from 'react';
 import VideoPlayer from './VideoPlayer';
 import DocumentReader from './DocumentReader';
 import NotesPanel from './NotesPanel';
 import LearningQuiz from './LearningQuiz';
 import LearningProgressBar from './LearningProgressBar';
+import {
+  saveStudentResourceProgress,
+  studentCourseResourceFileUrl,
+} from '../../../lib/courseResourceApi';
+import { ensurePortalAccessToken, getPortalToken } from '../../../lib/authApi';
+import { useSearchParams } from 'react-router-dom';
+
+export type LearningDetailResource = {
+  id: string;
+  nodeId?: string;
+  title: string;
+  type: 'video' | 'audio' | 'pdf' | 'image' | 'archive' | 'case';
+  previewType?: 'video' | 'audio' | 'pdf' | 'image' | 'archive' | 'file';
+  previewStatus?: string;
+  contentHash?: string;
+  mimeType: string;
+  size: string;
+  canPreview: boolean;
+  progress?: {
+    progressPercent: number;
+    lastPosition: Record<string, unknown>;
+    completed: boolean;
+  };
+};
 
 interface Resource {
   id: string;
@@ -14,10 +38,104 @@ interface Resource {
   size?: string;
   completed: boolean;
   description?: string;
+  previewUrl?: string;
+  downloadUrl?: string;
+  mimeType?: string;
+  canPreview?: boolean;
 }
+
+type RealStudyResource = {
+  id: string;
+  title: string;
+  type: 'video' | 'audio' | 'pdf' | 'image' | 'archive' | 'file';
+  mimeType: string;
+  size: string;
+  canPreview: boolean;
+  previewUrl?: string;
+  downloadUrl: string;
+  progress: {
+    progressPercent: number;
+    lastPosition: Record<string, unknown>;
+    completed: boolean;
+  };
+};
+
+type RealProgress = RealStudyResource['progress'];
+
+type LearningKnowledgePoint = {
+  id: string;
+  title: string;
+  description: string;
+};
+
+type RealPanelTab = 'video' | 'document' | 'case';
+
+function tabForRealResource(resource?: RealStudyResource): RealPanelTab {
+  if (!resource) return 'document';
+  if (resource.type === 'video' || resource.type === 'audio') return 'video';
+  if (resource.type === 'pdf' || resource.type === 'image') return 'document';
+  return 'case';
+}
+
+const clampProgress = (value: number) => Math.min(100, Math.max(0, Number.isFinite(value) ? value : 0));
+
+const normalizeRealProgress = (progress: RealProgress): RealProgress => {
+  const rawPercent = clampProgress(progress.progressPercent || 0);
+  const completed = progress.completed || rawPercent >= 100;
+  return {
+    progressPercent: completed ? 100 : rawPercent,
+    lastPosition: progress.lastPosition || {},
+    completed,
+  };
+};
+
+const mergeRealProgress = (base: RealProgress, next?: RealProgress): RealProgress => {
+  const current = normalizeRealProgress(base);
+  if (!next) return current;
+
+  const incoming = normalizeRealProgress(next);
+  const progressPercent = Math.max(current.progressPercent, incoming.progressPercent);
+  return {
+    progressPercent,
+    lastPosition: incoming.progressPercent >= current.progressPercent ? incoming.lastPosition : current.lastPosition,
+    completed: current.completed || incoming.completed || progressPercent >= 100,
+  };
+};
+
+const numberFromPosition = (position: Record<string, unknown>, key: string) => {
+  const value = position[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+};
+
+const getResourceStudySeconds = (type: RealStudyResource['type'], progress: RealProgress) => {
+  if (type === 'video' || type === 'audio') {
+    return Math.max(
+      numberFromPosition(progress.lastPosition, 'currentTime'),
+      numberFromPosition(progress.lastPosition, 'studySeconds'),
+    );
+  }
+  if (type === 'pdf' || type === 'image') {
+    return numberFromPosition(progress.lastPosition, 'studySeconds');
+  }
+  return 0;
+};
+
+const formatStudyDuration = (seconds: number) => {
+  const safeSeconds = Math.max(0, Math.floor(seconds));
+  if (safeSeconds < 60) return `${safeSeconds}秒`;
+  const minutes = Math.floor(safeSeconds / 60);
+  if (minutes < 60) return `${minutes}分`;
+  return `${Math.floor(minutes / 60)}小时${minutes % 60}分`;
+};
 
 interface LearningDetailProps {
   onBack: () => void;
+  knowledgeTitle?: string;
+  knowledgeDescription?: string;
+  moduleName?: string;
+  resources?: LearningDetailResource[];
+  knowledgePoints?: LearningKnowledgePoint[];
+  onResourceProgressChange?: (resourceId: string, progress: RealProgress) => void;
 }
 
 // 从 localStorage 获取课件完成状态
@@ -39,7 +157,7 @@ const calculateSectionProgress = (resources: Resource[]): number => {
   return Math.round((completedCount / resources.length) * 100);
 };
 
-const resources: Resource[] = [
+const defaultResources: Resource[] = [
   {
     id: 'r1',
     type: 'video',
@@ -209,13 +327,191 @@ const caseData = [
   },
 ];
 
-export default function LearningDetail({ onBack }: LearningDetailProps) {
-  const [activeTab, setActiveTab] = useState<'video' | 'document' | 'case' | 'quiz'>('video');
-  const [selectedResource, setSelectedResource] = useState<Resource>(resources[0]);
+export default function LearningDetail({
+  onBack,
+  knowledgeTitle = '头脑风暴法',
+  knowledgeDescription = '头脑风暴法（Brainstorming）是一种通过集体讨论激发创意的思维方法。',
+  moduleName = '创新思维与创新方法',
+  resources: realResources,
+  knowledgePoints = [],
+  onResourceProgressChange,
+}: LearningDetailProps) {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const hasRealResourceContext = realResources !== undefined;
+  const resourceTokenRef = useRef(getPortalToken('student') || '');
+  const [resourceToken, setResourceToken] = useState(resourceTokenRef.current);
+  const realStudyResources = useMemo<RealStudyResource[]>(() => {
+    if (!hasRealResourceContext) return [];
+    return (realResources || []).map((resource) => {
+      const type = resource.previewType && resource.previewType !== 'file'
+        ? resource.previewType
+        : resource.type === 'case'
+          ? 'archive'
+          : resource.type;
+      return {
+        id: resource.id,
+        title: resource.title,
+        type,
+        mimeType: resource.mimeType,
+        size: resource.size,
+        canPreview: resource.canPreview && type !== 'archive',
+        previewUrl: resource.canPreview && type !== 'archive' ? studentCourseResourceFileUrl(resource.id, 'preview', resourceToken) : undefined,
+        downloadUrl: studentCourseResourceFileUrl(resource.id, 'download', resourceToken),
+        progress: resource.progress || { progressPercent: 0, lastPosition: {}, completed: false },
+      };
+    });
+  }, [hasRealResourceContext, realResources, resourceToken]);
+  const [selectedRealResourceId, setSelectedRealResourceId] = useState('');
+  const [realActiveTab, setRealActiveTab] = useState<RealPanelTab>('document');
+  const [realProgress, setRealProgress] = useState<Record<string, RealProgress>>({});
+  const realProgressRef = useRef<Record<string, RealProgress>>({});
+
+  useEffect(() => {
+    if (!hasRealResourceContext) return;
+    let cancelled = false;
+
+    const syncResourceToken = async () => {
+      await ensurePortalAccessToken('student');
+      if (cancelled) return;
+      const nextToken = getPortalToken('student') || '';
+      if (nextToken !== resourceTokenRef.current) {
+        resourceTokenRef.current = nextToken;
+        setResourceToken(nextToken);
+      }
+    };
+
+    void syncResourceToken();
+    const timer = window.setInterval(syncResourceToken, 60 * 1000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [hasRealResourceContext]);
+
+  useEffect(() => {
+    realProgressRef.current = realProgress;
+  }, [realProgress]);
+
+  useEffect(() => {
+    if (!hasRealResourceContext) return;
+    const resourceParam = searchParams.get('resource');
+    setSelectedRealResourceId((prev) => (
+      prev && realStudyResources.some((resource) => resource.id === prev)
+        ? prev
+        : resourceParam && realStudyResources.some((resource) => resource.id === resourceParam)
+          ? resourceParam
+          : realStudyResources.find((resource) => resource.canPreview)?.id || realStudyResources[0]?.id || ''
+    ));
+    setRealProgress((prev) => {
+      const nextProgress = { ...prev };
+      realStudyResources.forEach((resource) => {
+        nextProgress[resource.id] = mergeRealProgress(resource.progress, prev[resource.id]);
+      });
+      realProgressRef.current = nextProgress;
+      return nextProgress;
+    });
+  }, [hasRealResourceContext, realStudyResources, searchParams]);
+
+  const selectRealResource = useCallback((resourceId: string) => {
+    const resource = realStudyResources.find((item) => item.id === resourceId);
+    setSelectedRealResourceId(resourceId);
+    setRealActiveTab(tabForRealResource(resource));
+    const next = new URLSearchParams(searchParams);
+    next.set('resource', resourceId);
+    setSearchParams(next, { replace: true });
+  }, [realStudyResources, searchParams, setSearchParams]);
+
+  const selectedRealResource = realStudyResources.find((resource) => resource.id === selectedRealResourceId) || realStudyResources[0];
+  const selectedRealProgress = selectedRealResource
+    ? mergeRealProgress(selectedRealResource.progress, realProgress[selectedRealResource.id])
+    : { progressPercent: 0, lastPosition: {}, completed: false };
+  const progressTrackableResources = realStudyResources.filter((resource) => resource.type !== 'archive');
+  const realResourceProgresses = progressTrackableResources.map((resource) => mergeRealProgress(resource.progress, realProgress[resource.id]).progressPercent);
+  const realStudySeconds = progressTrackableResources.reduce((sum, resource) => {
+    const progress = mergeRealProgress(resource.progress, realProgress[resource.id]);
+    return sum + getResourceStudySeconds(resource.type, progress);
+  }, 0);
+  const realSectionProgress = realResourceProgresses.length
+    ? Math.round(realResourceProgresses.reduce((sum, progress) => sum + progress, 0) / realResourceProgresses.length)
+    : 0;
+
+  const updateRealProgress = useCallback((resource: RealStudyResource, progressPercent: number, lastPosition?: Record<string, unknown>, completed = false) => {
+    const currentProgress = mergeRealProgress(resource.progress, realProgressRef.current[resource.id]);
+    const incomingProgress = {
+      progressPercent: clampProgress(progressPercent),
+      lastPosition: lastPosition || currentProgress.lastPosition,
+      completed: completed || progressPercent >= 100,
+    };
+    const nextProgress = mergeRealProgress(currentProgress, incomingProgress);
+    if (
+      nextProgress.progressPercent === currentProgress.progressPercent &&
+      nextProgress.completed === currentProgress.completed &&
+      nextProgress.lastPosition === currentProgress.lastPosition
+    ) {
+      return currentProgress;
+    }
+    realProgressRef.current = { ...realProgressRef.current, [resource.id]: nextProgress };
+    setRealProgress((prev) => ({
+      ...prev,
+      [resource.id]: mergeRealProgress(prev[resource.id] || resource.progress, nextProgress),
+    }));
+    onResourceProgressChange?.(resource.id, nextProgress);
+    return nextProgress;
+  }, [onResourceProgressChange]);
+
+  const saveRealProgress = useCallback((resource: RealStudyResource, progressPercent: number, lastPosition: Record<string, unknown> = {}, completed = false) => {
+    const nextProgress = updateRealProgress(resource, progressPercent, lastPosition, completed);
+    void saveStudentResourceProgress(resource.id, {
+      progressPercent: nextProgress.progressPercent,
+      lastPosition: nextProgress.lastPosition,
+      completed: nextProgress.completed,
+    }).catch(() => {});
+  }, [updateRealProgress]);
+
+  const realResourceIcon = (type: RealStudyResource['type']) => {
+    switch (type) {
+      case 'video': return 'ri-video-line';
+      case 'audio': return 'ri-volume-up-line';
+      case 'pdf': return 'ri-file-pdf-2-line';
+      case 'image': return 'ri-image-line';
+      case 'archive': return 'ri-file-zip-line';
+      default: return 'ri-file-list-line';
+    }
+  };
+
+  const realResourceTypeText = (type: RealStudyResource['type']) => {
+    switch (type) {
+      case 'video': return '视频';
+      case 'audio': return '音频';
+      case 'pdf': return '文档';
+      case 'image': return '图片';
+      case 'archive': return '压缩包';
+      default: return '资源';
+    }
+  };
+
+  const resources = useMemo<Resource[]>(() => {
+    if (!hasRealResourceContext) return defaultResources;
+    return (realResources || []).map((resource) => ({
+      id: resource.id,
+      type: resource.type === 'video' ? 'video' : resource.type === 'case' ? 'case' : 'document',
+      title: resource.title,
+      size: resource.size,
+      completed: false,
+      description: resource.mimeType || resource.size ? [resource.mimeType, resource.size].filter(Boolean).join(' · ') : undefined,
+      previewUrl: resource.canPreview ? studentCourseResourceFileUrl(resource.id, 'preview', resourceToken) : undefined,
+      downloadUrl: studentCourseResourceFileUrl(resource.id, 'download', resourceToken),
+      mimeType: resource.mimeType,
+      canPreview: resource.canPreview,
+    }));
+  }, [hasRealResourceContext, realResources, resourceToken]);
+  const initialTab = resources[0]?.type === 'video' ? 'video' : resources[0]?.type === 'document' ? 'document' : 'case';
+  const [activeTab, setActiveTab] = useState<'video' | 'document' | 'case' | 'quiz'>(initialTab);
+  const [selectedResource, setSelectedResource] = useState<Resource>(resources[0] || defaultResources[0]);
   const [videoProgress, setVideoProgress] = useState(0);
   const [docProgress, setDocProgress] = useState(0);
   const [quizPassed, setQuizPassed] = useState(false);
-  const [studyMinutes, setStudyMinutes] = useState(28);
+  const [studySeconds, setStudySeconds] = useState(0);
   const [completedResources, setCompletedResources] = useState<Set<string>>(new Set());
   const [expandedCase, setExpandedCase] = useState<string | null>(null);
   const [savedToast, setSavedToast] = useState(false);
@@ -225,6 +521,18 @@ export default function LearningDetail({ onBack }: LearningDetailProps) {
   const [searchKeyword, setSearchKeyword] = useState('');
   const [bookmarkedCases, setBookmarkedCases] = useState<Set<string>>(new Set());
   const [sectionProgress, setSectionProgress] = useState(0);
+  const firstVideo = resources.find((r) => r.type === 'video');
+  const firstDocument = resources.find((r) => r.type === 'document');
+  const studyMinutes = Math.floor(studySeconds / 60);
+
+  useEffect(() => {
+    setStudySeconds(0);
+  }, [hasRealResourceContext, selectedRealResourceId, selectedResource.id]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setStudySeconds((prev) => prev + 1), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   // 初始化：从 localStorage 加载已完成的课件
   useEffect(() => {
@@ -236,17 +544,20 @@ export default function LearningDetail({ onBack }: LearningDetailProps) {
     });
     setCompletedResources(completed);
     setSectionProgress(calculateSectionProgress(resources));
-  }, []);
+    setSelectedResource((prev) => resources.find((r) => r.id === prev.id) || resources[0] || defaultResources[0]);
+    if (resources.length > 0 && !resources.some((r) => r.type === activeTab || (activeTab === 'quiz'))) {
+      setActiveTab(resources[0].type === 'video' ? 'video' : resources[0].type === 'document' ? 'document' : 'case');
+    }
+  }, [activeTab, resources]);
 
   // 更新小节整体进度
   useEffect(() => {
     setSectionProgress(calculateSectionProgress(resources));
-  }, [completedResources]);
+  }, [completedResources, resources]);
 
   const handleVideoProgress = (percent: number) => {
     setVideoProgress(percent);
     if (percent > 0 && percent % 10 === 0) {
-      setStudyMinutes((prev) => prev + 1);
       showSavedToast();
     }
   };
@@ -346,9 +657,309 @@ export default function LearningDetail({ onBack }: LearningDetailProps) {
       icon: 'ri-file-text-line',
       count: resources.filter((r) => r.type === 'document').length,
     },
-    { id: 'case', label: '案例库', icon: 'ri-lightbulb-line', count: caseData.length },
+    { id: 'case', label: hasRealResourceContext ? '其他资源' : '案例库', icon: 'ri-lightbulb-line', count: hasRealResourceContext ? resources.filter((r) => r.type === 'case').length : caseData.length },
     { id: 'quiz', label: '学习检测', icon: 'ri-edit-box-line', count: null },
   ];
+
+  if (hasRealResourceContext && resources.length === 0) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-teal-50/30">
+        <nav className="bg-white/90 backdrop-blur-sm border-b border-gray-200 sticky top-0 z-40">
+          <div className="max-w-screen-xl mx-auto px-6 py-3.5 flex items-center space-x-4">
+            <button
+              onClick={onBack}
+              className="flex items-center space-x-2 px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl text-sm font-medium transition-all whitespace-nowrap"
+            >
+              <i className="ri-arrow-left-line"></i>
+              <span>返回知识点库</span>
+            </button>
+            <div className="h-5 w-px bg-gray-300"></div>
+            <div>
+              <p className="text-sm font-bold text-gray-900">{knowledgeTitle}</p>
+              <p className="text-xs text-gray-500">{moduleName} · 知识点学习</p>
+            </div>
+          </div>
+        </nav>
+        <div className="max-w-screen-xl mx-auto px-6 py-16">
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-12 text-center">
+            <div className="w-16 h-16 bg-teal-50 rounded-2xl flex items-center justify-center mx-auto mb-4">
+              <i className="ri-folder-open-line text-3xl text-teal-500"></i>
+            </div>
+            <h3 className="text-lg font-bold text-gray-900 mb-2">暂无学习资源</h3>
+            <p className="text-sm text-gray-500">当前知识点暂未关联可学习的课程资源。</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (hasRealResourceContext && selectedRealResource) {
+    const completedCount = progressTrackableResources.filter((resource) => mergeRealProgress(resource.progress, realProgress[resource.id]).completed).length;
+    const imageResources = realStudyResources.filter((resource) => resource.type === 'image');
+    const videoResources = realStudyResources.filter((resource) => resource.type === 'video' || resource.type === 'audio');
+    const documentResources = realStudyResources.filter((resource) => resource.type === 'pdf' || resource.type === 'image');
+    const caseResources = realStudyResources.filter((resource) => resource.type === 'archive' || resource.type === 'file');
+    const imageIndex = imageResources.findIndex((resource) => resource.id === selectedRealResource.id);
+    const canShowOnline = selectedRealResource.canPreview && selectedRealResource.type !== 'archive';
+    const realVideoProgress = videoResources.length
+      ? Math.round(videoResources.reduce((sum, resource) => sum + mergeRealProgress(resource.progress, realProgress[resource.id]).progressPercent, 0) / videoResources.length)
+      : 0;
+    const realDocProgress = documentResources.length
+      ? Math.round(documentResources.reduce((sum, resource) => sum + mergeRealProgress(resource.progress, realProgress[resource.id]).progressPercent, 0) / documentResources.length)
+      : 0;
+    const realTabList = [
+      { id: 'video' as const, label: '视频讲解', icon: 'ri-play-circle-line', count: videoResources.length, firstResource: videoResources[0] },
+      { id: 'document' as const, label: '文档资料', icon: 'ri-file-text-line', count: documentResources.length, firstResource: documentResources[0] },
+      { id: 'case' as const, label: '案例库', icon: 'ri-lightbulb-line', count: caseResources.length, firstResource: caseResources[0] },
+    ];
+    const handleRealTabClick = (tab: (typeof realTabList)[number]) => {
+      setRealActiveTab(tab.id);
+      if (tab.firstResource) selectRealResource(tab.firstResource.id);
+    };
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-teal-50/30">
+        <nav className="bg-white/90 backdrop-blur-sm border-b border-gray-200 sticky top-0 z-40">
+          <div className="max-w-screen-xl mx-auto px-6 py-3.5 flex items-center justify-between">
+            <div className="flex items-center space-x-4">
+              <button
+                onClick={onBack}
+                className="flex items-center space-x-2 px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl text-sm font-medium transition-all whitespace-nowrap"
+              >
+                <i className="ri-arrow-left-line"></i>
+                <span>返回知识点库</span>
+              </button>
+              <div className="h-5 w-px bg-gray-300"></div>
+              <div>
+                <p className="text-sm font-bold text-gray-900">{knowledgeTitle}</p>
+                <p className="text-xs text-gray-500">{moduleName} · 在线学习</p>
+              </div>
+            </div>
+            <div className="flex items-center space-x-3">
+              <button
+                type="button"
+                onClick={() => setFocusMode(!focusMode)}
+                className={`flex items-center space-x-2 px-3 py-2 rounded-xl text-sm font-medium transition-all whitespace-nowrap ${
+                  focusMode ? 'bg-teal-500 text-white' : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
+                }`}
+              >
+                <i className={`${focusMode ? 'ri-focus-3-line' : 'ri-focus-2-line'}`}></i>
+                <span>{focusMode ? '退出专注' : '专注模式'}</span>
+              </button>
+              <div className="flex items-center space-x-2 bg-teal-50 px-4 py-2 rounded-xl">
+                <span className="text-xs text-gray-600">小节完成度</span>
+                <div className="w-20 h-1.5 bg-teal-200 rounded-full overflow-hidden">
+                  <div className="h-full bg-gradient-to-r from-teal-500 to-cyan-500 rounded-full transition-all" style={{ width: `${realSectionProgress}%` }}></div>
+                </div>
+                <span className="text-xs font-bold text-teal-600">{realSectionProgress}%</span>
+              </div>
+            </div>
+          </div>
+        </nav>
+
+        <div className="w-full px-6 py-6">
+          <div className="flex gap-6 h-[calc(100vh-116px)] min-h-[640px]">
+            {!focusMode && <div className="w-80 flex-shrink-0 space-y-5 overflow-y-auto pr-1">
+              <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5 min-h-[360px] flex flex-col">
+                <h3 className="text-sm font-bold text-gray-900 mb-4 flex items-center">
+                  <i className="ri-folder-open-line text-teal-600 mr-2"></i>
+                  本小节课件列表
+                </h3>
+                <div className="space-y-2 flex-1 overflow-y-auto pr-1">
+                  {realStudyResources.map((resource) => {
+                    const progress = mergeRealProgress(resource.progress, realProgress[resource.id]);
+                    const studyText = formatStudyDuration(getResourceStudySeconds(resource.type, progress));
+                    const isActive = selectedRealResource.id === resource.id;
+                    return (
+                      <button
+                        key={resource.id}
+                        type="button"
+                        onClick={() => selectRealResource(resource.id)}
+                        className={`w-full flex items-center space-x-3 p-3 rounded-xl text-left transition-all cursor-pointer ${
+                          isActive ? 'bg-teal-50 border-2 border-teal-400' : 'bg-gray-50 hover:bg-gray-100 border-2 border-transparent'
+                        }`}
+                      >
+                        <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ${progress.completed ? 'bg-green-100 text-green-600' : 'bg-teal-50 text-teal-600'}`}>
+                          <i className={`${progress.completed ? 'ri-checkbox-circle-fill' : realResourceIcon(resource.type)} text-lg`}></i>
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-semibold text-gray-900 truncate">{resource.title}</p>
+                          <p className="text-xs text-gray-400 mt-0.5">
+                            {realResourceTypeText(resource.type)}{resource.type !== 'archive' ? ` · ${Math.round(progress.progressPercent)}% · 已学${studyText}` : ''}
+                          </p>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="mt-4 pt-4 border-t border-gray-100">
+                  <p className="text-xs text-gray-500">已完成 {completedCount}/{progressTrackableResources.length} 个在线课件</p>
+                </div>
+              </div>
+              <LearningProgressBar
+                videoProgress={realVideoProgress}
+                docProgress={realDocProgress}
+                quizPassed={quizPassed}
+                studyMinutes={studyMinutes}
+                studySeconds={realStudySeconds}
+                sectionProgress={realSectionProgress}
+                resourceProgresses={realResourceProgresses}
+                simple
+              />
+            </div>}
+
+            <div className={`flex-1 min-w-0 space-y-5 transition-all duration-300 overflow-y-auto ${focusMode ? 'w-full' : ''}`}>
+              <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-1.5 flex space-x-1">
+                {realTabList.map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => handleRealTabClick(tab)}
+                    className={`flex-1 flex items-center justify-center space-x-2 py-2.5 rounded-xl text-sm font-medium transition-all whitespace-nowrap ${
+                      realActiveTab === tab.id
+                        ? 'bg-gradient-to-r from-teal-500 to-cyan-600 text-white shadow-md'
+                        : 'text-gray-600 hover:bg-gray-50'
+                    }`}
+                  >
+                    <i className={tab.icon}></i>
+                    <span>{tab.label}</span>
+                    {tab.count !== null && (
+                      <span className={`text-xs px-1.5 py-0.5 rounded-full ${realActiveTab === tab.id ? 'bg-white/20 text-white' : 'bg-gray-100 text-gray-500'}`}>
+                        {tab.count}
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+
+              {realActiveTab === 'video' && canShowOnline && (selectedRealResource.type === 'video' || selectedRealResource.type === 'audio') && (
+                <VideoPlayer
+                  key={selectedRealResource.id}
+                  title={selectedRealResource.title}
+                  duration={selectedRealResource.size || '课程资源'}
+                  resourceId={selectedRealResource.id}
+                  src={selectedRealResource.previewUrl}
+                  mediaType={selectedRealResource.type}
+                  initialTime={Number(selectedRealProgress.lastPosition.currentTime || 0)}
+                  initialCompleted={selectedRealProgress.completed}
+                  onProgress={(percent, lastPosition) => updateRealProgress(selectedRealResource, percent, lastPosition)}
+                  onSaveProgress={(percent, lastPosition, completed) => saveRealProgress(selectedRealResource, percent, lastPosition, completed)}
+                />
+              )}
+
+              {realActiveTab === 'video' && !(selectedRealResource.type === 'video' || selectedRealResource.type === 'audio') && (
+                <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-10 text-center text-sm text-gray-400">暂无视频或音频资源</div>
+              )}
+
+              {realActiveTab === 'document' && canShowOnline && selectedRealResource.type === 'pdf' && (
+                <DocumentReader
+                  key={selectedRealResource.id}
+                  title={selectedRealResource.title}
+                  resourceId={selectedRealResource.id}
+                  previewUrl={selectedRealResource.previewUrl}
+                  downloadUrl={selectedRealResource.downloadUrl}
+                  mimeType="application/pdf"
+                  initialPage={Number(selectedRealProgress.lastPosition.page || 1)}
+                  initialStudySeconds={Number(selectedRealProgress.lastPosition.studySeconds || 0)}
+                  initialCompleted={selectedRealProgress.completed}
+                  onProgress={(percent) => updateRealProgress(selectedRealResource, percent)}
+                  onSaveProgress={(percent, lastPosition, completed) => saveRealProgress(selectedRealResource, percent, lastPosition, completed)}
+                />
+              )}
+
+              {realActiveTab === 'document' && canShowOnline && selectedRealResource.type === 'image' && (
+                <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+                  <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
+                    <div>
+                      <h3 className="text-sm font-bold text-gray-900">{selectedRealResource.title}</h3>
+                      <p className="text-xs text-gray-400">{imageIndex >= 0 ? `第 ${imageIndex + 1} / ${imageResources.length} 张` : '图片资源'}</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        disabled={imageIndex <= 0}
+                        onClick={() => selectRealResource(imageResources[imageIndex - 1].id)}
+                        className="px-3 py-1.5 bg-gray-100 disabled:opacity-40 text-gray-600 rounded-lg text-xs"
+                      >
+                        上一张
+                      </button>
+                      <button
+                        type="button"
+                        disabled={imageIndex < 0 || imageIndex >= imageResources.length - 1}
+                        onClick={() => selectRealResource(imageResources[imageIndex + 1].id)}
+                        className="px-3 py-1.5 bg-teal-500 disabled:opacity-40 text-white rounded-lg text-xs"
+                      >
+                        下一张
+                      </button>
+                    </div>
+                  </div>
+                  <div className="p-6 bg-gray-50">
+                    <img
+                      src={selectedRealResource.previewUrl}
+                      alt={selectedRealResource.title}
+                      className="max-h-[620px] mx-auto object-contain rounded-xl bg-white shadow-sm"
+                      onLoad={() => saveRealProgress(selectedRealResource, 100, { imageIndex: Math.max(0, imageIndex) }, true)}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {realActiveTab === 'document' && !(selectedRealResource.type === 'pdf' || selectedRealResource.type === 'image') && (
+                <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-10 text-center text-sm text-gray-400">暂无文档或图片资源</div>
+              )}
+
+              {realActiveTab === 'case' && (!canShowOnline || selectedRealResource.type === 'archive' || selectedRealResource.type === 'file') && (
+                <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-10 text-center">
+                  <div className="w-16 h-16 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center mx-auto mb-4">
+                    <i className="ri-file-zip-line text-3xl"></i>
+                  </div>
+                  <h3 className="text-base font-bold text-gray-900 mb-2">该资源需下载后查看</h3>
+                  <p className="text-sm text-gray-500 mb-5">压缩包不参与在线阅读进度统计。</p>
+                  <button
+                    type="button"
+                    onClick={() => window.open(selectedRealResource.downloadUrl, '_blank', 'noopener,noreferrer')}
+                    className="px-5 py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-sm font-medium transition-colors"
+                  >
+                    <i className="ri-download-2-line mr-1"></i>下载资源
+                  </button>
+                </div>
+              )}
+
+              {realActiveTab === 'case' && selectedRealResource.type !== 'archive' && selectedRealResource.type !== 'file' && (
+                <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-10 text-center text-sm text-gray-400">暂无其他资源</div>
+              )}
+
+            </div>
+
+            {!focusMode && <div className="w-80 flex-shrink-0 space-y-5 overflow-y-auto pr-1">
+              <div className="h-[calc(100vh-330px)] min-h-[360px]">
+                <NotesPanel
+                  knowledgeName={knowledgeTitle}
+                  resourceId={selectedRealResource?.id || knowledgeTitle}
+                  resourceTitle={selectedRealResource?.title || knowledgeTitle}
+                />
+              </div>
+              <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+                <h3 className="text-sm font-bold text-gray-900 mb-3 flex items-center">
+                  <i className="ri-price-tag-3-line text-teal-600 mr-2"></i>
+                  当前小节关联知识点
+                </h3>
+                <div className="space-y-2">
+                  {(knowledgePoints.length ? knowledgePoints : [{ id: 'current', title: knowledgeTitle, description: knowledgeDescription }]).map((point) => (
+                    <div key={point.id} className="rounded-xl bg-teal-50 border border-teal-100 p-3">
+                      <div className="text-sm font-semibold text-gray-900">{point.title}</div>
+                      <p className="text-xs text-gray-500 mt-1 leading-relaxed">
+                        {point.description || '教师暂未填写知识点说明。'}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-teal-50/30">
@@ -361,7 +972,7 @@ export default function LearningDetail({ onBack }: LearningDetailProps) {
               className="flex items-center space-x-2 px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl text-sm font-medium transition-all whitespace-nowrap"
             >
               <i className="ri-arrow-left-line"></i>
-              <span>返回知识库</span>
+              <span>返回知识点库</span>
             </button>
             <div className="h-5 w-px bg-gray-300"></div>
             <div className="flex items-center space-x-2">
@@ -369,8 +980,8 @@ export default function LearningDetail({ onBack }: LearningDetailProps) {
                 <i className="ri-brain-line text-white text-sm"></i>
               </div>
               <div>
-                <p className="text-sm font-bold text-gray-900">头脑风暴法</p>
-                <p className="text-xs text-gray-500">创新思维与创新方法 · 知识点学习</p>
+                <p className="text-sm font-bold text-gray-900">{knowledgeTitle}</p>
+                <p className="text-xs text-gray-500">{moduleName} · 知识点学习</p>
               </div>
             </div>
           </div>
@@ -479,6 +1090,7 @@ export default function LearningDetail({ onBack }: LearningDetailProps) {
                 docProgress={docProgress}
                 quizPassed={quizPassed}
                 studyMinutes={studyMinutes}
+                studySeconds={studySeconds}
               />
             </div>
           )}
@@ -523,10 +1135,11 @@ export default function LearningDetail({ onBack }: LearningDetailProps) {
                   title={
                     selectedResource.type === 'video'
                       ? selectedResource.title
-                      : resources.find((r) => r.type === 'video')!.title
+                      : firstVideo?.title || selectedResource.title
                   }
                   duration={selectedResource.duration || '15分钟'}
-                  resourceId={selectedResource.type === 'video' ? selectedResource.id : resources.find((r) => r.type === 'video')!.id}
+                  resourceId={selectedResource.type === 'video' ? selectedResource.id : firstVideo?.id || selectedResource.id}
+                  src={selectedResource.type === 'video' ? selectedResource.previewUrl : firstVideo?.previewUrl}
                   onProgress={handleVideoProgress}
                   onComplete={handleVideoComplete}
                 />
@@ -585,33 +1198,36 @@ export default function LearningDetail({ onBack }: LearningDetailProps) {
                     知识点简介
                   </h3>
                   <p className="text-sm text-gray-700 leading-relaxed mb-4">
-                    头脑风暴法（Brainstorming）是一种通过集体讨论激发创意的思维方法，由美国创意思维专家亚历克斯·奥斯本于1939年首次提出。其核心是
-                    "延迟判断"原则——在创意生成阶段禁止批评，以数量带动质量。
+                    {knowledgeDescription || '教师暂未填写知识点说明。'}
                   </p>
-                  <div className="flex flex-wrap gap-2">
-                    {['延迟判断', '自由联想', '数量优先', '借鉴组合', '团队协作'].map((tag) => (
-                      <span
-                        key={tag}
-                        className="px-3 py-1 bg-teal-50 text-teal-700 rounded-full text-xs font-medium"
-                      >
-                        {tag}
-                      </span>
-                    ))}
-                  </div>
-                  <div className="mt-4 pt-4 border-t border-gray-100 flex items-center space-x-4">
-                    <div className="flex items-center space-x-1 text-xs text-gray-500">
-                      <i className="ri-medal-line text-purple-500"></i>
-                      <span>完成后获得：</span>
-                    </div>
-                    {['创新思维 +1', '团队协作 +1'].map((ap) => (
-                      <span
-                        key={ap}
-                        className="px-3 py-1 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-full text-xs font-medium shadow-sm"
-                      >
-                        {ap}
-                      </span>
-                    ))}
-                  </div>
+                  {!hasRealResourceContext && (
+                    <>
+                      <div className="flex flex-wrap gap-2">
+                        {['延迟判断', '自由联想', '数量优先', '借鉴组合', '团队协作'].map((tag) => (
+                          <span
+                            key={tag}
+                            className="px-3 py-1 bg-teal-50 text-teal-700 rounded-full text-xs font-medium"
+                          >
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
+                      <div className="mt-4 pt-4 border-t border-gray-100 flex items-center space-x-4">
+                        <div className="flex items-center space-x-1 text-xs text-gray-500">
+                          <i className="ri-medal-line text-purple-500"></i>
+                          <span>完成后获得：</span>
+                        </div>
+                        {['创新思维 +1', '团队协作 +1'].map((ap) => (
+                          <span
+                            key={ap}
+                            className="px-3 py-1 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-full text-xs font-medium shadow-sm"
+                          >
+                            {ap}
+                          </span>
+                        ))}
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
             )}
@@ -623,10 +1239,13 @@ export default function LearningDetail({ onBack }: LearningDetailProps) {
                   title={
                     selectedResource.type === 'document'
                       ? selectedResource.title
-                      : '头脑风暴实施指南'
+                      : firstDocument?.title || '学习资料'
                   }
                   pageCount={selectedResource.pageCount || 12}
-                  resourceId={selectedResource.type === 'document' ? selectedResource.id : resources.find((r) => r.type === 'document')!.id}
+                  resourceId={selectedResource.type === 'document' ? selectedResource.id : firstDocument?.id || selectedResource.id}
+                  previewUrl={selectedResource.type === 'document' ? selectedResource.previewUrl : firstDocument?.previewUrl}
+                  downloadUrl={selectedResource.type === 'document' ? selectedResource.downloadUrl : firstDocument?.downloadUrl}
+                  mimeType={selectedResource.type === 'document' ? selectedResource.mimeType : firstDocument?.mimeType}
                   onProgress={handleDocProgress}
                   onComplete={handleDocComplete}
                 />
@@ -680,8 +1299,45 @@ export default function LearningDetail({ onBack }: LearningDetailProps) {
               </div>
             )}
 
+            {activeTab === 'case' && hasRealResourceContext && (
+              <div className="space-y-5">
+                <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+                  <h3 className="text-sm font-bold text-gray-900 mb-4 flex items-center">
+                    <i className="ri-archive-line text-purple-600 mr-2"></i>
+                    其他学习资源
+                  </h3>
+                  <div className="space-y-3">
+                    {resources
+                      .filter((r) => r.type === 'case')
+                      .map((res) => (
+                        <div key={res.id} className="flex items-center gap-4 p-4 rounded-xl bg-gray-50 border border-gray-100">
+                          <div className="w-12 h-12 rounded-xl bg-purple-100 flex items-center justify-center flex-shrink-0">
+                            <i className="ri-file-zip-line text-purple-600 text-xl"></i>
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-semibold text-gray-900 truncate">{res.title}</p>
+                            <p className="text-xs text-gray-500 mt-0.5">{res.description || res.size || '课程资源'}</p>
+                          </div>
+                          <button
+                            onClick={() => {
+                              if (res.downloadUrl) window.open(res.downloadUrl, '_blank', 'noopener,noreferrer');
+                            }}
+                            className="px-3 py-1.5 bg-purple-50 hover:bg-purple-100 text-purple-700 rounded-lg text-xs font-medium transition-colors whitespace-nowrap"
+                          >
+                            下载
+                          </button>
+                        </div>
+                      ))}
+                    {!resources.some((r) => r.type === 'case') && (
+                      <div className="py-10 text-center text-sm text-gray-400">暂无其他学习资源</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* 案例库 - 保持原有代码 */}
-            {activeTab === 'case' && (
+            {activeTab === 'case' && !hasRealResourceContext && (
               <div className="space-y-5">
                 {/* 案例库头部 */}
                 <div className="bg-gradient-to-r from-purple-500 to-pink-500 rounded-2xl p-6 text-white">
@@ -1033,54 +1689,14 @@ export default function LearningDetail({ onBack }: LearningDetailProps) {
             <div className="w-80 flex-shrink-0 space-y-5">
               {/* 笔记面板 */}
               <div style={{ height: '480px' }}>
-                <NotesPanel knowledgeName="头脑风暴法" />
+                <NotesPanel
+                  knowledgeName={knowledgeTitle}
+                  resourceId={selectedResource.id}
+                  resourceTitle={selectedResource.title}
+                />
               </div>
 
-              {/* 相关资源推荐 */}
-              <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-sm font-bold text-gray-900 flex items-center">
-                    <i className="ri-compass-discover-line text-teal-600 mr-2"></i>
-                    相关学习资源
-                  </h3>
-                  <button className="text-xs text-teal-600 hover:text-teal-700 whitespace-nowrap">
-                    查看更多
-                  </button>
-                </div>
-                <div className="space-y-3">
-                  {resources
-                    .filter((r) => !completedResources.has(r.id))
-                    .slice(0, 3)
-                    .map((res) => (
-                      <div
-                        key={res.id}
-                        className="flex items-center space-x-3 p-3 bg-gray-50 hover:bg-gray-100 rounded-xl cursor-pointer transition-all"
-                        onClick={() => {
-                          setSelectedResource(res);
-                          setActiveTab(
-                            res.type === 'case' ? 'case' : res.type === 'document' ? 'document' : 'video'
-                          );
-                        }}
-                      >
-                        <div
-                          className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${getResourceColor(
-                            res.type
-                          )}`}
-                        >
-                          <i className={`${getResourceIcon(res.type)} text-lg`}></i>
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-xs font-semibold text-gray-800 truncate">{res.title}</p>
-                          <p className="text-xs text-gray-400 mt-0.5">
-                            {res.duration || res.size || `${res.pageCount}页`}
-                          </p>
-                        </div>
-                        <i className="ri-arrow-right-s-line text-gray-400 flex-shrink-0"></i>
-                      </div>
-                    ))}
-                </div>
-              </div>
-
+             
               {/* 在线提问 */}
               <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
                 <h3 className="text-sm font-bold text-gray-900 mb-3 flex items-center">
@@ -1095,9 +1711,6 @@ export default function LearningDetail({ onBack }: LearningDetailProps) {
                 />
                 <div className="flex items-center justify-between mt-2">
                   <div className="flex items-center space-x-2">
-                    <button className="w-7 h-7 flex items-center justify-center bg-gray-100 hover:bg-gray-200 text-gray-500 rounded-lg transition-colors">
-                      <i className="ri-image-line text-sm"></i>
-                    </button>
                     <button className="w-7 h-7 flex items-center justify-center bg-gray-100 hover:bg-gray-200 text-gray-500 rounded-lg transition-colors">
                       <i className="ri-attachment-line text-sm"></i>
                     </button>

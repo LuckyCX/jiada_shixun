@@ -2,7 +2,9 @@ import { Router } from 'express';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import multer from 'multer';
 import { getPool } from '../lib/db.js';
 import { logError } from '../lib/logError.js';
@@ -12,6 +14,9 @@ const router = Router();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UPLOAD_ROOT = path.join(__dirname, '../../uploads/course-resources');
 const MAX_RESOURCE_BYTES = 500 * 1024 * 1024;
+const execFileAsync = promisify(execFile);
+const OFFICE_EXTENSIONS = new Set(['.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx']);
+const ARCHIVE_EXTENSIONS = new Set(['.zip', '.rar', '.7z', '.tar', '.gz', '.tgz']);
 
 const MODULES = [
   { key: 'ideation', name: '创新思维与创意生成', shortName: '创新思维', color: 'bg-gradient-to-r from-teal-500 to-teal-600' },
@@ -48,18 +53,34 @@ function normalizeText(value) {
   return String(value || '').trim();
 }
 
+function normalizeUploadFileName(name) {
+  const raw = String(name || 'file').trim() || 'file';
+  const decoded = Buffer.from(raw, 'latin1').toString('utf8');
+  const looksLatin1Mojibake = /[\u0080-\u00ff]/.test(raw);
+  const decodedLooksValid = decoded && decoded !== raw && !decoded.includes('\uFFFD') && /[^\u0000-\u00ff]/.test(decoded);
+  return looksLatin1Mojibake && decodedLooksValid ? decoded : raw;
+}
+
 function formatSize(bytes) {
   if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
   if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${bytes} B`;
 }
 
-function detectResourceType(mime, name) {
-  const n = String(name || '').toLowerCase();
-  if (String(mime || '').startsWith('video/')) return 'video';
-  if (String(mime || '').startsWith('image/')) return 'image';
-  if (mime === 'application/pdf' || n.endsWith('.pdf')) return 'pdf';
-  return 'case';
+function extOf(name) {
+  return path.extname(String(name || '')).toLowerCase();
+}
+
+function getUploadKind(mime, name) {
+  const ext = extOf(name);
+  const m = String(mime || '').toLowerCase();
+  if (m.startsWith('video/')) return { resourceType: 'video', previewMimeType: mime || 'video/mp4', canPreview: true };
+  if (m.startsWith('audio/')) return { resourceType: 'audio', previewMimeType: mime || 'audio/mpeg', canPreview: true };
+  if (m.startsWith('image/')) return { resourceType: 'image', previewMimeType: mime || 'image/png', canPreview: true };
+  if (m === 'application/pdf' || ext === '.pdf') return { resourceType: 'pdf', previewMimeType: 'application/pdf', canPreview: true };
+  if (OFFICE_EXTENSIONS.has(ext)) return { resourceType: 'pdf', previewMimeType: 'application/pdf', canPreview: true, needsOfficeConvert: true };
+  if (ARCHIVE_EXTENSIONS.has(ext)) return { resourceType: 'archive', previewMimeType: null, canPreview: false };
+  return null;
 }
 
 function canPreviewResource(mime, name) {
@@ -68,10 +89,64 @@ function canPreviewResource(mime, name) {
   return (
     m.startsWith('image/') ||
     m.startsWith('video/') ||
+    m.startsWith('audio/') ||
     m.startsWith('text/') ||
     m === 'application/pdf' ||
     n.endsWith('.pdf')
   );
+}
+
+function hashFile(absPath) {
+  return new Promise((resolve, reject) => {
+    const hash = createHash('sha256');
+    const stream = fs.createReadStream(absPath);
+    stream.on('data', (chunk) => hash.update(chunk));
+    stream.on('error', reject);
+    stream.on('end', () => resolve(hash.digest('hex')));
+  });
+}
+
+function libreOfficeCandidates() {
+  return [
+    process.env.LIBREOFFICE_BIN,
+    '/Applications/LibreOffice.app/Contents/MacOS/soffice',
+    '/opt/homebrew/bin/soffice',
+    '/usr/local/bin/soffice',
+    '/usr/bin/soffice',
+    '/opt/homebrew/bin/libreoffice',
+    '/usr/local/bin/libreoffice',
+    '/usr/bin/libreoffice',
+    'soffice',
+    'libreoffice',
+  ].filter(Boolean);
+}
+
+async function convertOfficeToPdf(absPath) {
+  const outDir = path.dirname(absPath);
+  const inputBase = path.basename(absPath);
+  const generatedPdf = path.join(outDir, `${path.basename(inputBase, path.extname(inputBase))}.pdf`);
+  const previewName = `${randomUUID()}_preview.pdf`;
+  const previewAbs = path.join(outDir, previewName);
+  let lastError = null;
+  for (const bin of libreOfficeCandidates()) {
+    try {
+      await execFileAsync(bin, ['--headless', '--convert-to', 'pdf', '--outdir', outDir, absPath], { timeout: 120000 });
+      lastError = null;
+      break;
+    } catch (e) {
+      lastError = e;
+      if (e?.code !== 'ENOENT') break;
+    }
+  }
+  if (lastError) {
+    if (lastError.code === 'ENOENT') {
+      throw new Error('服务器未安装 LibreOffice，无法转换 Office 文档');
+    }
+    throw lastError;
+  }
+  if (!fs.existsSync(generatedPdf)) throw new Error('Office 文档转换失败');
+  fs.renameSync(generatedPdf, previewAbs);
+  return previewAbs;
 }
 
 function resourceAbsPath(storagePath) {
@@ -85,17 +160,35 @@ function bearerFromQuery(req, _res, next) {
   next();
 }
 
+function previewTypeFromMime(mime, resourceType) {
+  const m = String(mime || '').toLowerCase();
+  if (m.startsWith('video/')) return 'video';
+  if (m.startsWith('audio/')) return 'audio';
+  if (m.startsWith('image/')) return 'image';
+  if (m === 'application/pdf') return 'pdf';
+  if (resourceType === 'archive') return 'archive';
+  return 'file';
+}
+
 function mapResource(row) {
+  const originName = normalizeUploadFileName(row.origin_name);
+  const previewMime = row.preview_mime_type || row.mime_type || '';
+  const previewStatus = row.preview_status || 'ready';
+  const previewType = previewTypeFromMime(previewMime, row.resource_type);
+  const canPreview = previewStatus === 'ready' && row.resource_type !== 'archive' && canPreviewResource(previewMime, originName);
   return {
     id: String(row.id),
     nodeId: String(row.node_id),
-    name: row.origin_name,
+    name: originName,
     type: row.resource_type,
     mimeType: row.mime_type || '',
+    previewType,
+    previewStatus,
+    contentHash: row.content_hash || '',
     sizeBytes: Number(row.size_bytes || 0),
     size: formatSize(Number(row.size_bytes || 0)),
     uploadTime: row.created_at ? String(row.created_at).slice(0, 16).replace('T', ' ') : '',
-    canPreview: canPreviewResource(row.mime_type, row.origin_name),
+    canPreview,
   };
 }
 
@@ -165,6 +258,39 @@ function buildTree(nodeRows, resourceRows, linkRows) {
   };
   sortNodes(roots);
   return roots;
+}
+
+function collectResourceHashes(nodes) {
+  const hashes = new Set();
+  const walk = (node) => {
+    node.resources.forEach((resource) => {
+      if (resource.contentHash) hashes.add(resource.contentHash);
+    });
+    node.children.forEach(walk);
+  };
+  nodes.forEach(walk);
+  return Array.from(hashes);
+}
+
+function attachResourceProgress(nodes, progressRows) {
+  const progressByHash = new Map(progressRows.map((row) => [row.content_hash, {
+    progressPercent: Number(row.progress_percent || 0),
+    lastPosition: row.last_position || {},
+    completed: Boolean(row.completed_at),
+  }]));
+  const walk = (node) => {
+    node.resources = node.resources.map((resource) => ({
+      ...resource,
+      progress: progressByHash.get(resource.contentHash) || {
+        progressPercent: 0,
+        lastPosition: {},
+        completed: false,
+      },
+    }));
+    node.children.forEach(walk);
+  };
+  nodes.forEach(walk);
+  return nodes;
 }
 
 async function loadResourceTree(pool, moduleKey, onlyPublished = false) {
@@ -263,7 +389,8 @@ const storage = multer.diskStorage({
     cb(null, dir);
   },
   filename(_req, file, cb) {
-    const safe = String(file.originalname || 'file').replace(/[/\\]/g, '_');
+    file.originalname = normalizeUploadFileName(file.originalname);
+    const safe = file.originalname.replace(/[/\\]/g, '_');
     cb(null, `${randomUUID()}_${safe}`);
   },
 });
@@ -402,6 +529,11 @@ router.post(
       const uid = userIdFromReq(req);
       if (!nodeId || !uid) return bad(req, res, 400, 40001, '参数无效');
       if (!req.file) return bad(req, res, 400, 40002, '请选择文件');
+      const uploadKind = getUploadKind(req.file.mimetype, req.file.originalname);
+      if (!uploadKind) {
+        fs.unlinkSync(req.file.path);
+        return bad(req, res, 400, 40004, '仅支持可在线预览的 PDF、Office、图片、视频、音频文件；其他资料请上传压缩包');
+      }
       const pool = getPool();
       const { rows: nr } = await pool.query(`SELECT level FROM course_resource_nodes WHERE id = $1`, [nodeId]);
       if (!nr.length) {
@@ -413,10 +545,29 @@ router.post(
         return bad(req, res, 400, 40003, '只能在子小节上传课件');
       }
       const storagePath = path.join(String(uid), String(nodeId), req.file.filename);
+      const contentHash = await hashFile(req.file.path);
+      let previewStoragePath = uploadKind.canPreview ? storagePath : null;
+      let previewStatus = uploadKind.canPreview ? 'ready' : 'none';
+      if (uploadKind.needsOfficeConvert) {
+        try {
+          const previewAbs = await convertOfficeToPdf(req.file.path);
+          previewStoragePath = path.relative(UPLOAD_ROOT, previewAbs);
+        } catch (convertError) {
+          fs.unlinkSync(req.file.path);
+          return bad(
+            req,
+            res,
+            500,
+            50001,
+            convertError instanceof Error ? convertError.message : 'Office 文档转换失败'
+          );
+        }
+      }
       const { rows } = await pool.query(
         `INSERT INTO course_resource_files
-           (node_id, origin_name, storage_name, storage_path, mime_type, size_bytes, resource_type, uploaded_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+           (node_id, origin_name, storage_name, storage_path, mime_type, size_bytes, resource_type, uploaded_by,
+            content_hash, preview_storage_path, preview_mime_type, preview_status)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
          RETURNING *`,
         [
           nodeId,
@@ -425,8 +576,12 @@ router.post(
           storagePath,
           req.file.mimetype,
           req.file.size,
-          detectResourceType(req.file.mimetype, req.file.originalname),
+          uploadKind.resourceType,
           uid,
+          contentHash,
+          previewStoragePath,
+          uploadKind.previewMimeType,
+          previewStatus,
         ]
       );
       return ok(req, res, { resource: mapResource(rows[0]) });
@@ -471,14 +626,17 @@ async function sendResourceFile(req, res, mode) {
   const { rows } = await pool.query(`SELECT * FROM course_resource_files WHERE id = $1`, [resourceId]);
   if (!rows.length) return bad(req, res, 404, 40401, '资源不存在');
   const row = rows[0];
-  const abs = resourceAbsPath(row.storage_path);
+  const originName = normalizeUploadFileName(row.origin_name);
+  const previewMime = row.preview_mime_type || row.mime_type || '';
+  const previewPath = row.preview_storage_path || row.storage_path;
+  const abs = resourceAbsPath(mode === 'preview' ? previewPath : row.storage_path);
   if (!fs.existsSync(abs)) return bad(req, res, 404, 40402, '文件不存在');
-  if (mode === 'preview' && canPreviewResource(row.mime_type, row.origin_name)) {
-    res.setHeader('Content-Type', row.mime_type || 'application/octet-stream');
-    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(row.origin_name)}"`);
+  if (mode === 'preview' && row.resource_type !== 'archive' && (row.preview_status || 'ready') === 'ready' && canPreviewResource(previewMime, originName)) {
+    res.setHeader('Content-Type', previewMime || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(originName)}"`);
     return res.sendFile(abs);
   }
-  return res.download(abs, row.origin_name);
+  return res.download(resourceAbsPath(row.storage_path), originName);
 }
 
 router.get('/teacher/course-resources/resources/:resourceId/preview', bearerFromQuery, requireAuth(), requireTeacher(), async (req, res) => {
@@ -495,6 +653,137 @@ router.get('/teacher/course-resources/resources/:resourceId/download', bearerFro
     return await sendResourceFile(req, res, 'download');
   } catch (e) {
     logError(`GET admin course resource download traceId=${req.traceId}`, e);
+    return bad(req, res, 500, 50000, e.message);
+  }
+});
+
+async function sendStudentResourceFile(req, res, mode) {
+  const resourceId = parseId(req.params.resourceId);
+  if (!resourceId) return bad(req, res, 400, 40001, '参数无效');
+  const pool = getPool();
+  const { rows } = await pool.query(
+    `SELECT f.*
+     FROM course_resource_files f
+     JOIN course_resource_nodes n ON n.id = f.node_id
+     WHERE f.id = $1
+       AND n.level = 3
+       AND n.status = 'published'`,
+    [resourceId]
+  );
+  if (!rows.length) return bad(req, res, 404, 40401, '资源不存在或未发布');
+  const row = rows[0];
+  const originName = normalizeUploadFileName(row.origin_name);
+  const previewMime = row.preview_mime_type || row.mime_type || '';
+  const previewPath = row.preview_storage_path || row.storage_path;
+  const abs = resourceAbsPath(mode === 'preview' ? previewPath : row.storage_path);
+  if (!fs.existsSync(abs)) return bad(req, res, 404, 40402, '文件不存在');
+  if (mode === 'preview' && row.resource_type !== 'archive' && (row.preview_status || 'ready') === 'ready' && canPreviewResource(previewMime, originName)) {
+    res.setHeader('Content-Type', previewMime || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(originName)}"`);
+    return res.sendFile(abs);
+  }
+  return res.download(resourceAbsPath(row.storage_path), originName);
+}
+
+router.get('/student/course-resources/resources/:resourceId/preview', bearerFromQuery, requireAuth(), requireStudent(), async (req, res) => {
+  try {
+    return await sendStudentResourceFile(req, res, 'preview');
+  } catch (e) {
+    logError(`GET student course resource preview traceId=${req.traceId}`, e);
+    return bad(req, res, 500, 50000, e.message);
+  }
+});
+
+router.get('/student/course-resources/resources/:resourceId/download', bearerFromQuery, requireAuth(), requireStudent(), async (req, res) => {
+  try {
+    return await sendStudentResourceFile(req, res, 'download');
+  } catch (e) {
+    logError(`GET student course resource download traceId=${req.traceId}`, e);
+    return bad(req, res, 500, 50000, e.message);
+  }
+});
+
+async function loadStudentResource(pool, resourceId) {
+  const { rows } = await pool.query(
+    `SELECT f.*
+     FROM course_resource_files f
+     JOIN course_resource_nodes n ON n.id = f.node_id
+     WHERE f.id = $1
+       AND n.level = 3
+       AND n.status = 'published'`,
+    [resourceId]
+  );
+  return rows[0] || null;
+}
+
+router.get('/student/course-resources/resources/:resourceId/progress', requireAuth(), requireStudent(), async (req, res) => {
+  try {
+    const resourceId = parseId(req.params.resourceId);
+    const uid = userIdFromReq(req);
+    if (!resourceId || !uid) return bad(req, res, 400, 40001, '参数无效');
+    const pool = getPool();
+    const resource = await loadStudentResource(pool, resourceId);
+    if (!resource) return bad(req, res, 404, 40401, '资源不存在或未发布');
+    if (!resource.content_hash) {
+      return ok(req, res, { progress: { progressPercent: 0, lastPosition: {}, completed: false } });
+    }
+    const { rows } = await pool.query(
+      `SELECT progress_percent, last_position, completed_at
+       FROM student_course_resource_progress
+       WHERE user_id = $1 AND content_hash = $2`,
+      [uid, resource.content_hash]
+    );
+    const row = rows[0];
+    return ok(req, res, {
+      progress: {
+        progressPercent: Number(row?.progress_percent || 0),
+        lastPosition: row?.last_position || {},
+        completed: Boolean(row?.completed_at),
+      },
+    });
+  } catch (e) {
+    logError(`GET student resource progress traceId=${req.traceId}`, e);
+    return bad(req, res, 500, 50000, e.message);
+  }
+});
+
+router.put('/student/course-resources/resources/:resourceId/progress', requireAuth(), requireStudent(), async (req, res) => {
+  try {
+    const resourceId = parseId(req.params.resourceId);
+    const uid = userIdFromReq(req);
+    if (!resourceId || !uid) return bad(req, res, 400, 40001, '参数无效');
+    const pool = getPool();
+    const resource = await loadStudentResource(pool, resourceId);
+    if (!resource) return bad(req, res, 404, 40401, '资源不存在或未发布');
+    if (!resource.content_hash) return bad(req, res, 400, 40002, '资源缺少 hash，无法记录进度');
+    const percent = Math.max(0, Math.min(100, Number(req.body?.progressPercent || 0)));
+    const lastPosition = req.body?.lastPosition && typeof req.body.lastPosition === 'object' ? req.body.lastPosition : {};
+    const completed = Boolean(req.body?.completed) || percent >= 100;
+    const { rows } = await pool.query(
+      `INSERT INTO student_course_resource_progress
+         (user_id, content_hash, progress_percent, last_position, completed_at)
+       VALUES ($1, $2, $3, $4::jsonb, CASE WHEN $5 THEN now() ELSE NULL END)
+       ON CONFLICT (user_id, content_hash)
+       DO UPDATE SET
+         progress_percent = GREATEST(student_course_resource_progress.progress_percent, EXCLUDED.progress_percent),
+         last_position = EXCLUDED.last_position,
+         completed_at = CASE
+           WHEN student_course_resource_progress.completed_at IS NOT NULL THEN student_course_resource_progress.completed_at
+           WHEN $5 THEN now()
+           ELSE NULL
+         END
+       RETURNING progress_percent, last_position, completed_at`,
+      [uid, resource.content_hash, percent, JSON.stringify(lastPosition), completed]
+    );
+    return ok(req, res, {
+      progress: {
+        progressPercent: Number(rows[0].progress_percent || 0),
+        lastPosition: rows[0].last_position || {},
+        completed: Boolean(rows[0].completed_at),
+      },
+    });
+  } catch (e) {
+    logError(`PUT student resource progress traceId=${req.traceId}`, e);
     return bad(req, res, 500, 50000, e.message);
   }
 });
@@ -732,7 +1021,19 @@ router.get('/student/course-resources', requireAuth(), requireStudent(), async (
   try {
     const moduleKey = normalizeText(req.query.moduleKey) || MODULES[0].key;
     if (!moduleByKey(moduleKey)) return bad(req, res, 400, 40001, '实训环节无效');
-    const nodes = await loadResourceTree(getPool(), moduleKey, true);
+    const uid = userIdFromReq(req);
+    const pool = getPool();
+    const nodes = await loadResourceTree(pool, moduleKey, true);
+    const hashes = collectResourceHashes(nodes);
+    if (uid && hashes.length) {
+      const { rows: progressRows } = await pool.query(
+        `SELECT content_hash, progress_percent, last_position, completed_at
+         FROM student_course_resource_progress
+         WHERE user_id = $1 AND content_hash = ANY($2::varchar[])`,
+        [uid, hashes]
+      );
+      attachResourceProgress(nodes, progressRows);
+    }
     return ok(req, res, { modules: MODULES, nodes });
   } catch (e) {
     logError(`GET student course resources traceId=${req.traceId}`, e);
