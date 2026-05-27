@@ -25,6 +25,7 @@ const TeacherGuidePage = lazy(() => import('../pages/teacher-guide/page'));
 const CourseSettingsPage = lazy(() => import('../pages/course-settings/page'));
 const ClassProjectOverviewPage = lazy(() => import('../pages/class-project-overview/page'));
 const BMCDetailPage = lazy(() => import('../pages/bmc-detail/page'));
+const PublicSurveyPage = lazy(() => import('../pages/public-survey/page'));
 
 const routes: RouteObject[] = [
   {
@@ -124,6 +125,10 @@ const routes: RouteObject[] = [
   {
     path: '/bmc-detail',
     element: <BMCDetailPage />,
+  },
+  {
+    path: '/s/:slug',
+    element: <PublicSurveyPage />,
   },
   {
     path: '*',

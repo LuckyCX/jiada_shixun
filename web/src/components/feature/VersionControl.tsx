@@ -1,5 +1,5 @@
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 
 export interface Version {
   id: string;
@@ -16,6 +16,10 @@ interface VersionControlProps {
   onRestore: (versionId: string) => void;
   onSaveVersion: (summary: string) => void;
   moduleName: string;
+  /** 默认 v1，与 versions（v2+ 保存记录）一并展示并支持回撤 */
+  initialVersion?: Version | null;
+  /** 为 false 时不渲染版本 UI（业务仍走服务端持久化） */
+  enabled?: boolean;
 }
 
 export default function VersionControl({
@@ -23,8 +27,18 @@ export default function VersionControl({
   currentVersion,
   onRestore,
   onSaveVersion,
-  moduleName
+  moduleName,
+  initialVersion = null,
+  enabled = true,
 }: VersionControlProps) {
+  const historyVersions = useMemo(() => {
+    const saved = versions.filter((v) => v.versionNumber !== 1);
+    if (initialVersion) {
+      return [initialVersion, ...saved].sort((a, b) => a.versionNumber - b.versionNumber);
+    }
+    return versions;
+  }, [initialVersion, versions]);
+
   const [isOpen, setIsOpen] = useState(false);
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [saveSummary, setSaveSummary] = useState('');
@@ -44,12 +58,46 @@ export default function VersionControl({
     setIsOpen(false);
   };
 
-  const restoreTargetVersion = versions.find(v => v.id === showRestoreConfirm);
+  const restoreTargetVersion = historyVersions.find(v => v.id === showRestoreConfirm);
+
+  if (!enabled) return null;
 
   return (
     <>
       {/* 版本控制工具栏 */}
-       
+      <div className="bg-white border border-gray-200 rounded-xl p-4 flex items-center justify-between">
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 bg-gradient-to-br from-indigo-500 to-purple-500 rounded-lg flex items-center justify-center">
+              <i className="ri-git-branch-line text-white text-sm"></i>
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-bold text-gray-900">当前版本</span>
+                <span className="px-2 py-0.5 bg-indigo-100 text-indigo-700 text-xs font-bold rounded-full">
+                  v{currentVersion}
+                </span>
+              </div>
+              <p className="text-xs text-gray-500">{moduleName}</p>
+            </div>
+          </div>
+          <div className="h-8 w-px bg-gray-200"></div>
+          <button
+            onClick={() => setIsOpen(true)}
+            className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-200 transition-colors cursor-pointer whitespace-nowrap"
+          >
+            <i className="ri-history-line"></i>
+            历史版本 ({historyVersions.length})
+          </button>
+        </div>
+        <button
+          onClick={() => setShowSaveModal(true)}
+          className="px-4 py-2 bg-gradient-to-r from-indigo-500 to-purple-500 text-white text-sm font-medium rounded-lg hover:shadow-md transition-all cursor-pointer whitespace-nowrap flex items-center gap-2"
+        >
+          <i className="ri-save-line"></i>
+          保存当前版本
+        </button>
+      </div>
 
       {/* 历史版本侧边抽屉 */}
       {isOpen && (
@@ -69,19 +117,18 @@ export default function VersionControl({
                   <i className="ri-close-line text-xl"></i>
                 </button>
               </div>
-              <p className="text-sm text-gray-500">共 {versions.length} 个历史版本，点击版本卡片可回撤</p>
+              <p className="text-sm text-gray-500">共 {historyVersions.length} 个历史版本，点击版本卡片可回撤</p>
             </div>
 
             <div className="flex-1 overflow-y-auto py-1 px-6">
-              {versions.length === 0 ? (
+              {historyVersions.length === 0 ? (
                 <div className="text-center py-12">
                   <i className="ri-history-line text-4xl text-gray-300 block mb-3"></i>
                   <p className="text-sm text-gray-500">暂无历史版本</p>
-                  <p className="text-xs text-gray-400 mt-1">点击"保存当前版本"创建第一个版本</p>
                 </div>
               ) : (
                 <div className="space-y-3">
-                  {versions.map((version) => {
+                  {historyVersions.map((version) => {
                     const isCurrent = version.versionNumber === currentVersion;
                     const isHovered = hoveredVersionId === version.id;
                     return (

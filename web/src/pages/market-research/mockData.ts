@@ -7,7 +7,7 @@ export const defaultPlan: ResearchPlan = {
   members: [
     { role: '问卷设计', member: '李娜' },
     { role: '数据收集', member: '张明' },
-    { role: '数据整理', member: '王强' },
+    { role: '数据整理与上传', member: '王强' },
     { role: '报告撰写', member: '陈雪' },
   ],
   startDate: '2024-03-01',

@@ -1211,7 +1211,7 @@ export default function StudentCenterPage() {
   const isCurrentStudentTeamLeader = Boolean(
     overviewMyTeam?.leaderStudentId === currentStudentId ||
     overviewMyTeam?.members.some((member) => {
-      const memberId = String(member.studentId || member.id || '');
+      const memberId = String(member.id || '');
       return memberId === currentStudentId && member.isTeamLeader;
     })
   );
@@ -1417,7 +1417,29 @@ export default function StudentCenterPage() {
           />
         );
       case 'module-market':
-        return <MarketResearchModule key={selectedClassId} onTaskComplete={() => completeActiveTrainingTask('market')} />;
+        return (
+          <MarketResearchModule
+            key={selectedClassId}
+            classId={selectedClassId}
+            isTeamLeader={isCurrentStudentTeamLeader}
+            stagePeriod={
+              getStageDateSetting('market')?.startDate && getStageDateSetting('market')?.deadlineDate
+                ? {
+                    startDate: getStageDateSetting('market')!.startDate!,
+                    deadlineDate: getStageDateSetting('market')!.deadlineDate!,
+                  }
+                : null
+            }
+            teamMembers={
+              overviewMyTeam?.members.map((m) => ({
+                id: String(m.id),
+                name: m.name,
+              })) ?? []
+            }
+            hasConfirmedTeam={Boolean(overviewMyTeam)}
+            onTaskComplete={() => completeActiveTrainingTask('market')}
+          />
+        );
       case 'module-product':
         return <ProductDesignModule key={selectedClassId} onTaskComplete={() => completeActiveTrainingTask('product')} />;
       case 'module-business':

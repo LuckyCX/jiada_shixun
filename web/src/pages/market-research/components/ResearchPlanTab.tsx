@@ -8,6 +8,7 @@ interface Props {
 }
 
 const METHODS = ['线上问卷', '用户访谈', '竞品分析', '行业报告', '数据爬取', '实地观察'];
+const PRESET_ROLES = ['问卷设计', '数据收集', '数据整理与上传', '报告撰写'];
 const MEMBERS_OPTIONS = ['李娜', '张明', '王强', '陈雪', '刘洋', '赵磊'];
 
 export default function ResearchPlanTab({ plan, onChange }: Props) {
