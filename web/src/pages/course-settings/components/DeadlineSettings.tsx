@@ -3,19 +3,21 @@ import { DatePicker, InputNumber, Switch } from 'antd';
 import dayjs from 'dayjs';
 import type { CourseSettingStage, CourseStageSetting } from '../../../lib/courseSettingsApi';
 
+type PrerequisiteStage = {
+  stageName: string;
+  startDate: string;
+  deadlineDate: string;
+  durationDays: number;
+  configured: boolean;
+  onConfigure: () => void;
+};
+
 type DeadlineSettingsProps = {
   stage: CourseSettingStage;
   setting: CourseStageSetting;
   defaultStartDate: string;
   saving?: boolean;
-  prerequisite?: {
-    stageName: string;
-    startDate: string;
-    deadlineDate: string;
-    durationDays: number;
-    configured: boolean;
-    onConfigure: () => void;
-  } | null;
+  prerequisites?: PrerequisiteStage[];
   onSave: (input: {
     startDate: string;
     deadlineDate: string;
@@ -42,7 +44,7 @@ function calcDuration(startDate: string, deadlineDate: string) {
   return Math.floor((end - start) / 86400000) + 1;
 }
 
-export default function DeadlineSettings({ stage, setting, defaultStartDate, saving = false, prerequisite = null, onSave }: DeadlineSettingsProps) {
+export default function DeadlineSettings({ stage, setting, defaultStartDate, saving = false, prerequisites = [], onSave }: DeadlineSettingsProps) {
   const [startDate, setStartDate] = useState(setting.startDate || defaultStartDate || todayDate());
   const [deadlineDate, setDeadlineDate] = useState(setting.deadlineDate || '');
   const [reminderDays, setReminderDays] = useState(setting.reminderDays ?? 3);
@@ -58,10 +60,17 @@ export default function DeadlineSettings({ stage, setting, defaultStartDate, sav
   }, [defaultStartDate, setting]);
 
   const durationDays = useMemo(() => calcDuration(startDate, deadlineDate), [deadlineDate, startDate]);
+  const reminderMaxDays = durationDays > 0 ? Math.min(30, Math.max(0, durationDays - 1)) : 30;
   const reminderDate = useMemo(() => {
     if (!deadlineDate || !reminderEnabled) return '';
     return addDays(deadlineDate, -Math.max(0, reminderDays));
   }, [deadlineDate, reminderDays, reminderEnabled]);
+
+  useEffect(() => {
+    if (durationDays > 0 && reminderDays > reminderMaxDays) {
+      setReminderDays(reminderMaxDays);
+    }
+  }, [durationDays, reminderDays, reminderMaxDays]);
 
   const handleSave = async () => {
     if (!deadlineDate) {
@@ -70,6 +79,10 @@ export default function DeadlineSettings({ stage, setting, defaultStartDate, sav
     }
     if (durationDays <= 0) {
       setMessage('截止日期不能早于开始日期');
+      return;
+    }
+    if (reminderDays >= durationDays) {
+      setMessage(`提前提醒天数必须小于任务时长，当前最多 ${reminderMaxDays} 天`);
       return;
     }
     setMessage('');
@@ -131,7 +144,8 @@ export default function DeadlineSettings({ stage, setting, defaultStartDate, sav
             <div className="flex items-center gap-2">
               <InputNumber
                 min={0}
-                max={30}
+                max={reminderMaxDays}
+                precision={0}
                 value={reminderDays}
                 onChange={(value) => setReminderDays(Number(value || 0))}
                 disabled={!reminderEnabled}
@@ -183,43 +197,52 @@ export default function DeadlineSettings({ stage, setting, defaultStartDate, sav
           </div>
         </div>
       </div>
-      {prerequisite && (
+      {prerequisites.length > 0 && (
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
           <div className="flex items-center justify-between gap-4 mb-3">
             <div>
-              <div className="text-xs text-gray-400">前置环节日期节点</div>
-              <div className="text-sm font-bold text-gray-900 mt-0.5">{prerequisite.stageName}</div>
+              <div className="text-xs text-gray-400">前置流程日期节点</div>
+              <div className="text-sm font-bold text-gray-900 mt-0.5">共 {prerequisites.length} 个前置流程</div>
             </div>
-            {!prerequisite.configured && (
-              <button
-                type="button"
-                onClick={prerequisite.onConfigure}
-                className="px-3 py-1.5 bg-teal-500 text-white text-xs font-medium rounded-lg hover:bg-teal-600 cursor-pointer"
-              >
-                去配置
-              </button>
-            )}
           </div>
-          {prerequisite.configured ? (
-            <div className="grid grid-cols-3 gap-3">
-              <div className="rounded-xl bg-gray-50 px-3 py-2">
-                <div className="text-xs text-gray-400">开始日期</div>
-                <div className="text-xs font-semibold text-gray-700">{prerequisite.startDate || '未配置'}</div>
+          <div className="space-y-3">
+            {prerequisites.map((prerequisite) => (
+              <div key={prerequisite.stageName} className="rounded-xl border border-gray-100 p-3">
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <div className="text-sm font-semibold text-gray-800">{prerequisite.stageName}</div>
+                  {!prerequisite.configured && (
+                    <button
+                      type="button"
+                      onClick={prerequisite.onConfigure}
+                      className="px-3 py-1.5 bg-teal-500 text-white text-xs font-medium rounded-lg hover:bg-teal-600 cursor-pointer"
+                    >
+                      去配置
+                    </button>
+                  )}
+                </div>
+                {prerequisite.configured ? (
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="rounded-xl bg-gray-50 px-3 py-2">
+                      <div className="text-xs text-gray-400">开始日期</div>
+                      <div className="text-xs font-semibold text-gray-700">{prerequisite.startDate || '未配置'}</div>
+                    </div>
+                    <div className="rounded-xl bg-gray-50 px-3 py-2">
+                      <div className="text-xs text-gray-400">截止日期</div>
+                      <div className="text-xs font-semibold text-gray-700">{prerequisite.deadlineDate || '未配置'}</div>
+                    </div>
+                    <div className="rounded-xl bg-gray-50 px-3 py-2">
+                      <div className="text-xs text-gray-400">任务时长</div>
+                      <div className="text-xs font-semibold text-gray-700">{prerequisite.durationDays || 0} 天</div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50 px-4 py-5 text-center text-sm text-gray-500">
+                    前置流程尚未配置日期，请先完成日期设置
+                  </div>
+                )}
               </div>
-              <div className="rounded-xl bg-gray-50 px-3 py-2">
-                <div className="text-xs text-gray-400">截止日期</div>
-                <div className="text-xs font-semibold text-gray-700">{prerequisite.deadlineDate || '未配置'}</div>
-              </div>
-              <div className="rounded-xl bg-gray-50 px-3 py-2">
-                <div className="text-xs text-gray-400">任务时长</div>
-                <div className="text-xs font-semibold text-gray-700">{prerequisite.durationDays || 0} 天</div>
-              </div>
-            </div>
-          ) : (
-            <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50 px-4 py-5 text-center text-sm text-gray-500">
-              前置环节尚未配置日期，请先完成前置环节日期设置
-            </div>
-          )}
+            ))}
+          </div>
         </div>
       )}
     </div>

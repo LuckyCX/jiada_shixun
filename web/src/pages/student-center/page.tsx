@@ -14,7 +14,7 @@ import {
 } from '../../lib/teamFormationApi';
 import StudentClassSwitcher from './components/StudentClassSwitcher';
 import TeamFormationModule from './components/TeamFormationModule';
-import IdeationModule, { type IdeationLearningResource } from './components/IdeationModule';
+import IdeationModule, { type IdeationLearningResource, type IdeationModuleTab } from './components/IdeationModule';
 import MarketResearchModule from './components/MarketResearchModule';
 import ProductDesignModule from './components/ProductDesignModule';
 import BusinessModelModule from './components/BusinessModelModule';
@@ -39,7 +39,7 @@ import {
   TRAINING_ID_TO_TAB,
   type StudentTodoTask,
 } from '../../lib/personalClassTaskApi';
-import { fetchStudentIdeationTeamPrerequisites } from '../../lib/studentIdeationApi';
+import { fetchStudentIdeationProjectTopic, fetchStudentIdeationTeamPrerequisites } from '../../lib/studentIdeationApi';
 
 const TRAINING_MODULE_ORDER = ['team', 'ideation', 'market', 'product', 'business', 'simulation', 'plan'] as const;
 
@@ -62,6 +62,7 @@ const TAB_TO_MODULE_ID: Record<string, string> = {
   'module-simulation': 'simulation',
   'module-plan': 'plan',
 };
+const OVERVIEW_PANEL_PAGE_SIZE = 5;
 
 type TabType =
   | 'overview'
@@ -176,6 +177,11 @@ export default function StudentCenterPage() {
   const navigate = useNavigate();
   const tabParam = searchParams.get('tab');
   const initialModule = searchParams.get('module');
+  const ideationTabParam = searchParams.get('ideationTab');
+  const initialIdeationTab: IdeationModuleTab | undefined =
+    ideationTabParam === 'examples' || ideationTabParam === 'methods' || ideationTabParam === 'confirm'
+      ? ideationTabParam
+      : undefined;
 
   const getInitialTab = (): TabType => {
     // 优先读取 tab 参数（直接传入 tab key，如 module-business）
@@ -235,7 +241,10 @@ export default function StudentCenterPage() {
   const [taskSubmitting, setTaskSubmitting] = useState(false);
   const [resourceProgressOverrides, setResourceProgressOverrides] = useState<Record<string, ResourceProgress>>({});
   const [overviewMyTeam, setOverviewMyTeam] = useState<GroupingTeam | null>(null);
+  const [ideationTopicApproved, setIdeationTopicApproved] = useState(false);
   const [overviewPanelTab, setOverviewPanelTab] = useState<'notifications' | 'tasks'>('notifications');
+  const [overviewNotificationPage, setOverviewNotificationPage] = useState(1);
+  const [overviewTaskPage, setOverviewTaskPage] = useState(1);
   const teamGuideShownRef = useRef(false);
   const closingLearningRef = useRef(false);
 
@@ -289,6 +298,24 @@ export default function StudentCenterPage() {
   useEffect(() => {
     refreshTeamFormationComplete();
   }, [refreshTeamFormationComplete]);
+
+  useEffect(() => {
+    if (!selectedClassId) {
+      setIdeationTopicApproved(false);
+      return;
+    }
+    let cancelled = false;
+    fetchStudentIdeationProjectTopic(selectedClassId)
+      .then((res) => {
+        if (!cancelled) setIdeationTopicApproved(res.topic?.status === 'approved');
+      })
+      .catch(() => {
+        if (!cancelled) setIdeationTopicApproved(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedClassId]);
 
   useEffect(() => {
     if (!selectedClassId) {
@@ -365,6 +392,7 @@ export default function StudentCenterPage() {
   }, []);
   const isModuleCompletedByProgress = (moduleId: string) => {
     if (moduleId === 'team') return teamFormationComplete;
+    if (moduleId === 'ideation') return ideationTopicApproved || (moduleProgressState.ideation || 0) >= (MODULE_COMPLETE_THRESHOLD.ideation ?? 99);
     const val = moduleProgressState[moduleId] || 0;
     return val >= (MODULE_COMPLETE_THRESHOLD[moduleId] ?? 99);
   };
@@ -385,6 +413,13 @@ export default function StudentCenterPage() {
     const setting = getStageDateSetting(moduleId);
     if (!setting?.startDate) return '该实训阶段尚未配置开始日期';
     return `该实训阶段将于 ${setting.startDate} 开放`;
+  };
+
+  const getStagePeriodText = (moduleId: string) => {
+    const setting = getStageDateSetting(moduleId);
+    if (!setting?.startDate && !setting?.deadlineDate) return '未配置周期';
+    if (setting.startDate && setting.deadlineDate) return `${setting.startDate} 至 ${setting.deadlineDate}`;
+    return setting.startDate ? `开始：${setting.startDate}` : `截止：${setting.deadlineDate}`;
   };
 
   const getModuleProgressPercent = (moduleId: string): number => {
@@ -1121,6 +1156,7 @@ export default function StudentCenterPage() {
   }));
   const activeTodoTasks = todoTasks.filter((task) => !task.completed);
   const completedTodoTasks = todoTasks.filter((task) => task.completed);
+  const overviewTaskList = [...activeTodoTasks, ...completedTodoTasks];
   const linkedCourseTasks = todoTasks.filter((task) => task.resourceNodes.length > 0);
   const learningResourceCount = new Set(
     studentTodoTasks.flatMap((task) =>
@@ -1157,7 +1193,7 @@ export default function StudentCenterPage() {
       }
     }
     return n;
-  }, [teamFormationComplete, moduleProgressState]);
+  }, [ideationTopicApproved, teamFormationComplete, moduleProgressState]);
 
   const overallProgressPercent = Math.round((completedStagesCount / TRAINING_MODULE_ORDER.length) * 100);
 
@@ -1168,7 +1204,7 @@ export default function StudentCenterPage() {
     const inProgress = moduleProgress.find((m) => getModuleUnlockStatus(m.moduleId) === 'in_progress');
     if (inProgress) return inProgress.moduleName;
     return moduleProgress[moduleProgress.length - 1]?.moduleName ?? '—';
-  }, [teamFormationComplete, moduleProgressState, moduleProgress]);
+  }, [ideationTopicApproved, teamFormationComplete, moduleProgressState, moduleProgress]);
 
   const overviewHeroTitle =
     overviewMyTeam?.name?.trim() || selectedEnrollment?.className?.trim() || '我的实训项目';
@@ -1188,6 +1224,49 @@ export default function StudentCenterPage() {
   };
 
   const urgentCount = activeTodoTasks.filter((t) => t.priority === 'urgent' || t.priority === 'high').length;
+  const overviewNotificationTotalPages = Math.max(1, Math.ceil(notificationList.length / OVERVIEW_PANEL_PAGE_SIZE));
+  const overviewTaskTotalPages = Math.max(1, Math.ceil(overviewTaskList.length / OVERVIEW_PANEL_PAGE_SIZE));
+  const overviewPagedNotifications = notificationList.slice(
+    (overviewNotificationPage - 1) * OVERVIEW_PANEL_PAGE_SIZE,
+    overviewNotificationPage * OVERVIEW_PANEL_PAGE_SIZE
+  );
+  const overviewPagedTasks = overviewTaskList.slice(
+    (overviewTaskPage - 1) * OVERVIEW_PANEL_PAGE_SIZE,
+    overviewTaskPage * OVERVIEW_PANEL_PAGE_SIZE
+  );
+
+  useEffect(() => {
+    setOverviewNotificationPage((page) => Math.min(page, overviewNotificationTotalPages));
+  }, [overviewNotificationTotalPages]);
+
+  useEffect(() => {
+    setOverviewTaskPage((page) => Math.min(page, overviewTaskTotalPages));
+  }, [overviewTaskTotalPages]);
+
+  const renderOverviewPagination = (page: number, totalPages: number, onChange: (page: number) => void) => {
+    if (totalPages <= 1) return null;
+    return (
+      <div className="mt-3 flex items-center justify-end gap-2 border-t border-gray-100 pt-3">
+        <button
+          type="button"
+          disabled={page <= 1}
+          onClick={() => onChange(Math.max(1, page - 1))}
+          className="px-2.5 py-1.5 text-xs rounded-lg border border-gray-200 text-gray-600 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-gray-50 cursor-pointer"
+        >
+          上一页
+        </button>
+        <span className="text-xs text-gray-400">{page}/{totalPages}</span>
+        <button
+          type="button"
+          disabled={page >= totalPages}
+          onClick={() => onChange(Math.min(totalPages, page + 1))}
+          className="px-2.5 py-1.5 text-xs rounded-lg border border-gray-200 text-gray-600 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-gray-50 cursor-pointer"
+        >
+          下一页
+        </button>
+      </div>
+    );
+  };
 
   if (activeLearningKnowledge) {
     return (
@@ -1328,9 +1407,13 @@ export default function StudentCenterPage() {
             classId={selectedClassId}
             learningResources={ideationLearningResources}
             isTeamLeader={isCurrentStudentTeamLeader}
+            initialTab={initialIdeationTab}
             onCheckTeamPrerequisites={checkIdeationTeamPrerequisites}
             onOpenLearningResource={openIdeationLearningResource}
-            onTaskComplete={() => completeActiveTrainingTask('ideation')}
+            onTaskComplete={() => {
+              setIdeationTopicApproved(true);
+              completeActiveTrainingTask('ideation');
+            }}
           />
         );
       case 'module-market':
@@ -1370,17 +1453,6 @@ export default function StudentCenterPage() {
           )}
         </div>
 
-        {!sidebarCollapsed && (
-          <div className="mx-3 mt-4 p-3 bg-gradient-to-br from-teal-50 to-cyan-50 rounded-xl border border-teal-100">
-            <div className="flex items-center gap-2 mb-2">
-              <div className="w-8 h-8 bg-gradient-to-br from-teal-500 to-cyan-500 rounded-full flex items-center justify-center text-white text-sm font-bold flex-shrink-0">{studentAvatarChar}</div>
-              <div className="overflow-hidden">
-                <div className="text-xs font-bold text-gray-900 truncate">{studentDisplayName}</div>
-                <div className="text-xs text-teal-600 truncate">{overallProgress.currentLevel}</div>
-              </div>
-            </div>
-          </div>
-        )}
 
         <nav className="flex-1 py-3 overflow-y-auto">
           {!sidebarCollapsed && <div className="px-4 py-2"><span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">学习管理</span></div>}
@@ -1391,7 +1463,7 @@ export default function StudentCenterPage() {
               >
                 <div className="w-5 h-5 flex items-center justify-center flex-shrink-0"><i className={`${item.icon} text-base`}></i></div>
                 {!sidebarCollapsed && <span className="text-sm font-medium">{item.label}</span>}
-                {item.key === 'notifications' && unreadCount > 0 && (
+                {item.key === 'overview' && unreadCount > 0 && (
                   <span className={`absolute ${sidebarCollapsed ? 'top-1 right-1' : 'top-2 right-2'} w-5 h-5 bg-red-500 text-white text-xs font-bold rounded-full flex items-center justify-center`}>
                     {unreadCount > 9 ? '9+' : unreadCount}
                   </span>
@@ -1410,6 +1482,7 @@ export default function StudentCenterPage() {
               const ui = getSidebarModuleUi(moduleId);
               const isActive = activeTab === item.key;
               const statusIconClass = isActive ? 'text-white' : ui.locked ? 'text-gray-300' : 'text-teal-500';
+              const periodText = getStagePeriodText(moduleId);
               return (
                 <button
                   key={item.key}
@@ -1425,28 +1498,35 @@ export default function StudentCenterPage() {
                           : '请先完成上一模块'
                         : item.label
                   }
-                  className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl transition-all ${ui.locked ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'} ${isActive ? 'bg-gradient-to-r from-teal-500 to-cyan-600 text-white shadow-sm' : ui.locked ? 'text-gray-400' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'} ${sidebarCollapsed ? 'justify-center' : ''}`}
+                  className={`w-full px-3 py-2.5 rounded-xl transition-all ${ui.locked ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'} ${isActive ? 'bg-gradient-to-r from-teal-500 to-cyan-600 text-white shadow-sm' : ui.locked ? 'text-gray-400' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'} ${sidebarCollapsed ? 'flex items-center justify-center' : 'flex flex-col items-stretch'}`}
                 >
-                  {!sidebarCollapsed && (
-                    <span className={`text-xs font-bold w-4 flex-shrink-0 ${isActive ? 'text-white/70' : 'text-gray-400'}`}>
-                      {index + 1}
-                    </span>
-                  )}
-                  <div className="w-5 h-5 flex items-center justify-center flex-shrink-0">
-                    <i className={`${item.icon} text-base`}></i>
-                  </div>
-                  {!sidebarCollapsed && (
+                  {sidebarCollapsed ? (
+                    <div className="w-5 h-5 flex items-center justify-center flex-shrink-0">
+                      <i className={`${item.icon} text-base`}></i>
+                    </div>
+                  ) : (
                     <>
-                      <span className="text-xs font-medium flex-1 text-left leading-tight">{item.label}</span>
-                      <span className={`flex-shrink-0 ${statusIconClass}`}>
-                        {ui.status === 'completed' && (
-                          <i className={`ri-checkbox-circle-fill text-sm ${isActive ? 'text-green-200' : 'text-green-500'}`}></i>
-                        )}
-                        {ui.status === 'in_progress' && ui.isTeam && (
-                          <i className={`ri-time-line text-sm ${isActive ? 'text-white/90' : ''}`}></i>
-                        )}
-                        {ui.status === 'locked' && <i className="ri-lock-line text-sm"></i>}
-                      </span>
+                      <div className="flex items-center gap-2.5 w-full">
+                        <span className={`text-xs font-bold w-4 flex-shrink-0 ${isActive ? 'text-white/70' : 'text-gray-400'}`}>
+                          {index + 1}
+                        </span>
+                        <div className="w-5 h-5 flex items-center justify-center flex-shrink-0">
+                          <i className={`${item.icon} text-base`}></i>
+                        </div>
+                        <span className="text-xs font-medium flex-1 text-left leading-tight truncate">{item.label}</span>
+                        <span className={`flex-shrink-0 ${statusIconClass}`}>
+                          {ui.status === 'completed' && (
+                            <i className={`ri-checkbox-circle-fill text-sm ${isActive ? 'text-green-200' : 'text-green-500'}`}></i>
+                          )}
+                          {ui.status === 'in_progress' && ui.isTeam && (
+                            <i className={`ri-time-line text-sm ${isActive ? 'text-white/90' : ''}`}></i>
+                          )}
+                          {ui.status === 'locked' && <i className="ri-lock-line text-sm"></i>}
+                        </span>
+                      </div>
+                      <div className={`mt-1 pl-[6px] text-left text-[10px] leading-tight break-words ${isActive ? 'text-white/70' : 'text-gray-400'}`}>
+                        {periodText}
+                      </div>
                     </>
                   )}
                 </button>
@@ -1656,70 +1736,96 @@ export default function StudentCenterPage() {
                       <p className="text-sm font-medium text-gray-700">暂无系统通知</p>
                     </div>
                   ) : (
-                    <div className="space-y-2.5">
-                      {notificationList.slice(0, 5).map((notice) => (
-                        <div
-                          key={notice.id}
-                          className={`flex items-start gap-3 p-3.5 rounded-xl border transition-all ${
-                            notice.isRead ? 'border-gray-100 bg-gray-50/50' : 'border-teal-200 bg-teal-50/50'
-                          }`}
-                        >
-                          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-teal-500 to-cyan-600 flex items-center justify-center flex-shrink-0">
-                            <i className="ri-notification-3-line text-white text-sm"></i>
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2 mb-0.5 flex-wrap">
-                              <span className="font-semibold text-gray-900 text-sm truncate">{notice.title}</span>
-                              <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${getNotificationTypeStyle(notice.type)}`}>
-                                {getNotificationTypeText(notice.type)}
-                              </span>
-                              {!notice.isRead && (
-                                <span className="px-1.5 py-0.5 bg-red-100 text-red-600 rounded text-xs font-bold">未读</span>
-                              )}
+                    <>
+                      <div className="space-y-2.5">
+                        {overviewPagedNotifications.map((notice) => (
+                          <div
+                            key={notice.id}
+                            className={`flex items-start gap-3 p-3.5 rounded-xl border transition-all ${
+                              notice.isRead ? 'border-gray-100 bg-gray-50/50' : 'border-teal-200 bg-teal-50/50'
+                            }`}
+                          >
+                            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-teal-500 to-cyan-600 flex items-center justify-center flex-shrink-0">
+                              <i className="ri-notification-3-line text-white text-sm"></i>
                             </div>
-                            <p className="text-xs text-gray-500 line-clamp-2">{notice.content}</p>
-                            <div className="text-xs text-gray-400 mt-1">{notice.timestamp}</div>
-                          </div>
-                          <div className="flex items-center gap-2 flex-shrink-0">
-                            {!notice.isRead && (
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 mb-0.5 flex-wrap">
+                                <span className="font-semibold text-gray-900 text-sm truncate">{notice.title}</span>
+                                <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${getNotificationTypeStyle(notice.type)}`}>
+                                  {getNotificationTypeText(notice.type)}
+                                </span>
+                                {!notice.isRead && (
+                                  <span className="px-1.5 py-0.5 bg-red-100 text-red-600 rounded text-xs font-bold">未读</span>
+                                )}
+                              </div>
+                              <p className="text-xs text-gray-500 line-clamp-2">{notice.content}</p>
+                              <div className="text-xs text-gray-400 mt-1">{notice.timestamp}</div>
+                            </div>
+                            <div className="flex items-center gap-2 flex-shrink-0">
+                              {!notice.isRead && (
+                                <button
+                                  type="button"
+                                  onClick={() => markAsRead(notice.id)}
+                                  className="px-2.5 py-1.5 bg-white border border-teal-200 text-teal-700 text-xs rounded-lg hover:bg-teal-50 cursor-pointer whitespace-nowrap"
+                                >
+                                  已读
+                                </button>
+                              )}
                               <button
                                 type="button"
-                                onClick={() => markAsRead(notice.id)}
-                                className="px-2.5 py-1.5 bg-white border border-teal-200 text-teal-700 text-xs rounded-lg hover:bg-teal-50 cursor-pointer whitespace-nowrap"
+                                onClick={() => {
+                                  if (notice.relatedModule === 'personal_class_task') {
+                                    setOverviewPanelTab('tasks');
+                                    return;
+                                  }
+                                  goFromNotificationLink(notice.relatedLink || '/student-center?tab=overview');
+                                }}
+                                className="px-2.5 py-1.5 bg-teal-500 text-white text-xs rounded-lg hover:bg-teal-600 cursor-pointer whitespace-nowrap"
                               >
-                                已读
+                                查看
                               </button>
-                            )}
-                            <button
-                              type="button"
-                              onClick={() => {
-                                if (notice.relatedModule === 'personal_class_task') {
-                                  setOverviewPanelTab('tasks');
-                                  return;
-                                }
-                                goFromNotificationLink(notice.relatedLink || '/student-center?tab=overview');
-                              }}
-                              className="px-2.5 py-1.5 bg-teal-500 text-white text-xs rounded-lg hover:bg-teal-600 cursor-pointer whitespace-nowrap"
-                            >
-                              查看
-                            </button>
+                            </div>
                           </div>
-                        </div>
-                      ))}
-                    </div>
+                        ))}
+                      </div>
+                      {renderOverviewPagination(overviewNotificationPage, overviewNotificationTotalPages, setOverviewNotificationPage)}
+                    </>
                   )
                 ) : (
                   <>
-                    {activeTodoTasks.length === 0 ? (
+                    {overviewTaskList.length === 0 ? (
                       <div className="py-8 text-center">
                         <div className="w-14 h-14 bg-green-50 rounded-full flex items-center justify-center mx-auto mb-3">
                           <i className="ri-checkbox-circle-line text-2xl text-green-500"></i>
                         </div>
-                        <p className="text-sm font-medium text-gray-700">所有任务已完成</p>
+                        <p className="text-sm font-medium text-gray-700">暂无任务</p>
                       </div>
                     ) : (
                       <div className="space-y-2.5">
-                        {activeTodoTasks.map((task) => {
+                        {overviewPagedTasks.map((task) => {
+                          if (task.completed) {
+                            return (
+                              <div
+                                key={task.id}
+                                className="flex items-center gap-3 p-3.5 rounded-xl border border-gray-100 bg-gray-50/70 opacity-70"
+                              >
+                                <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 bg-gray-200 text-gray-500">
+                                  <i className="ri-task-line text-sm"></i>
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-2 mb-0.5 flex-wrap">
+                                    <span className="font-semibold text-gray-600 text-sm truncate">{task.title}</span>
+                                    <span className="px-1.5 py-0.5 rounded text-xs font-medium flex-shrink-0 bg-gray-100 text-gray-500">
+                                      已完成
+                                    </span>
+                                  </div>
+                                  <div className="flex items-center gap-3 text-xs text-gray-400">
+                                    <span className="truncate"><i className="ri-folder-line mr-1"></i>{task.module}</span>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          }
                           const isUrgent = task.priority === 'urgent' || task.priority === 'high';
                           const lockHint = task.trainingModuleId
                             ? getPrerequisiteStageHint(task.trainingModuleId)
@@ -1804,37 +1910,7 @@ export default function StudentCenterPage() {
                         })}
                       </div>
                     )}
-                    {completedTodoTasks.length > 0 && (
-                      <div className={`${activeTodoTasks.length > 0 ? 'mt-4 pt-4 border-t border-gray-100' : 'mt-3'}`}>
-                        <div className="flex items-center gap-2 mb-2">
-                          <i className="ri-checkbox-circle-line text-gray-400"></i>
-                          <span className="text-xs font-semibold text-gray-500">已完成任务</span>
-                        </div>
-                        <div className="space-y-2">
-                          {completedTodoTasks.map((task) => (
-                            <div
-                              key={task.id}
-                              className="flex items-center gap-3 p-3.5 rounded-xl border border-gray-100 bg-gray-50/70 opacity-70"
-                            >
-                              <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 bg-gray-200 text-gray-500">
-                                <i className="ri-task-line text-sm"></i>
-                              </div>
-                              <div className="flex-1 min-w-0">
-                                <div className="flex items-center gap-2 mb-0.5 flex-wrap">
-                                  <span className="font-semibold text-gray-600 text-sm truncate">{task.title}</span>
-                                  <span className="px-1.5 py-0.5 rounded text-xs font-medium flex-shrink-0 bg-gray-100 text-gray-500">
-                                    已完成
-                                  </span>
-                                </div>
-                                <div className="flex items-center gap-3 text-xs text-gray-400">
-                                  <span className="truncate"><i className="ri-folder-line mr-1"></i>{task.module}</span>
-                                </div>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
+                    {renderOverviewPagination(overviewTaskPage, overviewTaskTotalPages, setOverviewTaskPage)}
                     {activeTodoTasks.length > 0 && (
                       <div className="mt-3 pt-3 border-t border-gray-100">
                         <p className="text-xs text-gray-400">

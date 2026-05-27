@@ -1,32 +1,53 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { message } from 'antd';
 import ReviewModal from './ReviewModal';
 import TopicDetailModal from './TopicDetailModal';
-import { mockTopicSubmissions } from './mockData';
 import type { TopicSubmission } from './types';
+import type { TeacherPersonalClassRow } from '../../teacherPortalApi';
+import {
+  fetchTeacherIdeationProjectTopics,
+  reviewTeacherIdeationProjectTopic,
+} from '../../../../lib/studentIdeationApi';
 
-export default function TopicReview() {
-  const [submissions, setSubmissions] = useState<TopicSubmission[]>(mockTopicSubmissions);
+type TopicReviewProps = {
+  personalClass: TeacherPersonalClassRow;
+};
+
+export default function TopicReview({ personalClass }: TopicReviewProps) {
+  const classId = personalClass.id;
+  const [submissions, setSubmissions] = useState<TopicSubmission[]>([]);
   const [selectedTopic, setSelectedTopic] = useState<TopicSubmission | null>(null);
   const [reviewModalOpen, setReviewModalOpen] = useState(false);
   const [detailModalOpen, setDetailModalOpen] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  const handleReview = (topicId: string, status: 'approved' | 'rejected', comment: string) => {
-    setSubmissions(prev =>
-      prev.map(item =>
-        item.id === topicId
-          ? {
-              ...item,
-              status,
-              reviewComment: comment,
-              reviewTime: new Date().toISOString(),
-            }
-          : item
-      )
-    );
-    setReviewModalOpen(false);
-    setSelectedTopic(null);
+  const loadTopics = useCallback(() => {
+    setLoading(true);
+    return fetchTeacherIdeationProjectTopics(classId)
+      .then((res) => setSubmissions(res.topics || []))
+      .catch((e) => {
+        setSubmissions([]);
+        message.error(e instanceof Error ? e.message : '加载选题提交失败');
+      })
+      .finally(() => setLoading(false));
+  }, [classId]);
+
+  useEffect(() => {
+    void loadTopics();
+  }, [loadTopics]);
+
+  const handleReview = async (topicId: string, status: 'approved' | 'rejected', comment: string) => {
+    try {
+      const topic = await reviewTeacherIdeationProjectTopic(classId, topicId, { status, comment });
+      setSubmissions((prev) => prev.map((item) => (item.id === topicId ? topic : item)));
+      setReviewModalOpen(false);
+      setSelectedTopic(null);
+      message.success(status === 'approved' ? '选题已通过' : '选题已退回');
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '提交审核失败');
+    }
   };
 
   const filteredSubmissions = submissions.filter(item => {
@@ -70,7 +91,7 @@ export default function TopicReview() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold mb-2">选题审核</h1>
-            <p className="text-purple-100 text-sm">审核团队项目选题，通过后团队可进入下一阶段</p>
+            <p className="text-purple-100 text-sm">当前班级：{personalClass.name}，审核通过后团队可进入下一阶段</p>
           </div>
           <div className="flex gap-4">
             <div className="bg-white/20 backdrop-blur-sm rounded-xl px-6 py-3 text-center">
@@ -135,7 +156,11 @@ export default function TopicReview() {
 
         {/* Submissions List */}
         <div className="grid gap-4">
-          {filteredSubmissions.length === 0 ? (
+          {loading ? (
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-12 text-center">
+              <p className="text-gray-500">加载中...</p>
+            </div>
+          ) : filteredSubmissions.length === 0 ? (
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-12 text-center">
               <i className="ri-inbox-line text-6xl text-gray-300 mb-4"></i>
               <p className="text-gray-500">暂无符合条件的选题提交</p>

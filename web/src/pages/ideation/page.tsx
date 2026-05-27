@@ -28,12 +28,12 @@ export default function Ideation() {
   ]);
   const [ideasCurrentVersion, setIdeasCurrentVersion] = useState(1);
 
-  // 版本控制状态 - 项目主题
+  // 版本控制状态 - 项目选题
   const [themeVersions, setThemeVersions] = useState<Version[]>([
     {
       id: 1,
       versionNumber: 1,
-      description: '初始版本 - 项目主题',
+      description: '初始版本 - 项目选题',
       timestamp: new Date().toISOString(),
       author: '当前用户',
       data: { projectTheme: {} }
@@ -69,7 +69,7 @@ export default function Ideation() {
     }
   };
 
-  // 版本控制处理函数 - 项目主题
+  // 版本控制处理函数 - 项目选题
   const handleSaveThemeVersion = (description: string) => {
     const newVersion: Version = {
       id: themeVersions.length + 1,
@@ -471,7 +471,7 @@ export default function Ideation() {
         },
         {
           title: '环保教育游戏平台',
-          description: '通过游戏化的方式普及环保知识和理念的在线教育平台。平台开发了多款寓教于乐的环保主题游戏，如垃圾分类挑战、节能减排模拟、生态保护策略等。用户在游戏过程中学习环保知识，培养环保意识，养成绿色生活习惯。还设有排行榜、成就系统、社区交流等功能，增强用户参与的趣味性和持续性。',
+          description: '通过游戏化的方式普及环保知识和理念的在线教育平台。平台开发了多款寓教于乐的环保选题游戏，如垃圾分类挑战、节能减排模拟、生态保护策略等。用户在游戏过程中学习环保知识，培养环保意识，养成绿色生活习惯。还设有排行榜、成就系统、社区交流等功能，增强用户参与的趣味性和持续性。',
           tags: ['环保教育', '游戏化学习', '意识培养'],
           impact: '用户50万+，环保知识普及率提升80%'
         }
@@ -648,7 +648,7 @@ export default function Ideation() {
             }`}
           >
             <i className="ri-checkbox-circle-line mr-2"></i>
-            确定项目主题
+            确定项目选题
           </button>
         </div>
 
@@ -1073,14 +1073,14 @@ export default function Ideation() {
           </div>
         )}
 
-        {/* 确定项目主题 Tab */}
+        {/* 确定项目选题 Tab */}
         {activeTab === 'confirm' && (
           <div className="max-w-5xl mx-auto">
             <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8">
               {/* 版本控制工具栏 */}
               <div className="mb-8">
                 <VersionControl
-                  moduleName="项目主题"
+                  moduleName="项目选题"
                   currentVersion={themeCurrentVersion}
                   versions={themeVersions}
                   onSaveVersion={handleSaveThemeVersion}
@@ -1092,8 +1092,8 @@ export default function Ideation() {
                 <div className="w-16 h-16 bg-gradient-to-br from-orange-500 to-amber-500 rounded-2xl flex items-center justify-center text-white mx-auto mb-4">
                   <i className="ri-flag-line text-3xl"></i>
                 </div>
-                <h2 className="text-2xl font-bold text-gray-900 mb-2">确定项目主题</h2>
-                <p className="text-sm text-gray-600">经过头脑风暴和实例参考，现在让我们确定最终的项目主题</p>
+                <h2 className="text-2xl font-bold text-gray-900 mb-2">确定项目选题</h2>
+                <p className="text-sm text-gray-600">经过头脑风暴和实例参考，现在让我们确定最终的项目选题</p>
                 <p className="text-xs text-amber-600 mt-2">注意：队长需要设置项目信息，请确保每个文本框都满足最小字数要求</p>
               </div>
 
@@ -1229,7 +1229,7 @@ export default function Ideation() {
                   ) : (
                     <>
                       <i className="ri-check-line"></i>
-                      确认项目主题
+                      确认项目选题
                     </>
                   )}
                 </button>
@@ -1250,7 +1250,7 @@ export default function Ideation() {
         <div className="fixed bottom-8 right-8 bg-green-500 text-white px-6 py-4 rounded-xl shadow-2xl flex items-center gap-3 animate-bounce z-50">
           <i className="ri-checkbox-circle-fill text-2xl"></i>
           <div>
-            <p className="font-bold">项目主题已确认！</p>
+            <p className="font-bold">项目选题已确认！</p>
             <p className="text-sm opacity-90">可以开始下一阶段的工作了</p>
           </div>
         </div>

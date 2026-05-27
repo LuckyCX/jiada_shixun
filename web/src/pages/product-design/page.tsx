@@ -81,7 +81,7 @@ export default function ProductDesign() {
     {
       id: 2,
       title: '商品详情页设计',
-      description: '展示商品图片、价格、描述、评价等信息，绿色主题',
+      description: '展示商品图片、价格、描述、评价等信息，绿色选题',
       createdAt: '3天前',
       author: '王芳',
       type: 'uploaded',

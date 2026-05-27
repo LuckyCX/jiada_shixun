@@ -41,7 +41,7 @@ export const MOCK_COURSES: Course[] = [
     modules: 7,
     knowledgePoints: 45,
     description:
-      '以AI+乡村振兴为主题，探索数字技术赋能农业农村的创业机会，培养学生的社会责任感与创新创业能力。',
+      '以AI+乡村振兴为选题，探索数字技术赋能农业农村的创业机会，培养学生的社会责任感与创新创业能力。',
     tags: ['乡村振兴', '数字农业', '社会企业'],
   },
   {

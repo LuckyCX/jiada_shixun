@@ -1125,7 +1125,7 @@ function ChallengeTabInline({ savedTheme }: { savedTheme: any }) {
               <i className="ri-magic-line text-indigo-600 text-lg"></i>
               <div>
                 <p className="text-sm font-medium text-indigo-900">已自动填充项目信息</p>
-                <p className="text-xs text-indigo-600 mt-0.5">来源：创新思维模块中确定的项目主题，可手动修改</p>
+                <p className="text-xs text-indigo-600 mt-0.5">来源：创新思维模块中确定的项目选题，可手动修改</p>
               </div>
             </div>
           )}
@@ -1477,7 +1477,7 @@ export default function MarketResearchModule({ onTaskComplete }: MarketResearchM
     setTimeout(() => setToast(''), 2500);
   };
 
-  // 从创新思维模块读取已确定的项目主题
+  // 从创新思维模块读取已确定的项目选题
   const savedTheme = (() => {
     try {
       const raw = localStorage.getItem('ideation_project_theme');
@@ -1864,7 +1864,7 @@ export default function MarketResearchModule({ onTaskComplete }: MarketResearchM
 
       {/* Module Header */}
       <div className="bg-gradient-to-br from-green-500 to-green-600 rounded-2xl shadow-xl p-8 text-white">
-        <div className="flex items-start justify-between mb-6">
+        <div className="flex items-start justify-between  ">
           <div className="flex items-center gap-4">
             <div className="w-16 h-16 bg-white/20 rounded-2xl flex items-center justify-center backdrop-blur-sm">
               <i className="ri-bar-chart-line text-3xl"></i>
@@ -1878,7 +1878,7 @@ export default function MarketResearchModule({ onTaskComplete }: MarketResearchM
             <i className="ri-play-circle-fill mr-1.5"></i>进行中
           </span>
         </div>
-        <div className="grid grid-cols-3 gap-4">
+        {/* <div className="grid grid-cols-3 gap-4">
           <div className="bg-white/10 rounded-xl p-4 backdrop-blur-sm">
             <div className="text-2xl font-bold mb-1">6/8</div>
             <div className="text-sm text-white/70">知识点完成</div>
@@ -1891,7 +1891,7 @@ export default function MarketResearchModule({ onTaskComplete }: MarketResearchM
             <div className="text-2xl font-bold mb-1">75%</div>
             <div className="text-sm text-white/70">整体进度</div>
           </div>
-        </div>
+        </div> */}
       </div>
 
       {/* Data flow hint */}

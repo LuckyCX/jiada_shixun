@@ -1,13 +1,17 @@
-import { useEffect, useMemo, useState, type ElementType } from 'react';
+import { useEffect, useMemo, useRef, useState, type ElementType } from 'react';
 import * as AntIcons from '@ant-design/icons';
 import { Button, Form, Input, Modal, Select, message } from 'antd';
 import VersionControl, { Version } from '../../../components/feature/VersionControl';
 import { sanitizeRichText } from '../../../lib/richText';
 import {
   analyzeStudentIdeationIdea,
+  fetchStudentIdeationProjectTopic,
   fetchStudentIdeationWorkspace,
   likeStudentIdeationIdea,
   sendStudentIdeationDiscussion,
+  submitStudentIdeationProjectTopic,
+  type IdeationProjectTopic,
+  type IdeationProjectTopicInput,
   type IdeationMethodKey,
   type StudentIdeationAnalysis,
   type StudentIdeationDiscussion,
@@ -49,6 +53,9 @@ type IdeationFormValues = {
   need?: string;
 };
 
+type IdeationTopicFormValues = IdeationProjectTopicInput;
+export type IdeationModuleTab = 'examples' | 'methods' | 'confirm';
+
 const SCAMPER_OPTIONS = [
   { label: '替代 - 可以用什么替代？', value: '替代 - 可以用什么替代？' },
   { label: '组合 - 可以和什么组合？', value: '组合 - 可以和什么组合？' },
@@ -70,6 +77,7 @@ type IdeationModuleProps = {
   classId: string;
   learningResources?: IdeationLearningResource[];
   isTeamLeader?: boolean;
+  initialTab?: IdeationModuleTab;
   onCheckTeamPrerequisites?: () => Promise<StudentIdeationPrerequisiteMember[]>;
   onOpenLearningResource?: (resource: IdeationLearningResource) => void;
   onTaskComplete?: () => void;
@@ -126,16 +134,32 @@ function resourceIcon(type: string) {
   }
 }
 
+function topicToFormValues(topic: IdeationProjectTopic): IdeationTopicFormValues {
+  return {
+    projectName: topic.projectName,
+    projectDirection: topic.projectDirection || topic.direction,
+    projectDescription: topic.projectDescription || topic.description,
+    coreValue: topic.coreValue,
+    targetUsers: topic.targetUsers,
+    coreProblem: topic.coreProblem,
+    solutionOverview: topic.solutionOverview,
+    marketSize: topic.marketSize,
+    competitiveAdvantage: topic.competitiveAdvantage,
+  };
+}
+
 export default function IdeationModule({
   classId,
   learningResources = [],
   isTeamLeader = false,
+  initialTab,
   onCheckTeamPrerequisites,
   onOpenLearningResource,
   onTaskComplete,
 }: IdeationModuleProps) {
   const [form] = Form.useForm<IdeationFormValues>();
-  const [activeTab, setActiveTab] = useState<'examples' | 'methods' | 'confirm'>('examples');
+  const [topicForm] = Form.useForm<IdeationTopicFormValues>();
+  const [activeTab, setActiveTab] = useState<IdeationModuleTab>(initialTab || 'examples');
   const [activeMethod, setActiveMethod] = useState<IdeationMethodKey>('brainstorm');
   const [ideas, setIdeas] = useState<Idea[]>([]);
   const [chatInput, setChatInput] = useState('');
@@ -152,21 +176,11 @@ export default function IdeationModule({
   const [examplesLoading, setExamplesLoading] = useState(false);
   const [previewCase, setPreviewCase] = useState<InstanceLibraryCase | null>(null);
   
-  // 项目主题表单状态
-  const [projectTheme, setProjectTheme] = useState({
-    name: '',
-    value: '',
-    target: '',
-    problem: '',
-    solution: ''
-  });
-  
-  // 表单验证错误
-  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
-  
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
-  const [isUnderReview, setIsUnderReview] = useState(false); // 新增：审核状态
+  const [projectTopic, setProjectTopic] = useState<IdeationProjectTopic | null>(null);
+  const [topicLoading, setTopicLoading] = useState(false);
+  const approvedNotifiedRef = useRef('');
 
   // 版本控制状态
   const [versions, setVersions] = useState<Version[]>([]);
@@ -176,6 +190,22 @@ export default function IdeationModule({
     () => exampleCategories.find((cat) => cat.id === selectedCategoryId) || exampleCategories[0],
     [exampleCategories, selectedCategoryId],
   );
+  const projectDirectionOptions = useMemo(
+    () => exampleCategories.map((cat) => ({ label: cat.name, value: cat.name })),
+    [exampleCategories],
+  );
+
+  useEffect(() => {
+    if (initialTab) setActiveTab(initialTab);
+  }, [initialTab]);
+
+  useEffect(() => {
+    if (exampleCategories.length === 0) return;
+    const direction = topicForm.getFieldValue('projectDirection');
+    if (direction && !exampleCategories.some((cat) => cat.name === direction)) {
+      topicForm.setFieldValue('projectDirection', undefined);
+    }
+  }, [exampleCategories, topicForm]);
 
   useEffect(() => {
     if (!classId) {
@@ -206,6 +236,42 @@ export default function IdeationModule({
       cancelled = true;
     };
   }, [classId]);
+
+  useEffect(() => {
+    if (!classId) {
+      setProjectTopic(null);
+      topicForm.resetFields();
+      return;
+    }
+    let cancelled = false;
+    setTopicLoading(true);
+    fetchStudentIdeationProjectTopic(classId)
+      .then((res) => {
+        if (cancelled) return;
+        setProjectTopic(res.topic);
+        if (res.topic) topicForm.setFieldsValue(topicToFormValues(res.topic));
+        else topicForm.resetFields();
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          setProjectTopic(null);
+          message.error(e instanceof Error ? e.message : '加载项目选题状态失败');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setTopicLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [classId, topicForm]);
+
+  useEffect(() => {
+    if (projectTopic?.status !== 'approved') return;
+    if (approvedNotifiedRef.current === projectTopic.id) return;
+    approvedNotifiedRef.current = projectTopic.id;
+    onTaskComplete?.();
+  }, [onTaskComplete, projectTopic?.id, projectTopic?.status]);
 
   useEffect(() => {
     if (!classId) {
@@ -256,7 +322,7 @@ export default function IdeationModule({
       summary,
       data: {
         ideas,
-        projectTheme,
+        topicDraft: topicForm.getFieldsValue(),
         messages,
         activeMethod,
       },
@@ -272,7 +338,7 @@ export default function IdeationModule({
     
     const data = version.data;
     setIdeas(data.ideas || []);
-    setProjectTheme(data.projectTheme || { name: '', value: '', target: '', problem: '', solution: '' });
+    if (data.topicDraft) topicForm.setFieldsValue(data.topicDraft);
     setMessages(data.messages || []);
     setActiveMethod(data.activeMethod || 'brainstorm');
     setCurrentVersion(version.versionNumber);
@@ -356,9 +422,13 @@ export default function IdeationModule({
 
   const handleConfirmTabClick = async () => {
     if (!isTeamLeader) {
+      if (projectTopic) {
+        setActiveTab('confirm');
+        return;
+      }
       Modal.info({
-        title: '仅队长可确定项目主题',
-        content: '项目主题需由小组队长统一确认，请与队长沟通后共同确定。',
+        title: '仅队长可确定项目选题',
+        content: '项目选题需由小组队长统一确认，请与队长沟通后共同确定。',
         okText: '确定',
         okButtonProps: { className: '!bg-teal-500 !border-teal-500 hover:!bg-teal-600' },
         onOk: () => setActiveTab('methods'),
@@ -372,7 +442,7 @@ export default function IdeationModule({
       if (incompleteMembers && incompleteMembers.length > 0) {
         Modal.info({
           title: '请先完成实践课程',
-          content: `小组成员 ${incompleteMembers.map((member) => member.name).join('、')} 还未完成实践课程的学习任务，先让他们完成后再一起来确定项目主题吧。`,
+          content: `小组成员 ${incompleteMembers.map((member) => member.name).join('、')} 还未完成实践课程的学习任务，先让他们完成后再一起来确定项目选题吧。`,
           okText: '确定',
           okButtonProps: { className: '!bg-teal-500 !border-teal-500 hover:!bg-teal-600' },
           onOk: () => setActiveTab('methods'),
@@ -389,43 +459,38 @@ export default function IdeationModule({
     }
   };
 
-  // 验证表单
-  const validateForm = () => {
-    const errors: Record<string, string> = {};
-    
-    if (!projectTheme.name.trim() || projectTheme.name.trim().length < 5) {
-      errors.name = '项目名称至少需要5个字';
-    }
-    if (!projectTheme.value.trim() || projectTheme.value.trim().length < 20) {
-      errors.value = '核心价值主张至少需要20个字';
-    }
-    if (!projectTheme.target.trim() || projectTheme.target.trim().length < 10) {
-      errors.target = '目标用户描述至少需要10个字';
-    }
-    if (!projectTheme.problem.trim() || projectTheme.problem.trim().length < 50) {
-      errors.problem = '解决的核心问题至少需要50个字';
-    }
-    if (!projectTheme.solution.trim() || projectTheme.solution.trim().length < 100) {
-      errors.solution = '解决方案概述至少需要100个字';
-    }
-    
-    setFormErrors(errors);
-    return Object.keys(errors).length === 0;
-  };
-
-  const handleConfirmTheme = () => {
-    if (!validateForm()) {
+  const handleConfirmTheme = async (values: IdeationTopicFormValues) => {
+    if (!isTeamLeader) {
+      message.warning('仅队长可提交项目选题');
       return;
     }
     setIsSubmitting(true);
-    setTimeout(() => {
-      setIsSubmitting(false);
+    try {
+      const topic = await submitStudentIdeationProjectTopic(classId, values);
+      setProjectTopic(topic);
+      topicForm.setFieldsValue(topicToFormValues(topic));
       setShowSuccess(true);
-      setIsUnderReview(true); // 提交后进入审核状态
-      onTaskComplete?.();
       setTimeout(() => setShowSuccess(false), 3000);
-    }, 1500);
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '提交项目选题失败');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
+
+  const canEditTopic = isTeamLeader && (!projectTopic || projectTopic.status === 'rejected');
+  const topicStatusTitle =
+    projectTopic?.status === 'approved'
+      ? '项目选题已通过'
+      : projectTopic?.status === 'rejected'
+        ? '项目选题已退回'
+        : '项目选题已提交';
+  const topicStatusDesc =
+    projectTopic?.status === 'approved'
+      ? '教师已通过项目选题，请按课程设置时间进入下一阶段。'
+      : projectTopic?.status === 'rejected'
+        ? '请根据教师意见修改后重新提交。'
+        : '你的项目选题正在等待教师审核，审核通过后即可进入下一阶段。';
 
   const methodTabs = [
     { key: 'brainstorm' as const, label: '头脑风暴', icon: 'ri-lightbulb-flash-line', color: 'from-teal-500 to-cyan-500' },
@@ -491,17 +556,17 @@ export default function IdeationModule({
         </button>
         <button
           onClick={() => void handleConfirmTabClick()}
-          disabled={checkingConfirmTab || !isTeamLeader}
+          disabled={checkingConfirmTab}
           className={`px-5 py-2.5 text-sm font-semibold rounded-xl transition-all whitespace-nowrap ${
             activeTab === 'confirm'
               ? 'bg-gradient-to-r from-orange-500 to-amber-500 text-white shadow-lg'
-              : checkingConfirmTab || !isTeamLeader
+              : checkingConfirmTab
                 ? 'bg-gray-100 text-gray-400 border border-gray-200 cursor-not-allowed'
                 : 'bg-white text-gray-700 border border-gray-200 hover:border-orange-300 cursor-pointer'
           }`}
         >
           <i className="ri-checkbox-circle-line mr-2"></i>
-          {checkingConfirmTab ? '检查学习状态...' : '确定项目主题'}
+          {checkingConfirmTab ? '检查学习状态...' : '确定项目选题'}
         </button>
       </div>
 
@@ -751,9 +816,9 @@ export default function IdeationModule({
                   type="primary"
                   loading={submittingIdea}
                   block
-                  className="!h-10 !rounded-xl !font-semibold"
+                  className="!h-10 !rounded-xl !font-semibold !border-0 !bg-gradient-to-r !from-teal-500 !to-cyan-600 hover:!from-teal-600 hover:!to-cyan-700 !shadow-sm hover:!shadow-md"
                 >
-                  <i className="ri-sparkling-line"></i>
+                  <i className="ri-sparkling-line text-white"></i>
                   {activeMethod === 'ai' ? 'AI生成创意并分析' : '提交创意并获取AI分析'}
                 </Button>
               </Form>
@@ -1083,196 +1148,119 @@ export default function IdeationModule({
         </div>
       )}
 
-      {/* 确定项目主题 Tab */}
+      {/* 确定项目选题 Tab */}
       {activeTab === 'confirm' && (
         <div className="max-w-3xl mx-auto">
-          {!isUnderReview ? (
+          {canEditTopic ? (
             <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8">
-              <div className="text-center mb-8">
-                <div className="w-16 h-16 bg-gradient-to-br from-orange-500 to-amber-500 rounded-2xl flex items-center justify-center text-white mx-auto mb-4">
-                  <i className="ri-flag-line text-3xl"></i>
+              {projectTopic?.status === 'rejected' && (
+                <div className="mb-6 rounded-xl border border-rose-100 bg-rose-50 p-4">
+                  <div className="flex items-start gap-2">
+                    <i className="ri-error-warning-line text-rose-500 mt-0.5"></i>
+                    <div>
+                      <div className="text-sm font-semibold text-rose-700">选题已退回</div>
+                      <p className="text-sm text-rose-700 mt-1">{projectTopic.reviewComment || '请根据教师意见修改后重新提交。'}</p>
+                    </div>
+                  </div>
                 </div>
-                <h2 className="text-2xl font-bold text-gray-900 mb-2">确定项目主题</h2>
-                <p className="text-sm text-gray-600">经过头脑风暴和实例参考，现在让我们确定最终的项目主题</p>
-              </div>
-
-              {/* 项目信息填写 */}
-              <div className="space-y-5 mb-8">
-                <div>
-                  <label className="block text-sm font-semibold text-gray-900 mb-2">
-                    <i className="ri-bookmark-line text-orange-500 mr-1"></i>
-                    项目名称 <span className="text-red-500">*</span>
-                    <span className="text-xs font-normal text-gray-400 ml-2">({projectTheme.name.length}/5字以上)</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={projectTheme.name}
-                    onChange={(e) => {
-                      setProjectTheme({ ...projectTheme, name: e.target.value });
-                      if (formErrors.name) setFormErrors({ ...formErrors, name: '' });
-                    }}
-                    placeholder="为你的项目起一个响亮的名字（至少5个字）"
-                    className={`w-full px-4 py-3 text-sm border rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent ${
-                      formErrors.name ? 'border-red-300 bg-red-50' : 'border-gray-200'
-                    }`}
-                  />
-                  {formErrors.name && <p className="text-xs text-red-500 mt-1">{formErrors.name}</p>}
-                </div>
-
-                <div>
-                  <label className="block text-sm font-semibold text-gray-900 mb-2">
-                    <i className="ri-star-line text-orange-500 mr-1"></i>
-                    核心价值主张 <span className="text-red-500">*</span>
-                    <span className="text-xs font-normal text-gray-400 ml-2">({projectTheme.value.length}/20字以上)</span>
-                  </label>
-                  <textarea
-                    value={projectTheme.value}
-                    onChange={(e) => {
-                      setProjectTheme({ ...projectTheme, value: e.target.value });
-                      if (formErrors.value) setFormErrors({ ...formErrors, value: '' });
-                    }}
-                    placeholder="用一句话说明你的项目为用户创造什么价值（至少20个字）"
-                    rows={2}
-                    className={`w-full px-4 py-3 text-sm border rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent resize-none ${
-                      formErrors.value ? 'border-red-300 bg-red-50' : 'border-gray-200'
-                    }`}
-                  />
-                  {formErrors.value && <p className="text-xs text-red-500 mt-1">{formErrors.value}</p>}
-                </div>
-
-                <div>
-                  <label className="block text-sm font-semibold text-gray-900 mb-2">
-                    <i className="ri-user-heart-line text-orange-500 mr-1"></i>
-                    目标用户 <span className="text-red-500">*</span>
-                    <span className="text-xs font-normal text-gray-400 ml-2">({projectTheme.target.length}/10字以上)</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={projectTheme.target}
-                    onChange={(e) => {
-                      setProjectTheme({ ...projectTheme, target: e.target.value });
-                      if (formErrors.target) setFormErrors({ ...formErrors, target: '' });
-                    }}
-                    placeholder="例如：大学生、上班族、老年人（至少10个字）"
-                    className={`w-full px-4 py-3 text-sm border rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent ${
-                      formErrors.target ? 'border-red-300 bg-red-50' : 'border-gray-200'
-                    }`}
-                  />
-                  {formErrors.target && <p className="text-xs text-red-500 mt-1">{formErrors.target}</p>}
-                </div>
-
-                <div>
-                  <label className="block text-sm font-semibold text-gray-900 mb-2">
-                    <i className="ri-question-line text-orange-500 mr-1"></i>
-                    解决的核心问题 <span className="text-red-500">*</span>
-                    <span className="text-xs font-normal text-gray-400 ml-2">({projectTheme.problem.length}/50字以上)</span>
-                  </label>
-                  <textarea
-                    value={projectTheme.problem}
-                    onChange={(e) => {
-                      setProjectTheme({ ...projectTheme, problem: e.target.value });
-                      if (formErrors.problem) setFormErrors({ ...formErrors, problem: '' });
-                    }}
-                    placeholder="描述目标用户面临的核心痛点和问题（至少50个字）"
-                    rows={3}
-                    className={`w-full px-4 py-3 text-sm border rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent resize-none ${
-                      formErrors.problem ? 'border-red-300 bg-red-50' : 'border-gray-200'
-                    }`}
-                  />
-                  {formErrors.problem && <p className="text-xs text-red-500 mt-1">{formErrors.problem}</p>}
-                </div>
-
-                <div>
-                  <label className="block text-sm font-semibold text-gray-900 mb-2">
-                    <i className="ri-lightbulb-line text-orange-500 mr-1"></i>
-                    解决方案概述 <span className="text-red-500">*</span>
-                    <span className="text-xs font-normal text-gray-400 ml-2">({projectTheme.solution.length}/100字以上)</span>
-                  </label>
-                  <textarea
-                    value={projectTheme.solution}
-                    onChange={(e) => {
-                      setProjectTheme({ ...projectTheme, solution: e.target.value });
-                      if (formErrors.solution) setFormErrors({ ...formErrors, solution: '' });
-                    }}
-                    placeholder="简要描述你的解决方案和核心功能（至少100个字）"
-                    rows={4}
-                    className={`w-full px-4 py-3 text-sm border rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent resize-none ${
-                      formErrors.solution ? 'border-red-300 bg-red-50' : 'border-gray-200'
-                    }`}
-                  />
-                  {formErrors.solution && <p className="text-xs text-red-500 mt-1">{formErrors.solution}</p>}
-                </div>
-              </div>
-
-              {/* 提交按钮 */}
-              <div className="flex items-center justify-center gap-4">
-                <button
-                  onClick={handleConfirmTheme}
+              )}
+              {topicLoading ? (
+                <div className="py-16 text-center text-sm text-gray-400">加载项目选题状态...</div>
+              ) : (
+                <Form
+                  form={topicForm}
+                  layout="vertical"
+                  onFinish={handleConfirmTheme}
                   disabled={isSubmitting}
-                  className={`px-8 py-4 bg-gradient-to-r from-orange-500 to-amber-500 text-white text-base font-bold rounded-xl hover:shadow-lg transition-all whitespace-nowrap cursor-pointer flex items-center gap-2 ${
-                    isSubmitting ? 'opacity-50 cursor-not-allowed' : ''
-                  }`}
+                  requiredMark={false}
                 >
-                  {isSubmitting ? (
-                    <>
-                      <i className="ri-loader-4-line animate-spin"></i>
-                      提交中...
-                    </>
-                  ) : (
-                    <>
-                      <i className="ri-check-line"></i>
-                      提交项目主题
-                    </>
-                  )}
-                </button>
-              </div>
+                  <Form.Item name="projectName" label="项目名称" rules={[{ required: true, message: '请输入项目名称' }, { min: 5, message: '项目名称至少需要5个字' }]}>
+                    <Input placeholder="为你的项目起一个响亮的名字" />
+                  </Form.Item>
+                  <Form.Item name="projectDirection" label="项目方向" rules={[{ required: true, message: '请选择项目方向' }]}>
+                    <Select
+                      placeholder="请选择项目方向"
+                      options={projectDirectionOptions}
+                      loading={examplesLoading}
+                      disabled={examplesLoading || projectDirectionOptions.length === 0}
+                      showSearch
+                      optionFilterProp="label"
+                      notFoundContent={examplesLoading ? '加载中...' : '暂无可选方向'}
+                    />
+                  </Form.Item>
+                  <Form.Item name="projectDescription" label="项目描述" rules={[{ required: true, message: '请输入项目描述' }]}>
+                    <Input.TextArea rows={3} placeholder="概述项目要做什么、面向什么场景" />
+                  </Form.Item>
+                  <Form.Item name="coreValue" label="核心价值主张" rules={[{ required: true, message: '请输入核心价值主张' }, { min: 20, message: '核心价值主张至少需要20个字' }]}>
+                    <Input.TextArea rows={2} placeholder="说明项目为用户创造什么价值" />
+                  </Form.Item>
+                  <Form.Item name="targetUsers" label="目标用户" rules={[{ required: true, message: '请输入目标用户' }, { min: 10, message: '目标用户描述至少需要10个字' }]}>
+                    <Input placeholder="例如：大学生、上班族、老年人" />
+                  </Form.Item>
+                  <Form.Item name="coreProblem" label="解决的核心问题" rules={[{ required: true, message: '请输入解决的核心问题' }, { min: 50, message: '解决的核心问题至少需要50个字' }]}>
+                    <Input.TextArea rows={3} placeholder="描述目标用户面临的核心痛点和问题" />
+                  </Form.Item>
+                  <Form.Item name="solutionOverview" label="解决方案概述" rules={[{ required: true, message: '请输入解决方案概述' }, { min: 100, message: '解决方案概述至少需要100个字' }]}>
+                    <Input.TextArea rows={4} placeholder="简要描述你的解决方案和核心功能" />
+                  </Form.Item>
+                  <Form.Item name="marketSize" label="市场规模" rules={[{ required: true, message: '请输入市场规模' }]}>
+                    <Input.TextArea rows={2} placeholder="说明潜在用户、市场空间或需求规模" />
+                  </Form.Item>
+                  <Form.Item name="competitiveAdvantage" label="竞争优势" rules={[{ required: true, message: '请输入竞争优势' }]}>
+                    <Input.TextArea rows={3} placeholder="说明项目与现有方案相比的差异和优势" />
+                  </Form.Item>
+                  <Button
+                    htmlType="submit"
+                    loading={isSubmitting}
+                    block
+                    className="!h-11 !rounded-xl !border-0 !bg-gradient-to-r !from-teal-500 !to-cyan-600 !font-semibold !text-white hover:!from-teal-600 hover:!to-cyan-700"
+                  >
+                    {projectTopic?.status === 'rejected' ? '重新提交选题' : '提交选题'}
+                  </Button>
+                </Form>
+              )}
             </div>
           ) : (
-            // 等待审核状态页面
             <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-12">
               <div className="text-center">
-                <div className="w-24 h-24 bg-gradient-to-br from-amber-100 to-orange-100 rounded-full flex items-center justify-center mx-auto mb-6">
-                  <i className="ri-time-line text-5xl text-orange-500"></i>
+                <div className={`w-24 h-24 rounded-full flex items-center justify-center mx-auto mb-6 ${
+                  projectTopic?.status === 'approved' ? 'bg-gradient-to-br from-emerald-100 to-teal-100' : 'bg-gradient-to-br from-amber-100 to-orange-100'
+                }`}>
+                  <i className={`${projectTopic?.status === 'approved' ? 'ri-checkbox-circle-line text-teal-500' : 'ri-time-line text-orange-500'} text-5xl`}></i>
                 </div>
-                <h2 className="text-2xl font-bold text-gray-900 mb-3">项目主题已提交</h2>
-                <p className="text-base text-gray-600 mb-8">你的项目主题正在等待教师审核，审核通过后即可进入下一阶段</p>
+                <h2 className="text-2xl font-bold text-gray-900 mb-3">{topicStatusTitle}</h2>
+                <p className="text-base text-gray-600 mb-8">{topicStatusDesc}</p>
                 
-                {/* 已提交的项目信息预览 */}
                 <div className="bg-gradient-to-br from-orange-50 to-amber-50 rounded-2xl p-6 mb-8 text-left">
                   <h3 className="text-sm font-bold text-gray-900 mb-4 flex items-center gap-2">
                     <i className="ri-file-list-3-line text-orange-500"></i>
                     已提交的项目信息
                   </h3>
                   <div className="space-y-3">
-                    <div>
-                      <span className="text-xs font-semibold text-gray-500">项目名称：</span>
-                      <p className="text-sm text-gray-900 mt-1">{projectTheme.name}</p>
-                    </div>
-                    <div>
-                      <span className="text-xs font-semibold text-gray-500">核心价值主张：</span>
-                      <p className="text-sm text-gray-900 mt-1">{projectTheme.value}</p>
-                    </div>
-                    <div>
-                      <span className="text-xs font-semibold text-gray-500">目标用户：</span>
-                      <p className="text-sm text-gray-900 mt-1">{projectTheme.target}</p>
-                    </div>
-                    <div>
-                      <span className="text-xs font-semibold text-gray-500">解决的核心问题：</span>
-                      <p className="text-sm text-gray-900 mt-1">{projectTheme.problem}</p>
-                    </div>
-                    <div>
-                      <span className="text-xs font-semibold text-gray-500">解决方案概述：</span>
-                      <p className="text-sm text-gray-900 mt-1">{projectTheme.solution}</p>
-                    </div>
+                    {[
+                      ['项目名称', projectTopic?.projectName],
+                      ['项目方向', projectTopic?.direction],
+                      ['项目描述', projectTopic?.description],
+                      ['目标用户', projectTopic?.targetUsers],
+                      ['核心价值主张', projectTopic?.coreValue],
+                      ['解决的核心问题', projectTopic?.coreProblem],
+                      ['解决方案概述', projectTopic?.solutionOverview],
+                      ['市场规模', projectTopic?.marketSize],
+                      ['竞争优势', projectTopic?.competitiveAdvantage],
+                    ].map(([label, value]) => (
+                      <div key={label}>
+                        <span className="text-xs font-semibold text-gray-500">{label}：</span>
+                        <p className="text-sm text-gray-900 mt-1 whitespace-pre-wrap break-all">{value || '未填写'}</p>
+                      </div>
+                    ))}
                   </div>
                 </div>
 
-                {/* 审核状态提示 */}
                 <div className="flex items-center justify-center gap-3 bg-blue-50 border border-blue-200 rounded-xl p-4 mb-6">
-                  <i className="ri-information-line text-blue-500 text-xl"></i>
+                  <i className={`${projectTopic?.status === 'approved' ? 'ri-checkbox-circle-line text-teal-500' : 'ri-information-line text-blue-500'} text-xl`}></i>
                   <div className="text-left">
-                    <p className="text-sm font-semibold text-blue-900">审核中</p>
-                    <p className="text-xs text-blue-700">教师将对你的项目主题进行评审，请耐心等待</p>
+                    <p className="text-sm font-semibold text-blue-900">{projectTopic?.status === 'approved' ? '已通过' : '审核中'}</p>
+                    <p className="text-xs text-blue-700">{projectTopic?.reviewComment || (projectTopic?.status === 'approved' ? '请按课程设置进入下一阶段' : '教师将对你的项目选题进行评审，请耐心等待')}</p>
                   </div>
                 </div>
 
@@ -1308,7 +1296,7 @@ export default function IdeationModule({
         <div className="fixed bottom-8 right-8 bg-green-500 text-white px-6 py-4 rounded-xl shadow-2xl flex items-center gap-3 animate-bounce z-50">
           <i className="ri-checkbox-circle-fill text-2xl"></i>
           <div>
-            <p className="font-bold">项目主题已提交！</p>
+            <p className="font-bold">项目选题已提交！</p>
             <p className="text-sm opacity-90">等待教师审核通过后即可继续</p>
           </div>
         </div>

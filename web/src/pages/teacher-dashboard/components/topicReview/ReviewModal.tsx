@@ -68,42 +68,56 @@ export default function ReviewModal({ topic, onClose, onSubmit }: ReviewModalPro
           <div className="space-y-4 mb-6">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">项目方向</label>
-              <div className="px-4 py-2 bg-purple-50 border border-purple-200 rounded-lg text-purple-700 font-medium inline-block">
+              <div className="px-4 py-2 bg-purple-50 border border-purple-200 rounded-lg text-purple-700 font-medium inline-block whitespace-pre-wrap break-all">
                 {topic.direction}
               </div>
             </div>
 
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">项目描述</label>
-              <div className="p-4 bg-gray-50 rounded-lg text-sm text-gray-700 leading-relaxed">
+              <div className="p-4 bg-gray-50 rounded-lg text-sm text-gray-700 leading-relaxed whitespace-pre-wrap break-all">
                 {topic.description}
               </div>
             </div>
 
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">目标用户</label>
-              <div className="p-4 bg-gray-50 rounded-lg text-sm text-gray-700 leading-relaxed">
+              <div className="p-4 bg-gray-50 rounded-lg text-sm text-gray-700 leading-relaxed whitespace-pre-wrap break-all">
                 {topic.targetUsers}
               </div>
             </div>
 
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">核心价值</label>
-              <div className="p-4 bg-gray-50 rounded-lg text-sm text-gray-700 leading-relaxed">
+              <div className="p-4 bg-gray-50 rounded-lg text-sm text-gray-700 leading-relaxed whitespace-pre-wrap break-all">
                 {topic.coreValue}
               </div>
             </div>
 
             <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">核心问题</label>
+              <div className="p-4 bg-gray-50 rounded-lg text-sm text-gray-700 leading-relaxed whitespace-pre-wrap break-all">
+                {topic.coreProblem}
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">解决方案概述</label>
+              <div className="p-4 bg-gray-50 rounded-lg text-sm text-gray-700 leading-relaxed whitespace-pre-wrap break-all">
+                {topic.solutionOverview}
+              </div>
+            </div>
+
+            <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">市场规模</label>
-              <div className="p-4 bg-gray-50 rounded-lg text-sm text-gray-700 leading-relaxed">
+              <div className="p-4 bg-gray-50 rounded-lg text-sm text-gray-700 leading-relaxed whitespace-pre-wrap break-all">
                 {topic.marketSize}
               </div>
             </div>
 
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">竞争优势</label>
-              <div className="p-4 bg-gray-50 rounded-lg text-sm text-gray-700 leading-relaxed whitespace-pre-line">
+              <div className="p-4 bg-gray-50 rounded-lg text-sm text-gray-700 leading-relaxed whitespace-pre-wrap break-all">
                 {topic.competitiveAdvantage}
               </div>
             </div>

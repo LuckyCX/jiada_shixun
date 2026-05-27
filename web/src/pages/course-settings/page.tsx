@@ -131,9 +131,9 @@ export default function CourseSettingsPage({ embedded = false, personalClass = n
     setActiveTab('deadline');
   };
 
-  const previousStageFor = (stageKey: CourseSettingStageKey) => {
+  const previousStagesFor = (stageKey: CourseSettingStageKey) => {
     const idx = COURSE_SETTING_STAGES.findIndex((stage) => stage.key === stageKey);
-    return idx > 0 ? COURSE_SETTING_STAGES[idx - 1] : null;
+    return idx > 0 ? COURSE_SETTING_STAGES.slice(0, idx) : [];
   };
 
   const renderStats = () => (
@@ -299,9 +299,7 @@ export default function CourseSettingsPage({ embedded = false, personalClass = n
             setting={selectedSetting}
             defaultStartDate={defaultStartDate(selectedStage.key)}
             saving={savingKey === selectedStage.key}
-            prerequisite={(() => {
-              const prev = previousStageFor(selectedStage.key);
-              if (!prev) return null;
+            prerequisites={previousStagesFor(selectedStage.key).map((prev) => {
               const prevSetting = settingsByKey.get(prev.key) || emptySetting(prev.key);
               return {
                 stageName: prev.name,
@@ -311,7 +309,7 @@ export default function CourseSettingsPage({ embedded = false, personalClass = n
                 configured: Boolean(prevSetting.startDate && prevSetting.deadlineDate),
                 onConfigure: () => openStage(prev.key),
               };
-            })()}
+            })}
             onSave={(input) => updateSetting(selectedStage.key, input)}
           />
         )}

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { getPool } from '../lib/db.js';
 import { logError } from '../lib/logError.js';
-import { requireAuth, requireStudent } from '../middleware/auth.js';
+import { requireAuth, requireStudent, requireTeacher } from '../middleware/auth.js';
 import { chatCompletion, friendlyLlmErrorMessage, getEnabledProvider, logPromptToConsole } from '../lib/llmGateway.js';
 import {
   getIdeationMethodPrompt,
@@ -23,15 +23,32 @@ function studentIdFromReq(req) {
   return Number.isFinite(id) && id > 0 ? id : null;
 }
 
+function teacherIdFromReq(req) {
+  const id = Number(String(req.user?.sub || '').trim());
+  return Number.isFinite(id) && id > 0 ? id : null;
+}
+
 function parseId(param) {
   const id = Number(String(param || '').trim());
   return Number.isFinite(id) && id > 0 ? id : null;
+}
+
+function normalizeText(value) {
+  return String(value || '').trim();
 }
 
 async function studentEnrolledInClass(pool, studentId, classId) {
   const { rows } = await pool.query(
     `SELECT 1 FROM teacher_personal_class_students WHERE teacher_personal_class_id = $1 AND student_id = $2`,
     [classId, studentId]
+  );
+  return rows.length > 0;
+}
+
+async function teacherOwnsClass(pool, teacherId, classId) {
+  const { rows } = await pool.query(
+    `SELECT 1 FROM teacher_personal_classes WHERE id = $1 AND teacher_id = $2`,
+    [classId, teacherId]
   );
   return rows.length > 0;
 }
@@ -49,6 +66,25 @@ async function getConfirmedTeam(pool, studentId, classId) {
   );
   if (!rows.length) return null;
   return { id: String(rows[0].id), name: rows[0].name };
+}
+
+async function resolveTeamLeaderId(pool, teamId) {
+  const { rows } = await pool.query(
+    `SELECT t.leader_student_id AS "leaderStudentId",
+            (
+              SELECT m.student_id
+              FROM teacher_personal_class_team_members m
+              WHERE m.team_id = t.id
+              ORDER BY CASE WHEN m.ai_matched_role = 'CEO' THEN 0 ELSE 1 END, m.id ASC
+              LIMIT 1
+            ) AS "fallbackLeaderId"
+     FROM teacher_personal_class_teams t
+     WHERE t.id = $1`,
+    [teamId]
+  );
+  const row = rows[0];
+  if (!row) return null;
+  return row.leaderStudentId || row.fallbackLeaderId || null;
 }
 
 function extractJsonObject(raw) {
@@ -228,6 +264,7 @@ async function loadIncompleteIdeationMembers(pool, teamId) {
          FROM course_resource_files f
          JOIN ideation_nodes n ON n.id = f.node_id
          WHERE COALESCE(f.content_hash, '') <> ''
+           AND f.resource_type <> 'archive'
        ),
        ideation_knowledge AS (
          SELECT DISTINCT l.knowledge_point_id
@@ -268,6 +305,105 @@ async function loadIncompleteIdeationMembers(pool, teamId) {
   }));
 }
 
+async function projectDirectionExists(pool, classId, projectDirection) {
+  const { rows } = await pool.query(
+    `SELECT 1
+     FROM teacher_instance_library_categories c
+     JOIN teacher_personal_classes pc ON pc.teacher_id = c.teacher_id
+     WHERE pc.id = $1 AND c.name = $2
+     LIMIT 1`,
+    [classId, projectDirection]
+  );
+  return rows.length > 0;
+}
+
+function validateTopicBody(body) {
+  const projectName = normalizeText(body?.projectName);
+  const projectDirection = normalizeText(body?.projectDirection);
+  const projectDescription = normalizeText(body?.projectDescription);
+  const coreValue = normalizeText(body?.coreValue);
+  const targetUsers = normalizeText(body?.targetUsers);
+  const coreProblem = normalizeText(body?.coreProblem);
+  const solutionOverview = normalizeText(body?.solutionOverview);
+  const marketSize = normalizeText(body?.marketSize);
+  const competitiveAdvantage = normalizeText(body?.competitiveAdvantage);
+
+  if (projectName.length < 5) return { error: '项目名称至少需要5个字' };
+  if (!projectDirection) return { error: '请填写项目方向' };
+  if (!projectDescription) return { error: '请填写项目描述' };
+  if (coreValue.length < 20) return { error: '核心价值主张至少需要20个字' };
+  if (targetUsers.length < 10) return { error: '目标用户描述至少需要10个字' };
+  if (coreProblem.length < 50) return { error: '解决的核心问题至少需要50个字' };
+  if (solutionOverview.length < 100) return { error: '解决方案概述至少需要100个字' };
+  if (!marketSize) return { error: '请填写市场规模' };
+  if (!competitiveAdvantage) return { error: '请填写竞争优势' };
+
+  return {
+    projectName,
+    projectDirection,
+    projectDescription,
+    coreValue,
+    targetUsers,
+    coreProblem,
+    solutionOverview,
+    marketSize,
+    competitiveAdvantage,
+  };
+}
+
+async function mapProjectTopic(pool, row) {
+  if (!row) return null;
+  const { rows: teamRows } = await pool.query(
+    `SELECT t.name AS "teamName",
+            COALESCE(leader.real_name, leader.username, '') AS "leaderName",
+            (SELECT COUNT(*)::int FROM teacher_personal_class_team_members m WHERE m.team_id = t.id) AS "memberCount"
+     FROM teacher_personal_class_teams t
+     LEFT JOIN users leader ON leader.id = COALESCE(
+       t.leader_student_id,
+       (
+         SELECT m.student_id
+         FROM teacher_personal_class_team_members m
+         WHERE m.team_id = t.id
+         ORDER BY CASE WHEN m.ai_matched_role = 'CEO' THEN 0 ELSE 1 END, m.id ASC
+         LIMIT 1
+       )
+     )
+     WHERE t.id = $1`,
+    [row.team_id]
+  );
+  const team = teamRows[0] || {};
+  return {
+    id: String(row.id),
+    teamId: String(row.team_id),
+    teamName: team.teamName || '',
+    leaderName: team.leaderName || '',
+    memberCount: Number(team.memberCount || 0),
+    projectName: row.project_name,
+    projectDirection: row.project_direction,
+    projectDescription: row.project_description,
+    direction: row.project_direction,
+    description: row.project_description,
+    targetUsers: row.target_users,
+    coreValue: row.core_value,
+    coreProblem: row.core_problem,
+    solutionOverview: row.solution_overview,
+    marketSize: row.market_size,
+    competitiveAdvantage: row.competitive_advantage,
+    submitTime: row.submitted_at ? new Date(row.submitted_at).toISOString() : '',
+    status: row.status,
+    reviewComment: row.review_comment || '',
+    reviewTime: row.reviewed_at ? new Date(row.reviewed_at).toISOString() : '',
+  };
+}
+
+async function loadTeamProjectTopic(pool, teamId) {
+  const { rows } = await pool.query(
+    `SELECT * FROM teacher_personal_class_team_project_topics WHERE team_id = $1 LIMIT 1`,
+    [teamId]
+  );
+  return rows[0] || null;
+}
+
 router.get('/student/personal-classes/:classId/ideation/workspace', requireAuth(), requireStudent(), async (req, res) => {
   try {
     const sid = studentIdFromReq(req);
@@ -300,12 +436,193 @@ router.get('/student/personal-classes/:classId/ideation/team-prerequisites', req
       return bad(req, res, 403, 40301, '未加入该班级');
     }
     const team = await getConfirmedTeam(pool, sid, classId);
-    if (!team) return bad(req, res, 400, 40014, '教师确认组队后可确定项目主题');
+    if (!team) return bad(req, res, 400, 40014, '教师确认组队后可确定项目选题');
     const incompleteMembers = await loadIncompleteIdeationMembers(pool, Number(team.id));
     return ok(req, res, { incompleteMembers });
   } catch (e) {
     logError(`GET ideation team prerequisites traceId=${req.traceId}`, e);
     return bad(req, res, 500, 50000, e.message);
+  }
+});
+
+router.get('/student/personal-classes/:classId/ideation/topic', requireAuth(), requireStudent(), async (req, res) => {
+  try {
+    const sid = studentIdFromReq(req);
+    const classId = parseId(req.params.classId);
+    if (!sid || !classId) return bad(req, res, 400, 40003, '参数无效');
+    const pool = getPool();
+    if (!(await studentEnrolledInClass(pool, sid, classId))) {
+      return bad(req, res, 403, 40301, '未加入该班级');
+    }
+    const team = await getConfirmedTeam(pool, sid, classId);
+    if (!team) return ok(req, res, { topic: null });
+    const row = await loadTeamProjectTopic(pool, Number(team.id));
+    return ok(req, res, { topic: await mapProjectTopic(pool, row) });
+  } catch (e) {
+    logError(`GET ideation topic traceId=${req.traceId}`, e);
+    return bad(req, res, 500, 50000, e.message);
+  }
+});
+
+router.post('/student/personal-classes/:classId/ideation/topic', requireAuth(), requireStudent(), async (req, res) => {
+  try {
+    const sid = studentIdFromReq(req);
+    const classId = parseId(req.params.classId);
+    if (!sid || !classId) return bad(req, res, 400, 40003, '参数无效');
+    const v = validateTopicBody(req.body);
+    if (v.error) return bad(req, res, 400, 40004, v.error);
+
+    const pool = getPool();
+    if (!(await studentEnrolledInClass(pool, sid, classId))) {
+      return bad(req, res, 403, 40301, '未加入该班级');
+    }
+    const team = await getConfirmedTeam(pool, sid, classId);
+    if (!team) return bad(req, res, 400, 40014, '教师确认组队后可提交项目选题');
+    const leaderId = await resolveTeamLeaderId(pool, Number(team.id));
+    if (String(leaderId || '') !== String(sid)) {
+      return bad(req, res, 403, 40304, '仅队长可提交项目选题');
+    }
+    const incompleteMembers = await loadIncompleteIdeationMembers(pool, Number(team.id));
+    if (incompleteMembers.length > 0) {
+      return bad(req, res, 400, 40017, `小组成员 ${incompleteMembers.map((m) => m.name).join('、')} 还未完成实践课程`);
+    }
+    const existing = await loadTeamProjectTopic(pool, Number(team.id));
+    if (existing?.status === 'pending') return bad(req, res, 400, 40018, '项目选题已提交，待教师审核');
+    if (existing?.status === 'approved') return bad(req, res, 400, 40019, '项目选题已审核通过');
+    if (!(await projectDirectionExists(pool, classId, v.projectDirection))) {
+      return bad(req, res, 400, 40020, '请选择教师创建的项目方向');
+    }
+
+    const { rows } = await pool.query(
+      `INSERT INTO teacher_personal_class_team_project_topics
+         (teacher_personal_class_id, team_id, submitted_by, project_name, project_direction,
+          project_description, core_value, target_users, core_problem, solution_overview,
+          market_size, competitive_advantage, status, review_comment, reviewed_by, reviewed_at, submitted_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'pending', '', NULL, NULL, now())
+       ON CONFLICT (team_id) DO UPDATE SET
+         teacher_personal_class_id = EXCLUDED.teacher_personal_class_id,
+         submitted_by = EXCLUDED.submitted_by,
+         project_name = EXCLUDED.project_name,
+         project_direction = EXCLUDED.project_direction,
+         project_description = EXCLUDED.project_description,
+         core_value = EXCLUDED.core_value,
+         target_users = EXCLUDED.target_users,
+         core_problem = EXCLUDED.core_problem,
+         solution_overview = EXCLUDED.solution_overview,
+         market_size = EXCLUDED.market_size,
+         competitive_advantage = EXCLUDED.competitive_advantage,
+         status = 'pending',
+         review_comment = '',
+         reviewed_by = NULL,
+         reviewed_at = NULL,
+         submitted_at = now(),
+         updated_at = now()
+       RETURNING *`,
+      [
+        classId,
+        Number(team.id),
+        sid,
+        v.projectName,
+        v.projectDirection,
+        v.projectDescription,
+        v.coreValue,
+        v.targetUsers,
+        v.coreProblem,
+        v.solutionOverview,
+        v.marketSize,
+        v.competitiveAdvantage,
+      ]
+    );
+    return ok(req, res, { topic: await mapProjectTopic(pool, rows[0]) });
+  } catch (e) {
+    logError(`POST ideation topic traceId=${req.traceId}`, e);
+    return bad(req, res, 500, 50000, e.message);
+  }
+});
+
+router.get('/teacher/personal-classes/:classId/ideation/topics', requireAuth(), requireTeacher(), async (req, res) => {
+  try {
+    const tid = teacherIdFromReq(req);
+    const classId = parseId(req.params.classId);
+    if (!tid || !classId) return bad(req, res, 400, 40003, '参数无效');
+    const pool = getPool();
+    if (!(await teacherOwnsClass(pool, tid, classId))) {
+      return bad(req, res, 404, 40402, '班级不存在或无权操作');
+    }
+    const { rows } = await pool.query(
+      `SELECT *
+       FROM teacher_personal_class_team_project_topics
+       WHERE teacher_personal_class_id = $1
+       ORDER BY submitted_at DESC, id DESC`,
+      [classId]
+    );
+    const topics = [];
+    for (const row of rows) topics.push(await mapProjectTopic(pool, row));
+    return ok(req, res, { topics });
+  } catch (e) {
+    logError(`GET teacher ideation topics traceId=${req.traceId}`, e);
+    return bad(req, res, 500, 50000, e.message);
+  }
+});
+
+router.post('/teacher/personal-classes/:classId/ideation/topics/:topicId/review', requireAuth(), requireTeacher(), async (req, res) => {
+  let client;
+  let transactionOpen = false;
+  try {
+    const tid = teacherIdFromReq(req);
+    const classId = parseId(req.params.classId);
+    const topicId = parseId(req.params.topicId);
+    const status = req.body?.status === 'approved' ? 'approved' : req.body?.status === 'rejected' ? 'rejected' : '';
+    const comment = normalizeText(req.body?.comment);
+    if (!tid || !classId || !topicId || !status) return bad(req, res, 400, 40003, '参数无效');
+    if (!comment) return bad(req, res, 400, 40004, '请填写审核意见');
+    const pool = getPool();
+    if (!(await teacherOwnsClass(pool, tid, classId))) {
+      return bad(req, res, 404, 40402, '班级不存在或无权操作');
+    }
+    client = await pool.connect();
+    await client.query('BEGIN');
+    transactionOpen = true;
+    const { rows } = await client.query(
+      `UPDATE teacher_personal_class_team_project_topics
+       SET status = $3, review_comment = $4, reviewed_by = $5, reviewed_at = now(), updated_at = now()
+       WHERE id = $1 AND teacher_personal_class_id = $2
+       RETURNING *`,
+      [topicId, classId, status, comment, tid]
+    );
+    if (!rows.length) {
+      await client.query('ROLLBACK');
+      transactionOpen = false;
+      return bad(req, res, 404, 40403, '选题提交不存在');
+    }
+    const reviewTitle = status === 'approved' ? '项目选题审核通过' : '项目选题审核退回';
+    const reviewContent =
+      status === 'approved'
+        ? `你的团队项目选题「${rows[0].project_name}」已审核通过。审核意见：${comment}`
+        : `你的团队项目选题「${rows[0].project_name}」已退回修改。审核意见：${comment}`;
+    await client.query(
+      `INSERT INTO notifications (receiver_id, sender_id, type, title, content, related_module, related_link, is_read)
+       SELECT m.student_id, $2, 'evaluation', $3, $4, 'ideation_project_topic',
+              '/student-center?tab=module-ideation&ideationTab=confirm', false
+       FROM teacher_personal_class_team_members m
+       WHERE m.team_id = $1`,
+      [rows[0].team_id, tid, reviewTitle, reviewContent]
+    );
+    await client.query('COMMIT');
+    transactionOpen = false;
+    return ok(req, res, { topic: await mapProjectTopic(pool, rows[0]) });
+  } catch (e) {
+    if (client && transactionOpen) {
+      try {
+        await client.query('ROLLBACK');
+      } catch (rollbackError) {
+        logError(`ROLLBACK teacher ideation topic review traceId=${req.traceId}`, rollbackError);
+      }
+    }
+    logError(`POST teacher ideation topic review traceId=${req.traceId}`, e);
+    return bad(req, res, 500, 50000, e.message);
+  } finally {
+    if (client) client.release();
   }
 });
 

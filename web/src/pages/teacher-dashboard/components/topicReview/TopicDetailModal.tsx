@@ -87,7 +87,7 @@ export default function TopicDetailModal({ topic, onClose }: TopicDetailModalPro
               <i className="ri-compass-line text-purple-600"></i>
               项目方向
             </h3>
-            <div className="px-4 py-2 bg-purple-50 border border-purple-200 rounded-lg text-purple-700 font-medium inline-block">
+            <div className="px-4 py-2 bg-purple-50 border border-purple-200 rounded-lg text-purple-700 font-medium inline-block whitespace-pre-wrap break-all">
               {topic.direction}
             </div>
           </div>
@@ -98,7 +98,7 @@ export default function TopicDetailModal({ topic, onClose }: TopicDetailModalPro
               <i className="ri-file-text-line text-purple-600"></i>
               项目描述
             </h3>
-            <div className="p-4 bg-gray-50 rounded-xl border border-gray-200 text-sm text-gray-700 leading-relaxed">
+            <div className="p-4 bg-gray-50 rounded-xl border border-gray-200 text-sm text-gray-700 leading-relaxed whitespace-pre-wrap break-all">
               {topic.description}
             </div>
           </div>
@@ -109,7 +109,7 @@ export default function TopicDetailModal({ topic, onClose }: TopicDetailModalPro
               <i className="ri-user-heart-line text-purple-600"></i>
               目标用户
             </h3>
-            <div className="p-4 bg-gray-50 rounded-xl border border-gray-200 text-sm text-gray-700 leading-relaxed">
+            <div className="p-4 bg-gray-50 rounded-xl border border-gray-200 text-sm text-gray-700 leading-relaxed whitespace-pre-wrap break-all">
               {topic.targetUsers}
             </div>
           </div>
@@ -120,8 +120,28 @@ export default function TopicDetailModal({ topic, onClose }: TopicDetailModalPro
               <i className="ri-star-line text-purple-600"></i>
               核心价值
             </h3>
-            <div className="p-4 bg-gray-50 rounded-xl border border-gray-200 text-sm text-gray-700 leading-relaxed">
+            <div className="p-4 bg-gray-50 rounded-xl border border-gray-200 text-sm text-gray-700 leading-relaxed whitespace-pre-wrap break-all">
               {topic.coreValue}
+            </div>
+          </div>
+
+          <div className="mb-6">
+            <h3 className="text-sm font-bold text-gray-700 mb-3 flex items-center gap-2">
+              <i className="ri-question-line text-purple-600"></i>
+              核心问题
+            </h3>
+            <div className="p-4 bg-gray-50 rounded-xl border border-gray-200 text-sm text-gray-700 leading-relaxed whitespace-pre-wrap break-all">
+              {topic.coreProblem}
+            </div>
+          </div>
+
+          <div className="mb-6">
+            <h3 className="text-sm font-bold text-gray-700 mb-3 flex items-center gap-2">
+              <i className="ri-lightbulb-line text-purple-600"></i>
+              解决方案概述
+            </h3>
+            <div className="p-4 bg-gray-50 rounded-xl border border-gray-200 text-sm text-gray-700 leading-relaxed whitespace-pre-wrap break-all">
+              {topic.solutionOverview}
             </div>
           </div>
 
@@ -131,7 +151,7 @@ export default function TopicDetailModal({ topic, onClose }: TopicDetailModalPro
               <i className="ri-pie-chart-line text-purple-600"></i>
               市场规模
             </h3>
-            <div className="p-4 bg-gray-50 rounded-xl border border-gray-200 text-sm text-gray-700 leading-relaxed">
+            <div className="p-4 bg-gray-50 rounded-xl border border-gray-200 text-sm text-gray-700 leading-relaxed whitespace-pre-wrap break-all">
               {topic.marketSize}
             </div>
           </div>
@@ -142,7 +162,7 @@ export default function TopicDetailModal({ topic, onClose }: TopicDetailModalPro
               <i className="ri-trophy-line text-purple-600"></i>
               竞争优势
             </h3>
-            <div className="p-4 bg-gray-50 rounded-xl border border-gray-200 text-sm text-gray-700 leading-relaxed whitespace-pre-line">
+            <div className="p-4 bg-gray-50 rounded-xl border border-gray-200 text-sm text-gray-700 leading-relaxed whitespace-pre-wrap break-all">
               {topic.competitiveAdvantage}
             </div>
           </div>
@@ -155,7 +175,7 @@ export default function TopicDetailModal({ topic, onClose }: TopicDetailModalPro
                 审核意见
               </h3>
               <div className="p-4 bg-gradient-to-br from-purple-50 to-pink-50 rounded-xl border border-purple-200">
-                <p className="text-sm text-gray-700 leading-relaxed mb-2">{topic.reviewComment}</p>
+                <p className="text-sm text-gray-700 leading-relaxed mb-2 whitespace-pre-wrap break-all">{topic.reviewComment}</p>
                 {topic.reviewTime && (
                   <div className="text-xs text-gray-500 flex items-center gap-1">
                     <i className="ri-time-line"></i>

@@ -134,15 +134,18 @@ router.put('/teacher/personal-classes/:classId/course-settings/:moduleKey', requ
     if (!Number.isInteger(reminderDays) || reminderDays < 0 || reminderDays > 30) {
       return bad(req, res, 400, 40004, '提醒天数应为 0-30 天');
     }
-    if (startDate && deadlineDate && durationDays(startDate, deadlineDate) <= 0) {
+    const duration = durationDays(startDate, deadlineDate);
+    if (startDate && deadlineDate && duration <= 0) {
       return bad(req, res, 400, 40005, '截止日期不能早于开始日期');
+    }
+    if (duration > 0 && reminderDays >= duration) {
+      return bad(req, res, 400, 40006, '提前提醒天数必须小于任务时长');
     }
 
     const pool = getPool();
     const classRow = await ownsPersonalClass(pool, teacherId, classId);
     if (!classRow) return bad(req, res, 404, 40401, '班级不存在');
 
-    const duration = durationDays(startDate, deadlineDate);
     const { rows } = await pool.query(
       `INSERT INTO teacher_personal_class_course_settings
         (teacher_personal_class_id, teacher_id, module_key, start_date, deadline_date,

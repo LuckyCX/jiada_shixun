@@ -51,6 +51,34 @@ export type StudentIdeationPrerequisiteMember = {
   name: string;
 };
 
+export type IdeationProjectTopicStatus = 'pending' | 'approved' | 'rejected';
+
+export type IdeationProjectTopicInput = {
+  projectName: string;
+  projectDirection: string;
+  projectDescription: string;
+  coreValue: string;
+  targetUsers: string;
+  coreProblem: string;
+  solutionOverview: string;
+  marketSize: string;
+  competitiveAdvantage: string;
+};
+
+export type IdeationProjectTopic = IdeationProjectTopicInput & {
+  id: string;
+  teamId: string;
+  teamName: string;
+  leaderName: string;
+  memberCount: number;
+  direction: string;
+  description: string;
+  submitTime: string;
+  status: IdeationProjectTopicStatus;
+  reviewComment: string;
+  reviewTime: string;
+};
+
 export async function fetchStudentIdeationWorkspace(classId: string): Promise<StudentIdeationWorkspace> {
   return portalAuthenticatedFetch(
     'student',
@@ -101,4 +129,53 @@ export async function fetchStudentIdeationTeamPrerequisites(classId: string): Pr
     'student',
     `/api/student/personal-classes/${encodeURIComponent(classId)}/ideation/team-prerequisites`
   ) as Promise<{ incompleteMembers: StudentIdeationPrerequisiteMember[] }>;
+}
+
+export async function fetchStudentIdeationProjectTopic(classId: string): Promise<{
+  topic: IdeationProjectTopic | null;
+}> {
+  return portalAuthenticatedFetch(
+    'student',
+    `/api/student/personal-classes/${encodeURIComponent(classId)}/ideation/topic`
+  ) as Promise<{ topic: IdeationProjectTopic | null }>;
+}
+
+export async function submitStudentIdeationProjectTopic(
+  classId: string,
+  body: IdeationProjectTopicInput
+): Promise<IdeationProjectTopic> {
+  const res = await portalAuthenticatedFetch(
+    'student',
+    `/api/student/personal-classes/${encodeURIComponent(classId)}/ideation/topic`,
+    {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }
+  ) as { topic: IdeationProjectTopic };
+  return res.topic;
+}
+
+export async function fetchTeacherIdeationProjectTopics(classId: string): Promise<{
+  topics: IdeationProjectTopic[];
+}> {
+  return portalAuthenticatedFetch(
+    'teacher',
+    `/api/teacher/personal-classes/${encodeURIComponent(classId)}/ideation/topics`
+  ) as Promise<{ topics: IdeationProjectTopic[] }>;
+}
+
+export async function reviewTeacherIdeationProjectTopic(
+  classId: string,
+  topicId: string,
+  body: { status: 'approved' | 'rejected'; comment: string }
+): Promise<IdeationProjectTopic> {
+  const res = await portalAuthenticatedFetch(
+    'teacher',
+    `/api/teacher/personal-classes/${encodeURIComponent(classId)}/ideation/topics/${encodeURIComponent(topicId)}/review`,
+    {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }
+  ) as { topic: IdeationProjectTopic };
+  return res.topic;
 }

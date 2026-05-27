@@ -658,7 +658,14 @@ export default function TeacherDashboard() {
         );
 
       case 'topicReview':
-        return <TopicReview />;
+        if (!selectedPersonalClass) {
+          return (
+            <div className="bg-white rounded-xl border border-dashed border-gray-200 py-16 text-center text-gray-500 text-sm">
+              请先在右上角选择班级
+            </div>
+          );
+        }
+        return <TopicReview personalClass={selectedPersonalClass} />;
 
       case 'businessPlanReview':
         return <BusinessPlanReview />;
