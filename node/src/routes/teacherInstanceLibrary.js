@@ -12,10 +12,16 @@ const router = Router();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UPLOAD_ROOT = path.join(__dirname, '../../uploads/teacher-instance-library');
 const MAX_RESOURCE_BYTES = 200 * 1024 * 1024;
+const MAX_COVER_BYTES = 8 * 1024 * 1024;
 
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: MAX_RESOURCE_BYTES },
+});
+
+const uploadCover = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_COVER_BYTES },
 });
 
 function ok(req, res, data, message = 'OK') {
@@ -124,6 +130,7 @@ function mapCase(row, resources = []) {
     tags,
     projectOutcome: row.project_outcome || '',
     sortOrder: Number(row.sort_order || 0),
+    hasCoverImage: Boolean(row.cover_storage_path),
     resources,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -143,30 +150,42 @@ function mapCategory(row, cases = []) {
   };
 }
 
-async function loadLibraryForTeacher(pool, teacherId) {
+const VALID_MODULE_KEYS = new Set(['ideation', 'market', 'product', 'business', 'simulation', 'plan']);
+
+function normalizeModuleKey(raw) {
+  const key = String(raw || 'ideation').trim();
+  return VALID_MODULE_KEYS.has(key) ? key : 'ideation';
+}
+
+async function loadLibraryForTeacher(pool, teacherId, moduleKey = 'ideation') {
+  const mk = normalizeModuleKey(moduleKey);
   const [categoryRes, caseRes, resourceRes] = await Promise.all([
     pool.query(
       `SELECT id, name, icon, color, sort_order, created_at, updated_at
        FROM teacher_instance_library_categories
-       WHERE teacher_id = $1
+       WHERE teacher_id = $1 AND training_module_key = $2
        ORDER BY sort_order ASC, id ASC`,
-      [teacherId]
+      [teacherId, mk]
     ),
     pool.query(
-      `SELECT id, category_id, title, detail_html, tags, project_outcome, sort_order, created_at, updated_at
-       FROM teacher_instance_library_cases
-       WHERE teacher_id = $1
-       ORDER BY sort_order ASC, id ASC`,
-      [teacherId]
+      `SELECT c.id, c.category_id, c.title, c.detail_html, c.tags, c.project_outcome, c.sort_order,
+              c.cover_storage_path, c.cover_origin_name, c.cover_mime_type, c.created_at, c.updated_at
+       FROM teacher_instance_library_cases c
+       INNER JOIN teacher_instance_library_categories cat ON cat.id = c.category_id
+       WHERE c.teacher_id = $1 AND cat.training_module_key = $2
+       ORDER BY c.sort_order ASC, c.id ASC`,
+      [teacherId, mk]
     ),
     pool.query(
       `SELECT id, case_id, usage, origin_name, storage_name, storage_path, mime_type, size_bytes, resource_type, created_at
        FROM teacher_instance_library_resources
        WHERE case_id IN (
-         SELECT id FROM teacher_instance_library_cases WHERE teacher_id = $1
+         SELECT c.id FROM teacher_instance_library_cases c
+         INNER JOIN teacher_instance_library_categories cat ON cat.id = c.category_id
+         WHERE c.teacher_id = $1 AND cat.training_module_key = $2
        )
        ORDER BY sort_order ASC, id ASC`,
-      [teacherId]
+      [teacherId, mk]
     ),
   ]);
 
@@ -228,14 +247,21 @@ async function storagePathsForCategory(pool, teacherId, categoryId) {
 }
 
 async function storagePathsForCase(pool, teacherId, caseId) {
-  const { rows } = await pool.query(
+  const { rows: resRows } = await pool.query(
     `SELECT r.storage_path
      FROM teacher_instance_library_resources r
      INNER JOIN teacher_instance_library_cases c ON c.id = r.case_id
      WHERE c.teacher_id = $1 AND c.id = $2`,
     [teacherId, caseId]
   );
-  return rows.map((row) => row.storage_path);
+  const paths = resRows.map((row) => row.storage_path);
+  const { rows: covRows } = await pool.query(
+    `SELECT cover_storage_path FROM teacher_instance_library_cases WHERE id = $1 AND teacher_id = $2`,
+    [caseId, teacherId]
+  );
+  const cov = covRows[0]?.cover_storage_path;
+  if (cov) paths.push(cov);
+  return paths;
 }
 
 function removeFiles(storagePaths) {
@@ -272,6 +298,50 @@ async function loadStudentResource(pool, studentId, classId, resourceId) {
   return rows[0] || null;
 }
 
+async function loadTeacherCaseCoverRow(pool, teacherId, caseId) {
+  const { rows } = await pool.query(
+    `SELECT cover_storage_path, cover_origin_name, cover_mime_type
+     FROM teacher_instance_library_cases
+     WHERE id = $1 AND teacher_id = $2`,
+    [caseId, teacherId]
+  );
+  return rows[0] || null;
+}
+
+async function loadStudentCaseCoverRow(pool, studentId, classId, caseId) {
+  const teacherId = await studentEnrolledInClass(pool, studentId, classId);
+  if (!teacherId) return null;
+  const { rows } = await pool.query(
+    `SELECT cover_storage_path, cover_mime_type
+     FROM teacher_instance_library_cases
+     WHERE id = $1 AND teacher_id = $2 AND cover_storage_path IS NOT NULL AND cover_storage_path <> ''`,
+    [caseId, teacherId]
+  );
+  return rows[0] || null;
+}
+
+function isCoverImageMime(mime) {
+  const m = String(mime || '').toLowerCase();
+  return (
+    m === 'image/jpeg' ||
+    m === 'image/png' ||
+    m === 'image/gif' ||
+    m === 'image/webp' ||
+    m === 'image/jpg' ||
+    m === 'image/pjpeg' ||
+    m === 'image/x-png'
+  );
+}
+
+function sendCaseCover(req, res, row) {
+  const p = row.cover_storage_path;
+  if (!p) return bad(req, res, 404, 40404, '无封面');
+  const abs = resourceAbsPath(p);
+  if (!fs.existsSync(abs)) return bad(req, res, 404, 40404, '文件不存在');
+  if (row.cover_mime_type) res.type(row.cover_mime_type);
+  return res.sendFile(abs);
+}
+
 function sendResource(req, res, row, mode) {
   const abs = resourceAbsPath(row.storage_path);
   if (!fs.existsSync(abs)) return bad(req, res, 404, 40404, '文件不存在');
@@ -286,7 +356,8 @@ router.get('/teacher/instance-library', requireAuth(), requireTeacher(), async (
   try {
     const teacherId = userIdFromReq(req);
     if (!teacherId) return bad(req, res, 400, 40003, '参数无效');
-    const categories = await loadLibraryForTeacher(getPool(), teacherId);
+    const moduleKey = normalizeModuleKey(req.query.moduleKey);
+    const categories = await loadLibraryForTeacher(getPool(), teacherId, moduleKey);
     return ok(req, res, { categories });
   } catch (e) {
     logError(`GET teacher instance library traceId=${req.traceId}`, e);
@@ -301,12 +372,13 @@ router.post('/teacher/instance-library/categories', requireAuth(), requireTeache
     const icon = normalizeText(req.body?.icon) || 'FolderOutlined';
     const color = normalizeText(req.body?.color) || '#8b5cf6';
     const sortOrder = Number.isFinite(Number(req.body?.sortOrder)) ? Number(req.body.sortOrder) : 0;
+    const trainingModuleKey = normalizeModuleKey(req.body?.moduleKey);
     if (!teacherId || !name) return bad(req, res, 400, 40003, '方向名称不能为空');
     const { rows } = await getPool().query(
-      `INSERT INTO teacher_instance_library_categories (teacher_id, name, icon, color, sort_order)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO teacher_instance_library_categories (teacher_id, name, icon, color, sort_order, training_module_key)
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING id, name, icon, color, sort_order, created_at, updated_at`,
-      [teacherId, name, icon, color, sortOrder]
+      [teacherId, name, icon, color, sortOrder, trainingModuleKey]
     );
     return ok(req, res, mapCategory(rows[0], []));
   } catch (e) {
@@ -372,7 +444,8 @@ router.post('/teacher/instance-library/categories/:categoryId/cases', requireAut
       `INSERT INTO teacher_instance_library_cases
          (teacher_id, category_id, title, detail_html, tags, project_outcome, sort_order)
        VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
-       RETURNING id, category_id, title, detail_html, tags, project_outcome, sort_order, created_at, updated_at`,
+       RETURNING id, category_id, title, detail_html, tags, project_outcome, sort_order,
+         cover_storage_path, cover_origin_name, cover_mime_type, created_at, updated_at`,
       [teacherId, categoryId, title, detailHtml, JSON.stringify(tags), projectOutcome, sortOrder]
     );
     return ok(req, res, mapCase(rows[0], []));
@@ -399,7 +472,8 @@ router.put('/teacher/instance-library/cases/:caseId', requireAuth(), requireTeac
       `UPDATE teacher_instance_library_cases
        SET category_id = $3, title = $4, detail_html = $5, tags = $6::jsonb, project_outcome = $7, sort_order = $8
        WHERE id = $1 AND teacher_id = $2
-       RETURNING id, category_id, title, detail_html, tags, project_outcome, sort_order, created_at, updated_at`,
+       RETURNING id, category_id, title, detail_html, tags, project_outcome, sort_order,
+         cover_storage_path, cover_origin_name, cover_mime_type, created_at, updated_at`,
       [caseId, teacherId, categoryId, title, detailHtml, JSON.stringify(tags), projectOutcome, sortOrder]
     );
     if (!rows.length) return bad(req, res, 404, 40404, '实例不存在');
@@ -435,6 +509,118 @@ router.delete('/teacher/instance-library/cases/:caseId', requireAuth(), requireT
 });
 
 router.post(
+  '/teacher/instance-library/cases/:caseId/cover',
+  requireAuth(),
+  requireTeacher(),
+  uploadCover.single('file'),
+  async (req, res) => {
+    try {
+      const teacherId = userIdFromReq(req);
+      const caseId = parseId(req.params.caseId);
+      const pool = getPool();
+      if (!teacherId || !caseId || !req.file) return bad(req, res, 400, 40003, '请上传封面图片');
+      if (!(await teacherOwnsCase(pool, teacherId, caseId))) return bad(req, res, 404, 40404, '实例不存在');
+      const mime = String(req.file.mimetype || '').toLowerCase();
+      if (!isCoverImageMime(mime)) return bad(req, res, 400, 40004, '封面仅支持 JPG、PNG、GIF、WEBP');
+      const prev = await loadTeacherCaseCoverRow(pool, teacherId, caseId);
+      const originName = normalizeUploadFileName(req.file.originalname);
+      const ext = path.extname(originName).toLowerCase();
+      const allowed = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
+      const safeExt = allowed.includes(ext) ? ext : '.jpg';
+      const storageName = `${randomUUID()}_cover${safeExt}`;
+      const storageDir = path.join(String(teacherId), String(caseId));
+      fs.mkdirSync(path.join(UPLOAD_ROOT, storageDir), { recursive: true });
+      const relPath = path.join(storageDir, storageName).replace(/\\/g, '/');
+      fs.writeFileSync(resourceAbsPath(relPath), req.file.buffer);
+
+      await pool.query(
+        `UPDATE teacher_instance_library_cases
+         SET cover_storage_path = $1, cover_origin_name = $2, cover_mime_type = $3
+         WHERE id = $4 AND teacher_id = $5`,
+        [relPath, originName, mime || null, caseId, teacherId]
+      );
+
+      if (prev?.cover_storage_path && prev.cover_storage_path !== relPath) {
+        removeFiles([prev.cover_storage_path]);
+      }
+
+      const mapped = await mappedTeacherCase(pool, teacherId, caseId);
+      return ok(req, res, mapped);
+    } catch (e) {
+      logError(`POST teacher instance case cover traceId=${req.traceId}`, e);
+      return bad(req, res, 500, 50000, e.message);
+    }
+  }
+);
+
+router.delete('/teacher/instance-library/cases/:caseId/cover', requireAuth(), requireTeacher(), async (req, res) => {
+  try {
+    const teacherId = userIdFromReq(req);
+    const caseId = parseId(req.params.caseId);
+    const pool = getPool();
+    if (!teacherId || !caseId) return bad(req, res, 400, 40003, '参数无效');
+    const prev = await loadTeacherCaseCoverRow(pool, teacherId, caseId);
+    if (!prev?.cover_storage_path) {
+      const mapped = await mappedTeacherCase(pool, teacherId, caseId);
+      if (!mapped) return bad(req, res, 404, 40404, '实例不存在');
+      return ok(req, res, mapped);
+    }
+    await pool.query(
+      `UPDATE teacher_instance_library_cases
+       SET cover_storage_path = NULL, cover_origin_name = NULL, cover_mime_type = NULL
+       WHERE id = $1 AND teacher_id = $2`,
+      [caseId, teacherId]
+    );
+    removeFiles([prev.cover_storage_path]);
+    const mapped = await mappedTeacherCase(pool, teacherId, caseId);
+    return ok(req, res, mapped);
+  } catch (e) {
+    logError(`DELETE teacher instance case cover traceId=${req.traceId}`, e);
+    return bad(req, res, 500, 50000, e.message);
+  }
+});
+
+router.get(
+  '/teacher/instance-library/cases/:caseId/cover',
+  bearerFromQuery,
+  requireAuth(),
+  requireTeacher(),
+  async (req, res) => {
+    try {
+      const teacherId = userIdFromReq(req);
+      const caseId = parseId(req.params.caseId);
+      if (!teacherId || !caseId) return bad(req, res, 400, 40003, '参数无效');
+      const row = await loadTeacherCaseCoverRow(getPool(), teacherId, caseId);
+      if (!row?.cover_storage_path) return bad(req, res, 404, 40404, '无封面');
+      return sendCaseCover(req, res, row);
+    } catch (e) {
+      logError(`GET teacher instance case cover traceId=${req.traceId}`, e);
+      return bad(req, res, 500, 50000, e.message);
+    }
+  }
+);
+
+async function mappedTeacherCase(pool, teacherId, caseId) {
+  const { rows } = await pool.query(
+    `SELECT id, category_id, title, detail_html, tags, project_outcome, sort_order,
+            cover_storage_path, cover_origin_name, cover_mime_type, created_at, updated_at
+     FROM teacher_instance_library_cases
+     WHERE id = $1 AND teacher_id = $2`,
+    [caseId, teacherId]
+  );
+  const r = rows[0];
+  if (!r) return null;
+  const resourceRows = await pool.query(
+    `SELECT id, case_id, usage, origin_name, storage_name, storage_path, mime_type, size_bytes, resource_type, created_at
+     FROM teacher_instance_library_resources
+     WHERE case_id = $1
+     ORDER BY sort_order ASC, id ASC`,
+    [caseId]
+  );
+  return mapCase(r, resourceRows.rows.map(mapResource));
+}
+
+router.post(
   '/teacher/instance-library/cases/:caseId/resources',
   requireAuth(),
   requireTeacher(),
@@ -451,7 +637,7 @@ router.post(
       const storageDir = path.join(String(teacherId), String(caseId));
       const absDir = path.join(UPLOAD_ROOT, storageDir);
       fs.mkdirSync(absDir, { recursive: true });
-      const storagePath = path.join(storageDir, storageName);
+      const storagePath = path.join(storageDir, storageName).replace(/\\/g, '/');
       fs.writeFileSync(resourceAbsPath(storagePath), req.file.buffer);
       const usage = req.body?.usage === 'inline' ? 'inline' : 'attachment';
       const { rows } = await pool.query(
@@ -532,7 +718,8 @@ router.get('/student/personal-classes/:classId/instance-library', requireAuth(),
     const pool = getPool();
     const teacherId = await studentEnrolledInClass(pool, studentId, classId);
     if (!teacherId) return bad(req, res, 403, 40301, '未加入该班级');
-    const categories = await loadLibraryForTeacher(pool, teacherId);
+    const moduleKey = normalizeModuleKey(req.query.moduleKey);
+    const categories = await loadLibraryForTeacher(pool, teacherId, moduleKey);
     return ok(req, res, { categories });
   } catch (e) {
     logError(`GET student instance library traceId=${req.traceId}`, e);
@@ -577,6 +764,27 @@ router.get(
       return sendResource(req, res, row, 'preview');
     } catch (e) {
       logError(`GET student instance resource preview traceId=${req.traceId}`, e);
+      return bad(req, res, 500, 50000, e.message);
+    }
+  }
+);
+
+router.get(
+  '/student/personal-classes/:classId/instance-library/cases/:caseId/cover',
+  bearerFromQuery,
+  requireAuth(),
+  requireStudent(),
+  async (req, res) => {
+    try {
+      const studentId = userIdFromReq(req);
+      const classId = parseId(req.params.classId);
+      const caseId = parseId(req.params.caseId);
+      if (!studentId || !classId || !caseId) return bad(req, res, 400, 40003, '参数无效');
+      const row = await loadStudentCaseCoverRow(getPool(), studentId, classId, caseId);
+      if (!row?.cover_storage_path) return bad(req, res, 404, 40404, '无封面');
+      return sendCaseCover(req, res, row);
+    } catch (e) {
+      logError(`GET student instance case cover traceId=${req.traceId}`, e);
       return bad(req, res, 500, 50000, e.message);
     }
   }

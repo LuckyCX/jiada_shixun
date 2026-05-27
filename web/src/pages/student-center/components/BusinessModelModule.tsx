@@ -1,7 +1,16 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { message, Spin } from 'antd';
 import VersionControl, { Version } from '../../../components/feature/VersionControl';
 import WarRoom from '../../business-model/components/WarRoom';
+import {
+  fetchBusinessModelWorkspace,
+  generateBusinessModelFinanceItemsAi,
+  generateBusinessModelMarketingAi,
+  generateBusinessModelSwotAi,
+  saveBusinessModelWorkspacePartial,
+  type BusinessModelWorkspacePayload,
+} from '../../../lib/studentBusinessModelApi';
 
 interface BMCData {
   keyPartnerships: string;
@@ -54,33 +63,53 @@ interface RevenueItem {
   monthly: number;
 }
 
-const initialCosts: CostItem[] = [
-  { id: 1, category: '固定成本', name: '技术开发', amount: 50000 },
-  { id: 2, category: '固定成本', name: '服务器租赁', amount: 12000 },
-  { id: 3, category: '固定成本', name: '办公场地', amount: 18000 },
-  { id: 4, category: '固定成本', name: '基础人员工资', amount: 80000 },
-  { id: 5, category: '变动成本', name: '配送人员提成', amount: 45000 },
-  { id: 6, category: '变动成本', name: '市场推广费用', amount: 75000 },
-  { id: 7, category: '变动成本', name: '包装材料', amount: 8000 },
-  { id: 8, category: '变动成本', name: '客服运营', amount: 12000 },
-];
+const emptySwot = { strengths: '', weaknesses: '', opportunities: '', threats: '' };
+const emptyMarketing = { product: '', price: '', place: '', promotion: '' };
 
-const initialRevenues: RevenueItem[] = [
-  { id: 1, source: '配送费收入', monthly: 15000 },
-  { id: 2, source: '商家佣金', monthly: 18000 },
-  { id: 3, source: '会员收入', monthly: 3000 },
-  { id: 4, source: '广告收入', monthly: 1500 },
-];
+function savedAtLabel(iso: string) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleString('zh-CN');
+}
+
+function applyPayloadToState(d: BusinessModelWorkspacePayload, setters: {
+  setSwotData: (v: typeof emptySwot) => void;
+  setMarketingData: (v: typeof emptyMarketing) => void;
+  setCosts: (v: CostItem[]) => void;
+  setRevenues: (v: RevenueItem[]) => void;
+  setSwotSaveTime: (v: string) => void;
+  setMarketingSaveTime: (v: string) => void;
+  setFinanceSaveTime: (v: string) => void;
+}) {
+  setters.setSwotData(d.swot || emptySwot);
+  setters.setMarketingData(d.marketing || emptyMarketing);
+  setters.setCosts((d.finance?.costs || []) as CostItem[]);
+  setters.setRevenues((d.finance?.revenues || []) as RevenueItem[]);
+  setters.setSwotSaveTime(savedAtLabel(d.swotSavedAt || ''));
+  setters.setMarketingSaveTime(savedAtLabel(d.marketingSavedAt || ''));
+  setters.setFinanceSaveTime(savedAtLabel(d.financeSavedAt || ''));
+}
 
 type BusinessModelModuleProps = {
+  classId?: string;
+  studentDisplayName?: string;
   onTaskComplete?: () => void;
 };
 
-export default function BusinessModelModule({ onTaskComplete }: BusinessModelModuleProps) {
+export default function BusinessModelModule({
+  classId,
+  studentDisplayName = '同学',
+  onTaskComplete,
+}: BusinessModelModuleProps) {
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState<'canvas' | 'swot' | 'marketing' | 'finance' | 'warroom'>('canvas');
-  const [costs, setCosts] = useState<CostItem[]>(initialCosts);
-  const [revenues, setRevenues] = useState<RevenueItem[]>(initialRevenues);
+  const [activeTab, setActiveTab] = useState<'canvas' | 'swot' | 'marketing' | 'finance' | 'warroom'>('swot');
+  const [workspaceLoading, setWorkspaceLoading] = useState(false);
+  const [aiSwotRunning, setAiSwotRunning] = useState(false);
+  const [aiMarketingRunning, setAiMarketingRunning] = useState(false);
+  const [aiFinanceRunning, setAiFinanceRunning] = useState(false);
+  const [costs, setCosts] = useState<CostItem[]>([]);
+  const [revenues, setRevenues] = useState<RevenueItem[]>([]);
   const [editingCostId, setEditingCostId] = useState<number | null>(null);
   const [editingRevenueId, setEditingRevenueId] = useState<number | null>(null);
   const [showAddCost, setShowAddCost] = useState(false);
@@ -99,23 +128,15 @@ export default function BusinessModelModule({ onTaskComplete }: BusinessModelMod
   const [isExporting, setIsExporting] = useState(false);
   const [shareLink, setShareLink] = useState('');
 
-  const [swotData, setSwotData] = useState({
-    strengths: '• 专注校园场景，了解用户需求\n• 技术团队实力强，算法优化能力突出\n• 配送路径短，效率高\n• 与校园餐厅关系良好',
-    weaknesses: '• 初创团队，资金有限\n• 品牌知名度低，需要大量推广\n• 配送团队规模小\n• 缺乏成熟的运营经验',
-    opportunities: '• 校园外卖市场持续增长\n• 学校支持学生创业项目\n• 智能配送技术日趋成熟\n• 用户对配送效率要求提高',
-    threats: '• 美团、饿了么等巨头竞争激烈\n• 用户习惯难以改变\n• 食品安全监管趋严\n• 配送成本可能上升',
-  });
+  const [swotData, setSwotData] = useState(emptySwot);
   const [swotSaveTime, setSwotSaveTime] = useState('');
   const [isSavingSwot, setIsSavingSwot] = useState(false);
 
-  const [marketingData, setMarketingData] = useState({
-    product: '• 15分钟快速配送服务\n• 智能订单管理系统\n• 实时位置追踪\n• 会员积分体系',
-    price: '• 配送费：2元起\n• 会员月卡：19.9元/月\n• 新用户首单免配送费\n• 满减优惠：满20减3',
-    place: '• APP下载和使用\n• 微信小程序\n• 校园地推活动\n• 社交媒体营销\n• 宿舍楼宣传栏',
-    promotion: '• 开学季大型推广活动\n• 社交媒体营销\n• KOL校园大使计划\n• 推荐有奖活动',
-  });
+  const [marketingData, setMarketingData] = useState(emptyMarketing);
   const [marketingSaveTime, setMarketingSaveTime] = useState('');
   const [isSavingMarketing, setIsSavingMarketing] = useState(false);
+  const [financeSaveTime, setFinanceSaveTime] = useState('');
+  const [isSavingFinance, setIsSavingFinance] = useState(false);
 
   const [versions, setVersions] = useState<Version[]>([]);
   const [currentVersion, setCurrentVersion] = useState(1);
@@ -139,10 +160,10 @@ export default function BusinessModelModule({ onTaskComplete }: BusinessModelMod
     if (!version) return;
     const data = version.data;
     setCanvasData(data.canvasData || initialCanvasData);
-    setSwotData(data.swotData || { strengths: '', weaknesses: '', opportunities: '', threats: '' });
-    setMarketingData(data.marketingData || { product: '', price: '', place: '', promotion: '' });
-    setCosts(data.costs || initialCosts);
-    setRevenues(data.revenues || initialRevenues);
+    setSwotData(data.swotData || emptySwot);
+    setMarketingData(data.marketingData || emptyMarketing);
+    setCosts(data.costs || []);
+    setRevenues(data.revenues || []);
     setCurrentVersion(version.versionNumber);
     showToast(`已回撤到版本 v${version.versionNumber}`);
   };
@@ -151,6 +172,34 @@ export default function BusinessModelModule({ onTaskComplete }: BusinessModelMod
     setToast(msg);
     setTimeout(() => setToast(''), 2500);
   };
+
+  useEffect(() => {
+    if (!classId?.trim()) return;
+    let cancelled = false;
+    (async () => {
+      setWorkspaceLoading(true);
+      try {
+        const d = await fetchBusinessModelWorkspace(classId.trim());
+        if (cancelled) return;
+        applyPayloadToState(d, {
+          setSwotData,
+          setMarketingData,
+          setCosts,
+          setRevenues,
+          setSwotSaveTime,
+          setMarketingSaveTime,
+          setFinanceSaveTime,
+        });
+      } catch (e) {
+        if (!cancelled) message.error(e instanceof Error ? e.message : '加载失败');
+      } finally {
+        if (!cancelled) setWorkspaceLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [classId]);
 
   // AI生成画布内容
   const handleAIGenerate = () => {
@@ -169,38 +218,160 @@ export default function BusinessModelModule({ onTaskComplete }: BusinessModelMod
     onTaskComplete?.();
   };
 
-  const handleSaveSwot = () => {
+  const handleSaveSwot = async () => {
+    if (!classId?.trim()) {
+      message.warning('缺少班级信息');
+      return;
+    }
     setIsSavingSwot(true);
-    setTimeout(() => {
-      localStorage.setItem('bmc_swot_data', JSON.stringify(swotData));
-      const now = new Date();
-      setSwotSaveTime(`${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`);
-      setIsSavingSwot(false);
+    try {
+      const d = await saveBusinessModelWorkspacePartial(classId.trim(), { swot: swotData });
+      applyPayloadToState(d, {
+        setSwotData,
+        setMarketingData,
+        setCosts,
+        setRevenues,
+        setSwotSaveTime,
+        setMarketingSaveTime,
+        setFinanceSaveTime,
+      });
       showToast('SWOT分析已保存 ✓');
-    }, 1000);
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '保存失败');
+    } finally {
+      setIsSavingSwot(false);
+    }
   };
 
-  const handleSaveMarketing = () => {
+  const handleSaveMarketing = async () => {
+    if (!classId?.trim()) {
+      message.warning('缺少班级信息');
+      return;
+    }
     setIsSavingMarketing(true);
-    setTimeout(() => {
-      localStorage.setItem('bmc_marketing_data', JSON.stringify(marketingData));
-      const now = new Date();
-      setMarketingSaveTime(`${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`);
-      setIsSavingMarketing(false);
+    try {
+      const d = await saveBusinessModelWorkspacePartial(classId.trim(), { marketing: marketingData });
+      applyPayloadToState(d, {
+        setSwotData,
+        setMarketingData,
+        setCosts,
+        setRevenues,
+        setSwotSaveTime,
+        setMarketingSaveTime,
+        setFinanceSaveTime,
+      });
       showToast('营销策略已保存 ✓');
-    }, 1000);
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '保存失败');
+    } finally {
+      setIsSavingMarketing(false);
+    }
+  };
+
+  const handleSaveFinance = async () => {
+    if (!classId?.trim()) {
+      message.warning('缺少班级信息');
+      return;
+    }
+    setIsSavingFinance(true);
+    try {
+      const d = await saveBusinessModelWorkspacePartial(classId.trim(), {
+        finance: { costs, revenues },
+      });
+      applyPayloadToState(d, {
+        setSwotData,
+        setMarketingData,
+        setCosts,
+        setRevenues,
+        setSwotSaveTime,
+        setMarketingSaveTime,
+        setFinanceSaveTime,
+      });
+      showToast('财务数据已保存 ✓');
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '保存失败');
+    } finally {
+      setIsSavingFinance(false);
+    }
+  };
+
+  const handleAiSwot = async () => {
+    if (!classId?.trim()) {
+      message.warning('缺少班级信息');
+      return;
+    }
+    setAiSwotRunning(true);
+    try {
+      const d = await generateBusinessModelSwotAi(classId.trim());
+      applyPayloadToState(d, {
+        setSwotData,
+        setMarketingData,
+        setCosts,
+        setRevenues,
+        setSwotSaveTime,
+        setMarketingSaveTime,
+        setFinanceSaveTime,
+      });
+      showToast('SWOT 已由 AI 生成并保存');
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '生成失败');
+    } finally {
+      setAiSwotRunning(false);
+    }
+  };
+
+  const handleAiMarketing = async () => {
+    if (!classId?.trim()) {
+      message.warning('缺少班级信息');
+      return;
+    }
+    setAiMarketingRunning(true);
+    try {
+      const d = await generateBusinessModelMarketingAi(classId.trim());
+      applyPayloadToState(d, {
+        setSwotData,
+        setMarketingData,
+        setCosts,
+        setRevenues,
+        setSwotSaveTime,
+        setMarketingSaveTime,
+        setFinanceSaveTime,
+      });
+      showToast('4P 策略已由 AI 生成并保存');
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '生成失败');
+    } finally {
+      setAiMarketingRunning(false);
+    }
+  };
+
+  const handleAiFinanceItems = async () => {
+    if (!classId?.trim()) {
+      message.warning('缺少班级信息');
+      return;
+    }
+    setAiFinanceRunning(true);
+    try {
+      const d = await generateBusinessModelFinanceItemsAi(classId.trim());
+      applyPayloadToState(d, {
+        setSwotData,
+        setMarketingData,
+        setCosts,
+        setRevenues,
+        setSwotSaveTime,
+        setMarketingSaveTime,
+        setFinanceSaveTime,
+      });
+      message.info('根据项目信息和通用财务数据推算，请根据实际情况修改。');
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '生成失败');
+    } finally {
+      setAiFinanceRunning(false);
+    }
   };
 
   const updateCanvasField = (field: keyof BMCData, value: string) => {
     setCanvasData(prev => ({ ...prev, [field]: value }));
-  };
-
-  const handleAIGenerateTab = () => {
-    setIsGenerating(true);
-    setTimeout(() => {
-      setIsGenerating(false);
-      showToast(`AI已优化${tabs.find(t => t.key === activeTab)?.label}内容 ✓`);
-    }, 2000);
   };
 
   const handleTeamShare = () => {
@@ -255,11 +426,11 @@ export default function BusinessModelModule({ onTaskComplete }: BusinessModelMod
   };
 
   const tabs = [
-    { key: 'canvas' as const, label: '商业画布', icon: 'ri-layout-grid-line' },
     { key: 'swot' as const, label: 'SWOT分析', icon: 'ri-grid-line' },
     { key: 'marketing' as const, label: '营销策略', icon: 'ri-megaphone-line' },
     { key: 'finance' as const, label: '成本分析', icon: 'ri-money-dollar-circle-line' },
     { key: 'warroom' as const, label: '虚拟董事会', icon: 'ri-team-line', badge: 'AI' },
+    { key: 'canvas' as const, label: '商业画布', icon: 'ri-layout-grid-line' },
   ];
 
   // 画布卡片配置
@@ -317,7 +488,7 @@ export default function BusinessModelModule({ onTaskComplete }: BusinessModelMod
 
       {/* 模块头部 */}
       <div className="bg-gradient-to-br from-pink-500 to-pink-600 rounded-2xl shadow-xl p-8 text-white">
-        <div className="flex items-start justify-between mb-6">
+        <div className="flex items-start justify-between">
           <div className="flex items-center gap-4">
             <div className="w-16 h-16 bg-white/20 rounded-2xl flex items-center justify-center backdrop-blur-sm">
               <i className="ri-briefcase-line text-3xl"></i>
@@ -331,20 +502,7 @@ export default function BusinessModelModule({ onTaskComplete }: BusinessModelMod
             <i className="ri-loader-line mr-1.5"></i>进行中
           </span>
         </div>
-        <div className="grid grid-cols-3 gap-4">
-          <div className="bg-white/10 rounded-xl p-4 backdrop-blur-sm">
-            <div className="text-2xl font-bold mb-1">0/9</div>
-            <div className="text-sm text-white/70">知识点完成</div>
-          </div>
-          <div className="bg-white/10 rounded-xl p-4 backdrop-blur-sm">
-            <div className="text-2xl font-bold mb-1">0/6</div>
-            <div className="text-sm text-white/70">任务完成</div>
-          </div>
-          <div className="bg-white/10 rounded-xl p-4 backdrop-blur-sm">
-            <div className="text-2xl font-bold mb-1">0%</div>
-            <div className="text-sm text-white/70">整体进度</div>
-          </div>
-        </div>
+         
       </div>
 
       {/* 标签页 */}
@@ -446,43 +604,39 @@ export default function BusinessModelModule({ onTaskComplete }: BusinessModelMod
                 </button>
               </div>
 
-              {/* 底部操作工具栏 */}
-              <div className="border-t border-gray-200 pt-6">
-                <div className="grid grid-cols-4 gap-4">
-                  <button
-                    onClick={handleAIGenerate}
-                    disabled={isGenerating}
-                    className="px-6 py-3 bg-gradient-to-r from-teal-500 to-emerald-500 text-white text-sm font-bold rounded-xl hover:shadow-lg transition-all whitespace-nowrap cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2"
-                  >
-                    {isGenerating ? <><i className="ri-loader-4-line animate-spin"></i>生成中...</> : <><i className="ri-sparkling-line"></i>AI生成</>}
-                  </button>
-                  <button onClick={handleTeamShare} className="px-6 py-3 bg-gradient-to-r from-teal-600 to-teal-700 text-white text-sm font-bold rounded-xl hover:shadow-lg transition-all whitespace-nowrap cursor-pointer flex items-center justify-center gap-2">
-                    <i className="ri-share-line"></i>团队共享
-                  </button>
-                  <button onClick={handleExportDoc} disabled={isExporting} className="px-6 py-3 bg-gradient-to-r from-purple-500 to-pink-500 text-white text-sm font-bold rounded-xl hover:shadow-lg transition-all whitespace-nowrap cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2">
-                    {isExporting ? <><i className="ri-loader-4-line animate-spin"></i>导出中...</> : <><i className="ri-file-text-line"></i>导出文档</>}
-                  </button>
-                  <button onClick={handleExportImage} disabled={isExporting} className="px-6 py-3 bg-gradient-to-r from-orange-500 to-amber-500 text-white text-sm font-bold rounded-xl hover:shadow-lg transition-all whitespace-nowrap cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2">
-                    {isExporting ? <><i className="ri-loader-4-line animate-spin"></i>导出中...</> : <><i className="ri-image-line"></i>导出图片</>}
-                  </button>
-                </div>
-              </div>
             </div>
           )}
 
           {activeTab === 'swot' && (
             <div className="space-y-8">
+              {workspaceLoading ? (
+                <div className="flex justify-center py-20">
+                  <Spin />
+                </div>
+              ) : (
+                <>
               <div className="bg-pink-50 border border-pink-200 rounded-xl p-6">
-                <div className="flex items-center justify-between">
-                  <div>
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div className="min-w-0 flex-1">
                     <h3 className="text-base font-bold text-pink-900 mb-3">SWOT分析指南</h3>
                     <p className="text-sm text-pink-700">从优势、劣势、机会、威胁四个维度全面分析项目</p>
                   </div>
-                  {swotSaveTime && (
-                    <div className="text-xs text-pink-600 flex items-center gap-1">
-                      <i className="ri-time-line"></i>上次保存：{swotSaveTime}
-                    </div>
-                  )}
+                  <div className="flex flex-wrap items-center gap-3 shrink-0">
+                    {swotSaveTime && (
+                      <div className="text-xs text-pink-600 flex items-center gap-1">
+                        <i className="ri-time-line"></i>上次保存：{swotSaveTime}
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      onClick={handleAiSwot}
+                      disabled={aiSwotRunning || !classId?.trim()}
+                      className="px-4 py-2 bg-gradient-to-r from-teal-500 to-emerald-500 text-white text-sm font-semibold rounded-xl hover:shadow-md transition-all whitespace-nowrap cursor-pointer disabled:opacity-50 flex items-center gap-2"
+                    >
+                      {aiSwotRunning ? <i className="ri-loader-4-line animate-spin" /> : <i className="ri-sparkling-line" />}
+                      AI 生成
+                    </button>
+                  </div>
                 </div>
               </div>
               <div className="grid md:grid-cols-2 gap-6">
@@ -509,38 +663,41 @@ export default function BusinessModelModule({ onTaskComplete }: BusinessModelMod
               <button onClick={handleSaveSwot} disabled={isSavingSwot} className="w-full px-6 py-3 bg-pink-500 text-white text-sm font-bold rounded-xl hover:bg-pink-600 transition-colors whitespace-nowrap cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2">
                 {isSavingSwot ? <><i className="ri-loader-4-line animate-spin"></i>保存中...</> : <><i className="ri-save-line"></i>保存分析</>}
               </button>
-              <div className="border-t border-gray-200 pt-6">
-                <div className="grid grid-cols-4 gap-4">
-                  <button onClick={handleAIGenerateTab} disabled={isGenerating} className="px-6 py-3 bg-gradient-to-r from-teal-500 to-emerald-500 text-white text-sm font-bold rounded-xl hover:shadow-lg transition-all whitespace-nowrap cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2">
-                    {isGenerating ? <><i className="ri-loader-4-line animate-spin"></i>生成中...</> : <><i className="ri-sparkling-line"></i>AI生成</>}
-                  </button>
-                  <button onClick={handleTeamShare} className="px-6 py-3 bg-gradient-to-r from-teal-600 to-teal-700 text-white text-sm font-bold rounded-xl hover:shadow-lg transition-all whitespace-nowrap cursor-pointer flex items-center justify-center gap-2">
-                    <i className="ri-share-line"></i>团队共享
-                  </button>
-                  <button onClick={handleExportDoc} disabled={isExporting} className="px-6 py-3 bg-gradient-to-r from-purple-500 to-pink-500 text-white text-sm font-bold rounded-xl hover:shadow-lg transition-all whitespace-nowrap cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2">
-                    {isExporting ? <><i className="ri-loader-4-line animate-spin"></i>导出中...</> : <><i className="ri-file-text-line"></i>导出文档</>}
-                  </button>
-                  <button onClick={handleExportImage} disabled={isExporting} className="px-6 py-3 bg-gradient-to-r from-orange-500 to-amber-500 text-white text-sm font-bold rounded-xl hover:shadow-lg transition-all whitespace-nowrap cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2">
-                    {isExporting ? <><i className="ri-loader-4-line animate-spin"></i>导出中...</> : <><i className="ri-image-line"></i>导出图片</>}
-                  </button>
-                </div>
-              </div>
+                </>
+              )}
             </div>
           )}
 
           {activeTab === 'marketing' && (
             <div className="space-y-8">
+              {workspaceLoading ? (
+                <div className="flex justify-center py-20">
+                  <Spin />
+                </div>
+              ) : (
+                <>
               <div className="bg-pink-50 border border-pink-200 rounded-xl p-6">
-                <div className="flex items-center justify-between">
-                  <div>
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div className="min-w-0 flex-1">
                     <h3 className="text-base font-bold text-pink-900 mb-3">营销策略指南</h3>
                     <p className="text-sm text-pink-700">制定STP战略和4P策略，明确市场定位和推广方案</p>
                   </div>
-                  {marketingSaveTime && (
-                    <div className="text-xs text-pink-600 flex items-center gap-1">
-                      <i className="ri-time-line"></i>上次保存：{marketingSaveTime}
-                    </div>
-                  )}
+                  <div className="flex flex-wrap items-center gap-3 shrink-0">
+                    {marketingSaveTime && (
+                      <div className="text-xs text-pink-600 flex items-center gap-1">
+                        <i className="ri-time-line"></i>上次保存：{marketingSaveTime}
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      onClick={handleAiMarketing}
+                      disabled={aiMarketingRunning || !classId?.trim()}
+                      className="px-4 py-2 bg-gradient-to-r from-teal-500 to-emerald-500 text-white text-sm font-semibold rounded-xl hover:shadow-md transition-all whitespace-nowrap cursor-pointer disabled:opacity-50 flex items-center gap-2"
+                    >
+                      {aiMarketingRunning ? <i className="ri-loader-4-line animate-spin" /> : <i className="ri-sparkling-line" />}
+                      AI 生成
+                    </button>
+                  </div>
                 </div>
               </div>
               <div className="bg-white border border-gray-200 rounded-xl p-6">
@@ -567,30 +724,42 @@ export default function BusinessModelModule({ onTaskComplete }: BusinessModelMod
               <button onClick={handleSaveMarketing} disabled={isSavingMarketing} className="w-full px-6 py-3 bg-pink-500 text-white text-sm font-bold rounded-xl hover:bg-pink-600 transition-colors whitespace-nowrap cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2">
                 {isSavingMarketing ? <><i className="ri-loader-4-line animate-spin"></i>保存中...</> : <><i className="ri-save-line"></i>保存策略</>}
               </button>
-              <div className="border-t border-gray-200 pt-6">
-                <div className="grid grid-cols-4 gap-4">
-                  <button onClick={handleAIGenerateTab} disabled={isGenerating} className="px-6 py-3 bg-gradient-to-r from-teal-500 to-emerald-500 text-white text-sm font-bold rounded-xl hover:shadow-lg transition-all whitespace-nowrap cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2">
-                    {isGenerating ? <><i className="ri-loader-4-line animate-spin"></i>生成中...</> : <><i className="ri-sparkling-line"></i>AI生成</>}
-                  </button>
-                  <button onClick={handleTeamShare} className="px-6 py-3 bg-gradient-to-r from-teal-600 to-teal-700 text-white text-sm font-bold rounded-xl hover:shadow-lg transition-all whitespace-nowrap cursor-pointer flex items-center justify-center gap-2">
-                    <i className="ri-share-line"></i>团队共享
-                  </button>
-                  <button onClick={handleExportDoc} disabled={isExporting} className="px-6 py-3 bg-gradient-to-r from-purple-500 to-pink-500 text-white text-sm font-bold rounded-xl hover:shadow-lg transition-all whitespace-nowrap cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2">
-                    {isExporting ? <><i className="ri-loader-4-line animate-spin"></i>导出中...</> : <><i className="ri-file-text-line"></i>导出文档</>}
-                  </button>
-                  <button onClick={handleExportImage} disabled={isExporting} className="px-6 py-3 bg-gradient-to-r from-orange-500 to-amber-500 text-white text-sm font-bold rounded-xl hover:shadow-lg transition-all whitespace-nowrap cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2">
-                    {isExporting ? <><i className="ri-loader-4-line animate-spin"></i>导出中...</> : <><i className="ri-image-line"></i>导出图片</>}
-                  </button>
-                </div>
-              </div>
+                </>
+              )}
             </div>
           )}
 
           {activeTab === 'finance' && (
             <div className="space-y-8">
+              {workspaceLoading ? (
+                <div className="flex justify-center py-20">
+                  <Spin />
+                </div>
+              ) : (
+                <>
               <div className="bg-pink-50 border border-pink-200 rounded-xl p-6">
-                <h3 className="text-base font-bold text-pink-900 mb-3">成本分析 — 可自由调整</h3>
-                <p className="text-sm text-pink-700">点击金额数字即可直接编辑，修改后汇总数据实时更新。可添加或删除成本项。</p>
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div className="min-w-0 flex-1">
+                    <h3 className="text-base font-bold text-pink-900 mb-3">成本分析 — 可自由调整</h3>
+                    <p className="text-sm text-pink-700">点击金额数字即可直接编辑，修改后汇总数据实时更新。可添加或删除成本项。</p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-3 shrink-0">
+                    {financeSaveTime && (
+                      <div className="text-xs text-pink-600 flex items-center gap-1">
+                        <i className="ri-time-line"></i>上次保存：{financeSaveTime}
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      onClick={handleAiFinanceItems}
+                      disabled={aiFinanceRunning || !classId?.trim()}
+                      className="px-4 py-2 bg-gradient-to-r from-teal-500 to-emerald-500 text-white text-sm font-semibold rounded-xl hover:shadow-md transition-all whitespace-nowrap cursor-pointer disabled:opacity-50 flex items-center gap-2"
+                    >
+                      {aiFinanceRunning ? <i className="ri-loader-4-line animate-spin" /> : <i className="ri-sparkling-line" />}
+                      AI 生成
+                    </button>
+                  </div>
+                </div>
               </div>
               <div className="bg-gradient-to-br from-pink-500 to-rose-500 rounded-2xl p-8 text-white">
                 <div className="grid md:grid-cols-3 gap-8">
@@ -678,13 +847,29 @@ export default function BusinessModelModule({ onTaskComplete }: BusinessModelMod
                   <span className="text-lg font-bold text-green-700">¥{totalRevenue.toLocaleString()}</span>
                 </div>
               </div>
-              <button onClick={() => showToast('财务数据已保存 ✓')} className="w-full px-6 py-3 bg-pink-500 text-white text-sm font-medium rounded-xl hover:bg-pink-600 transition-colors whitespace-nowrap cursor-pointer flex items-center justify-center gap-2">
-                <i className="ri-save-line"></i>保存财务数据
+              <button
+                onClick={handleSaveFinance}
+                disabled={isSavingFinance}
+                className="w-full px-6 py-3 bg-pink-500 text-white text-sm font-medium rounded-xl hover:bg-pink-600 transition-colors whitespace-nowrap cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {isSavingFinance ? (
+                  <>
+                    <i className="ri-loader-4-line animate-spin"></i>保存中…
+                  </>
+                ) : (
+                  <>
+                    <i className="ri-save-line"></i>保存财务数据
+                  </>
+                )}
               </button>
+                </>
+              )}
             </div>
           )}
 
-          {activeTab === 'warroom' && <WarRoom />}
+          {activeTab === 'warroom' && (
+            <WarRoom classId={classId} studentDisplayName={studentDisplayName} />
+          )}
         </div>
       </div>
 

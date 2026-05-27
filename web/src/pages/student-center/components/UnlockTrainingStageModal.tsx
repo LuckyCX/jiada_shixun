@@ -55,7 +55,7 @@ function buildRules(
       title: '商业模式设计',
       conditions: [
         { label: `开始时间：${start}`, met: !ctx.isBeforeStageStart('business') },
-        { label: '完成实训环节4：产品设计与迭代（原型上传）', met: ctx.isStageCompleted('product') },
+        { label: '完成实训环节4：产品设计与迭代（队长上传原型压缩包）', met: ctx.isStageCompleted('product') },
       ],
     },
     simulation: {

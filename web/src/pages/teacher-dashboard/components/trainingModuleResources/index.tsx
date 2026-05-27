@@ -7,13 +7,16 @@ import {
   createInstanceCase,
   createInstanceCategory,
   deleteInstanceCase,
+  deleteInstanceCaseCover,
   deleteInstanceCaseResource,
   deleteInstanceCategory,
   downloadTeacherInstanceResource,
   fetchTeacherInstanceLibrary,
+  getTeacherInstanceCaseCoverUrl,
   getTeacherInstanceResourcePreviewUrl,
   updateInstanceCase,
   updateInstanceCategory,
+  uploadInstanceCaseCover,
   uploadInstanceCaseResource,
   type InstanceLibraryCase,
   type InstanceLibraryCategory,
@@ -29,6 +32,9 @@ const trainingModules = [
 ] as const;
 
 type TrainingModuleKey = (typeof trainingModules)[number]['key'];
+
+/** 使用同一套实例库表结构、按 training_module_key 隔离 */
+const INSTANCE_LIBRARY_MODULE_KEYS: TrainingModuleKey[] = ['ideation', 'product'];
 type TrainingModuleResourcesProps = {
   selectedModule?: string;
   hideModuleTabs?: boolean;
@@ -79,6 +85,8 @@ export default function TrainingModuleResources({ selectedModule: selectedModule
   const [editingCase, setEditingCase] = useState<InstanceLibraryCase | null>(null);
   const [detailHtml, setDetailHtml] = useState('');
   const [pendingFiles, setPendingFiles] = useState<UploadFile[]>([]);
+  const [coverFileList, setCoverFileList] = useState<UploadFile[]>([]);
+  const [coverRemoved, setCoverRemoved] = useState(false);
   const [previewCase, setPreviewCase] = useState<InstanceLibraryCase | null>(null);
   const [categoryColor, setCategoryColor] = useState(DEFAULT_CATEGORY_COLOR);
   const [categoryIcon, setCategoryIcon] = useState(DEFAULT_CATEGORY_ICON);
@@ -92,10 +100,15 @@ export default function TrainingModuleResources({ selectedModule: selectedModule
     [categories, selectedCategoryId],
   );
 
+  const isPrototypeLibrary = selectedModule === 'product';
+  const categoryPanelTitle = isPrototypeLibrary ? '案例分类' : '垂直方向';
+  const caseCountLabel = isPrototypeLibrary ? '个原型案例' : '个实例';
+  const addCaseLabel = isPrototypeLibrary ? '新增案例' : '新增实例';
+
   const loadLibrary = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetchTeacherInstanceLibrary();
+      const res = await fetchTeacherInstanceLibrary(selectedModule);
       setCategories(res.categories || []);
       setSelectedCategoryId((prev) => {
         if (prev && res.categories?.some((cat) => cat.id === prev)) return prev;
@@ -106,7 +119,7 @@ export default function TrainingModuleResources({ selectedModule: selectedModule
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [selectedModule]);
 
   useEffect(() => {
     void loadLibrary();
@@ -114,7 +127,7 @@ export default function TrainingModuleResources({ selectedModule: selectedModule
 
   const handleModuleChange = (key: TrainingModuleKey) => {
     setInternalSelectedModule(key);
-    if (key === 'ideation') setSelectedCategoryId(categories[0]?.id || '');
+    setSelectedCategoryId('');
   };
 
   const openCategoryModal = (category?: InstanceLibraryCategory) => {
@@ -140,7 +153,7 @@ export default function TrainingModuleResources({ selectedModule: selectedModule
       await updateInstanceCategory(editingCategory.id, payload);
       message.success('方向已更新');
     } else {
-      await createInstanceCategory(payload);
+      await createInstanceCategory(payload, selectedModule);
       message.success('方向已新增');
     }
     setCategoryModalOpen(false);
@@ -168,6 +181,8 @@ export default function TrainingModuleResources({ selectedModule: selectedModule
     setEditingCase(caseItem || null);
     setDetailHtml(caseItem?.detailHtml || '');
     setPendingFiles([]);
+    setCoverFileList([]);
+    setCoverRemoved(false);
     caseForm.setFieldsValue({
       title: caseItem?.title || '',
       tags: caseItem?.tags || [],
@@ -207,6 +222,14 @@ export default function TrainingModuleResources({ selectedModule: selectedModule
           projectOutcome: payload.projectOutcome,
           sortOrder: payload.sortOrder,
         });
+    const hadStoredCover = Boolean(editingCase?.hasCoverImage);
+    if (coverRemoved && hadStoredCover) {
+      await deleteInstanceCaseCover(saved.id);
+    }
+    const coverFile = coverFileList[0]?.originFileObj as File | undefined;
+    if (coverFile) {
+      await uploadInstanceCaseCover(saved.id, coverFile);
+    }
     for (const file of pendingFiles) {
       const rawFile = file.originFileObj as File | undefined;
       if (rawFile) await uploadInstanceCaseResource(saved.id, rawFile);
@@ -271,12 +294,12 @@ export default function TrainingModuleResources({ selectedModule: selectedModule
         </div>
       )}
 
-      {selectedModule === 'ideation' ? (
+      {INSTANCE_LIBRARY_MODULE_KEYS.includes(selectedModule) ? (
         <div className="grid grid-cols-4 gap-6 min-h-[calc(100vh-250px)]">
           <div className="col-span-1">
             <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 sticky top-6 max-h-[calc(100vh-260px)] overflow-y-auto">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-base font-bold text-gray-900">垂直方向</h3>
+                <h3 className="text-base font-bold text-gray-900">{categoryPanelTitle}</h3>
                 <button type="button" onClick={() => openCategoryModal()} className="text-sm font-medium text-teal-600 cursor-pointer">
                   新增
                 </button>
@@ -307,8 +330,10 @@ export default function TrainingModuleResources({ selectedModule: selectedModule
                     </span>
                   </button>
                 ))}
-                {!loading && categories.length === 0 && (
-                  <div className="rounded-xl border border-dashed border-gray-200 p-4 text-center text-sm text-gray-500">暂无方向</div>
+                  {!loading && categories.length === 0 && (
+                  <div className="rounded-xl border border-dashed border-gray-200 p-4 text-center text-sm text-gray-500">
+                    {isPrototypeLibrary ? '暂无分类' : '暂无方向'}
+                  </div>
                 )}
               </div>
             </div>
@@ -327,21 +352,23 @@ export default function TrainingModuleResources({ selectedModule: selectedModule
                     </div>
                     <div className="flex-1">
                       <h2 className="text-xl font-bold text-gray-900">{selectedCategory.name}</h2>
-                      <p className="text-sm text-gray-500">该方向共 {selectedCategory.cases.length} 个实例</p>
+                      <p className="text-sm text-gray-500">
+                        该分类共 {selectedCategory.cases.length} {caseCountLabel}
+                      </p>
                     </div>
                     <button
                       type="button"
                       onClick={() => openCaseModal()}
                       className="px-4 py-2 rounded-xl bg-teal-600 text-white text-sm font-medium cursor-pointer hover:bg-teal-700"
                     >
-                      新增实例
+                      {addCaseLabel}
                     </button>
                     <button
                       type="button"
                       onClick={() => handleDeleteCategory(selectedCategory)}
                       className="px-4 py-2 rounded-xl bg-red-50 text-red-600 text-sm font-medium cursor-pointer hover:bg-red-100"
                     >
-                      删除方向
+                      {isPrototypeLibrary ? '删除分类' : '删除方向'}
                     </button>
                   </div>
 
@@ -349,8 +376,17 @@ export default function TrainingModuleResources({ selectedModule: selectedModule
                     {selectedCategory.cases.map((caseItem) => (
                       <div key={caseItem.id} className="border border-gray-200 rounded-xl p-5 hover:shadow-lg hover:border-teal-200 transition-all">
                         <div className="flex items-start justify-between gap-4 mb-2">
-                          <div className="flex-1">
-                            <h3 className="text-base font-bold text-gray-900 mb-2">{caseItem.title}</h3>
+                      <div className="flex-1">
+                        {caseItem.hasCoverImage && (
+                          <div className="mb-3 rounded-lg border border-gray-200 overflow-hidden bg-gray-50">
+                            <img
+                              src={getTeacherInstanceCaseCoverUrl(caseItem.id)}
+                              alt=""
+                              className="w-full h-32 object-cover block"
+                            />
+                          </div>
+                        )}
+                        <h3 className="text-base font-bold text-gray-900 mb-2">{caseItem.title}</h3>
                             <p
                               className="text-sm text-gray-600 leading-relaxed mb-3"
                               style={{ display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2, overflow: 'hidden' }}
@@ -387,13 +423,15 @@ export default function TrainingModuleResources({ selectedModule: selectedModule
                       </div>
                     ))}
                     {!loading && selectedCategory.cases.length === 0 && (
-                      <div className="rounded-xl border border-dashed border-gray-200 p-10 text-center text-sm text-gray-500">暂无实例</div>
+                      <div className="rounded-xl border border-dashed border-gray-200 p-10 text-center text-sm text-gray-500">
+                        {isPrototypeLibrary ? '暂无案例' : '暂无实例'}
+                      </div>
                     )}
                   </div>
                 </>
               ) : (
                 <div className="flex-1 rounded-xl border border-dashed border-gray-200 p-12 text-center text-sm text-gray-500">
-                  请先新增实例库方向
+                  {isPrototypeLibrary ? '请先新增案例分类' : '请先新增实例库方向'}
                 </div>
               )}
             </div>
@@ -478,6 +516,54 @@ export default function TrainingModuleResources({ selectedModule: selectedModule
               <span className="w-3 h-3 rounded-full" style={{ backgroundColor: displayColor(selectedCategory?.color) }}></span>
               <span>{selectedCategory?.name || '未选择方向'}</span>
             </div>
+          </Form.Item>
+          <Form.Item label="项目展示图">
+            {editingCase?.hasCoverImage && !coverRemoved && coverFileList.length === 0 ? (
+              <div className="relative rounded-xl border border-gray-200 bg-gray-50 overflow-hidden mb-2">
+                <img
+                  src={getTeacherInstanceCaseCoverUrl(editingCase.id)}
+                  alt=""
+                  className="w-full max-h-52 object-contain block"
+                />
+                <button
+                  type="button"
+                  className="absolute top-2 right-2 px-3 py-1 rounded-lg bg-white/90 border border-gray-200 text-sm text-gray-700 shadow-sm cursor-pointer hover:bg-white"
+                  onClick={() => setCoverRemoved(true)}
+                >
+                  移除
+                </button>
+              </div>
+            ) : null}
+            <Upload
+              listType="picture-card"
+              maxCount={1}
+              accept="image/jpeg,image/png,image/gif,image/webp"
+              fileList={coverFileList}
+              onChange={({ fileList }) => {
+                setCoverFileList(fileList);
+                if (fileList.length > 0) setCoverRemoved(false);
+              }}
+              beforeUpload={(file) => {
+                const okMime = /^image\/(jpeg|png|gif|webp)$/i.test(file.type || '');
+                if (!okMime) {
+                  message.warning('请上传 JPG、PNG、GIF 或 WEBP');
+                  return Upload.LIST_IGNORE;
+                }
+                if (file.size > 8 * 1024 * 1024) {
+                  message.warning('图片不超过 8MB');
+                  return Upload.LIST_IGNORE;
+                }
+                return false;
+              }}
+            >
+              {coverFileList.length >= 1 ? null : (
+                <div className="text-center px-2">
+                  <i className="ri-image-add-line text-2xl text-gray-400" />
+                  <div className="text-xs text-gray-500 mt-1">上传</div>
+                </div>
+              )}
+            </Upload>
+            <p className="text-xs text-gray-400 mt-1 m-0">仅 1 张，用于列表与详情大图展示。</p>
           </Form.Item>
           <Form.Item name="title" label="标题" rules={[{ required: true, message: '请输入标题' }]}>
             <Input maxLength={200} />
@@ -567,6 +653,15 @@ export default function TrainingModuleResources({ selectedModule: selectedModule
       >
         {previewCase && (
           <div className="space-y-4 max-h-[calc(100vh-220px)] overflow-y-auto overflow-x-hidden pr-2">
+            {previewCase.hasCoverImage && (
+              <div className="rounded-xl overflow-hidden border border-gray-200 bg-gray-50">
+                <img
+                  src={getTeacherInstanceCaseCoverUrl(previewCase.id)}
+                  alt=""
+                  className="w-full max-h-[min(380px,calc(100vh-380px))] object-contain block mx-auto"
+                />
+              </div>
+            )}
             <div className="flex items-center gap-2 flex-wrap">
               {previewCase.tags.map((tag) => (
                 <span key={tag} className="px-2.5 py-1 bg-teal-50 text-teal-700 text-xs font-medium rounded-full whitespace-nowrap">

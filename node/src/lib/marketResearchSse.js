@@ -88,7 +88,7 @@ function extractBalancedJsonObject(text) {
   return extractBalancedJsonObjectAt(text, 0);
 }
 
-function findAllBalancedJsonObjects(text) {
+export function findAllBalancedJsonObjects(text) {
   const t = String(text || '');
   const out = [];
   for (let i = 0; i < t.length; i++) {

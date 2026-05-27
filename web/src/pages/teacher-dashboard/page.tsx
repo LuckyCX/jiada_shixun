@@ -75,9 +75,9 @@ const sidebarGroups: SidebarGroup[] = [
     groupLabel: '教学监控',
     items: [
       { key: 'monitor', label: '全局项目监控', icon: 'ri-radar-line', type: 'tab' },
-      { key: 'analysis', label: '评价智能体分析', icon: 'ri-brain-line', type: 'tab' },
+      // { key: 'analysis', label: '评价智能体分析', icon: 'ri-brain-line', type: 'tab' },
       { key: 'guidance', label: '动态引导工具', icon: 'ri-compass-3-line', type: 'tab' },
-      { key: 'evaluation', label: '教学评价', icon: 'ri-star-line', type: 'tab' },
+      // { key: 'evaluation', label: '教学评价', icon: 'ri-star-line', type: 'tab' },
     ],
   },
   {

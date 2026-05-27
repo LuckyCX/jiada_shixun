@@ -1344,9 +1344,6 @@ export default function MarketResearchModule({
               <p className="text-white/80 text-sm">通过真实调研验证用户需求，构建典型用户画像</p>
             </div>
           </div>
-          <span className="px-3 py-1.5 rounded-full text-sm font-semibold bg-white/20 text-white whitespace-nowrap">
-            <i className="ri-play-circle-fill mr-1.5"></i>进行中
-          </span>
         </div>
         {/* <div className="grid grid-cols-3 gap-4">
           <div className="bg-white/10 rounded-xl p-4 backdrop-blur-sm">

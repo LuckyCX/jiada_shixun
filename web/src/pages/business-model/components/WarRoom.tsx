@@ -1,292 +1,384 @@
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { message } from 'antd';
+import {
+  WAR_ROOM_MODULE_DEFS,
+  adoptWarRoomMessage,
+  fetchBusinessModelWorkspace,
+  parseMentionedHat,
+  saveWarRoomCanvasCell,
+  warRoomDebateReply,
+  warRoomDebateRound,
+  warRoomDebateStart,
+  type WarRoomCanvas,
+  type WarRoomDebateMessage,
+  type WarRoomHat,
+} from '../../../lib/studentBusinessModelApi';
+import imgBai from '../../../assets/images/bai.jpg';
+import imgHong from '../../../assets/images/hong.jpg';
+import imgHei from '../../../assets/images/hei.jpg';
+import imgHuang from '../../../assets/images/huang.jpg';
+import imgLv from '../../../assets/images/lv.jpg';
+import imgLan from '../../../assets/images/lan.jpg';
 
-import { useState, useEffect, useRef } from 'react';
+type HatKey = Exclude<WarRoomHat, 'user'>;
 
-interface Message {
-  id: string;
-  hat: 'white' | 'red' | 'black' | 'yellow' | 'green' | 'blue';
-  content: string;
-  timestamp: Date;
-  status?: 'adopted' | 'ignored';
-  targetModule?: string;
-}
+const HAT_HEADER_ORDER: HatKey[] = ['white', 'red', 'black', 'yellow', 'green', 'blue'];
 
-interface CanvasModule {
-  id: string;
-  title: string;
-  content: string;
-  updatedBy?: string;
-  isHighlighted?: boolean;
-}
-
-const hatConfig = {
+const hatConfig: Record<
+  HatKey | 'user',
+  {
+    name: string;
+    hatLabel: string;
+    role: string;
+    color: string;
+    textColor: string;
+    borderColor: string;
+    icon: string;
+    avatar: string;
+    avatarBorder: string;
+    avatarBorderActive: string;
+    labelColor: string;
+    ringGlow: string;
+  }
+> = {
   white: {
     name: '白帽 - 数据分析师',
+    hatLabel: '白帽',
+    role: '数据分析师',
     color: 'bg-gray-100',
     textColor: 'text-gray-900',
     borderColor: 'border-gray-300',
     icon: 'ri-bar-chart-line',
-    avatar:
-      'https://readdy.ai/api/search-image?query=A%20cute%203d%20robot%20character%20wearing%20a%20white%20futuristic%20cap%20wearing%20smart%20glasses%20holding%20a%20holographic%20data%20chart%20neutral%20expression%20calm%20pose%20white%20and%20light%20grey%20color%20palette%20tech%20vibe%203d%20character%20avatar%20blind%20box%20toy%20style%20c4d%20rendering%20blender%20clay%20material%20soft%20studio%20lighting%20minimalism%20clean%20solid%20background%20high%20quality&width=200&height=200&seq=war-room-white-hat&orientation=squarish',
-    personality: '客观、冷静、数据驱动',
+    avatar: imgBai,
+    avatarBorder: 'border-gray-300',
+    avatarBorderActive: 'border-gray-500 ring-2 ring-gray-300',
+    labelColor: 'text-gray-700',
+    ringGlow: 'shadow-[0_0_0_2px_rgba(156,163,175,0.5)]',
   },
   red: {
-    name: '红帽 - 感性用户',
+    name: '红帽 - 用户代表',
+    hatLabel: '红帽',
+    role: '用户代表',
     color: 'bg-red-100',
     textColor: 'text-red-900',
     borderColor: 'border-red-300',
     icon: 'ri-heart-line',
-    avatar:
-      'https://readdy.ai/api/search-image?query=A%20cute%203d%20character%20wearing%20a%20red%20baseball%20cap%20hand%20placed%20on%20chest%20passionate%20expression%20warm%20red%20ambient%20lighting%20floating%20heart%20icons%20nearby%20emotional%20and%20energetic%20red%20and%20warm%20tones%203d%20character%20avatar%20blind%20box%20toy%20style%20c4d%20rendering%20blender%20clay%20material%20soft%20studio%20lighting%20minimalism%20clean%20solid%20background%20high%20quality&width=200&height=200&seq=war-room-red-hat&orientation=squarish',
-    personality: '热情、直觉、挑剔',
+    avatar: imgHong,
+    avatarBorder: 'border-red-400',
+    avatarBorderActive: 'border-red-500 ring-2 ring-red-200',
+    labelColor: 'text-red-700',
+    ringGlow: 'shadow-[0_0_0_2px_rgba(248,113,113,0.55)]',
   },
   black: {
-    name: '黑帽 - 风控官',
+    name: '黑帽 - 风险预警员',
+    hatLabel: '黑帽',
+    role: '风险预警员',
     color: 'bg-gray-900',
     textColor: 'text-white',
     borderColor: 'border-gray-700',
     icon: 'ri-shield-line',
-    avatar:
-      'https://readdy.ai/api/search-image?query=A%20cool%203d%20character%20wearing%20a%20black%20cap%20and%20dark%20suit%20arms%20crossed%20skeptical%20expression%20stern%20look%20holding%20a%20magnifying%20glass%20or%20a%20shield%20cool%20blue%20rim%20lighting%20dark%20and%20serious%20atmosphere%203d%20character%20avatar%20blind%20box%20toy%20style%20c4d%20rendering%20blender%20clay%20material%20soft%20studio%20lighting%20minimalism%20clean%20solid%20background%20high%20quality&width=200&height=200&seq=war-room-black-hat&orientation=squarish',
-    personality: '严肃、批判、寻找漏洞',
+    avatar: imgHei,
+    avatarBorder: 'border-gray-800',
+    avatarBorderActive: 'border-gray-900 ring-2 ring-gray-400',
+    labelColor: 'text-gray-900',
+    ringGlow: 'shadow-[0_0_0_2px_rgba(31,41,55,0.45)]',
   },
   yellow: {
-    name: '黄帽 - 天使投资人',
+    name: '黄帽 - 乐观倡导者',
+    hatLabel: '黄帽',
+    role: '乐观倡导者',
     color: 'bg-yellow-100',
     textColor: 'text-yellow-900',
     borderColor: 'border-yellow-300',
     icon: 'ri-thumb-up-line',
-    avatar:
-      'https://readdy.ai/api/search-image?query=A%20cheerful%203d%20character%20wearing%20a%20bright%20yellow%20cap%20giving%20a%20thumbs%20up%20big%20smile%20holding%20a%20glowing%20light%20bulb%20or%20a%20gold%20coin%20bright%20sunny%20lighting%20optimistic%20vibe%20yellow%20and%20orange%20tones%203d%20character%20avatar%20blind%20box%20toy%20style%20c4d%20rendering%20blender%20clay%20material%20soft%20studio%20lighting%20minimalism%20clean%20solid%20background%20high%20quality&width=200&height=200&seq=war-room-yellow-hat&orientation=squarish',
-    personality: '乐观、寻找价值、阳光',
+    avatar: imgHuang,
+    avatarBorder: 'border-yellow-400',
+    avatarBorderActive: 'border-yellow-500 ring-2 ring-yellow-200',
+    labelColor: 'text-yellow-800',
+    ringGlow: 'shadow-[0_0_0_2px_rgba(250,204,21,0.55)]',
   },
   green: {
-    name: '绿帽 - 产品经理',
+    name: '绿帽 - 创意设计师',
+    hatLabel: '绿帽',
+    role: '创意设计师',
     color: 'bg-green-100',
     textColor: 'text-green-900',
     borderColor: 'border-green-300',
     icon: 'ri-lightbulb-line',
-    avatar:
-      'https://readdy.ai/api/search-image?query=A%20creative%203d%20character%20wearing%20a%20green%20cap%20a%20small%20plant%20sprout%20growing%20from%20the%20top%20of%20the%20hat%20holding%20a%20magic%20wand%20or%20a%20paintbrush%20sparkles%20of%20creativity%20fresh%20green%20color%20palette%20nature%20inspired%203d%20character%20avatar%20blind%20box%20toy%20style%20c4d%20rendering%20blender%20clay%20material%20soft%20studio%20lighting%20minimalism%20clean%20solid%20background%20high%20quality&width=200&height=200&seq=war-room-green-hat&orientation=squarish',
-    personality: '创意、生长、解决方案',
+    avatar: imgLv,
+    avatarBorder: 'border-green-500',
+    avatarBorderActive: 'border-green-600 ring-2 ring-green-200',
+    labelColor: 'text-green-700',
+    ringGlow: 'shadow-[0_0_0_2px_rgba(34,197,94,0.5)]',
   },
   blue: {
-    name: '蓝帽 - 主持人',
+    name: '蓝帽 - 项目经理',
+    hatLabel: '蓝帽',
+    role: '项目经理',
     color: 'bg-blue-100',
     textColor: 'text-blue-900',
     borderColor: 'border-blue-300',
     icon: 'ri-command-line',
-    avatar:
-      'https://readdy.ai/api/search-image?query=A%20smart%203d%20character%20wearing%20a%20blue%20cap%20and%20a%20futuristic%20headset%20holding%20a%20clipboard%20or%20a%20conductor%20baton%20confident%20and%20organized%20leader%20vibe%20tech%20blue%20lighting%20cyber%20style%203d%20character%20avatar%20blind%20box%20toy%20style%20c4d%20rendering%20blender%20clay%20material%20soft%20studio%20lighting%20minimalism%20clean%20solid%20background%20high%20quality&width=200&height=200&seq=war-room-blue-hat&orientation=squarish',
-    personality: '控制、冷静、全局观',
+    avatar: imgLan,
+    avatarBorder: 'border-blue-500',
+    avatarBorderActive: 'border-blue-600 ring-2 ring-blue-200',
+    labelColor: 'text-blue-700',
+    ringGlow: 'shadow-[0_0_0_2px_rgba(59,130,246,0.5)]',
+  },
+  user: {
+    name: '学生',
+    hatLabel: '我',
+    role: '学生',
+    color: 'bg-teal-50',
+    textColor: 'text-teal-900',
+    borderColor: 'border-teal-200',
+    icon: 'ri-user-line',
+    avatar: '',
+    avatarBorder: 'border-teal-400',
+    avatarBorderActive: 'border-teal-500 ring-2 ring-teal-200',
+    labelColor: 'text-teal-700',
+    ringGlow: '',
   },
 };
 
-export default function WarRoom() {
-  // ----- State -----
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [currentSpeaker, setCurrentSpeaker] = useState<keyof typeof hatConfig | null>(null);
-  const [userInput, setUserInput] = useState('');
-  const [canvasModules, setCanvasModules] = useState<CanvasModule[]>([
-    { id: 'customer', title: '客户细分', content: '大学生群体，18-25岁，注重效率和性价比' },
-    { id: 'value', title: '价值主张', content: '15分钟快速配送，低配送费，智能路径优化' },
-    { id: 'channels', title: '渠道通路', content: 'APP、微信小程序、校园推广' },
-    { id: 'relationship', title: '客户关系', content: '会员体系、积分奖励、个性化推荐' },
-    { id: 'revenue', title: '收入来源', content: '配送费收入、商家佣金、广告收入' },
-    { id: 'resources', title: '核心资源', content: '配送团队、技术平台、商家资源' },
-    { id: 'activities', title: '关键业务', content: '订单处理、配送管理、平台运营' },
-    { id: 'partners', title: '合作伙伴', content: '校园餐厅、便利店、物流公司' },
-    { id: 'cost', title: '成本结构', content: '人员成本、技术开发、市场推广' },
-  ]);
-  const [isDebating, setIsDebating] = useState(false);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+const HAT_MENTION_LABELS: { hat: HatKey; label: string }[] = [
+  { hat: 'white', label: '@白帽' },
+  { hat: 'red', label: '@红帽' },
+  { hat: 'black', label: '@黑帽' },
+  { hat: 'yellow', label: '@黄帽' },
+  { hat: 'green', label: '@绿帽' },
+  { hat: 'blue', label: '@蓝帽' },
+];
 
-  // ----- Helpers -----
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
+function emptyCanvas(): WarRoomCanvas {
+  const o: WarRoomCanvas = {};
+  for (const m of WAR_ROOM_MODULE_DEFS) {
+    o[m.key] = { content: '', updatedBy: '' };
+  }
+  return o;
+}
+
+function delayMs(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function messageDelay(content: string) {
+  const len = content.length;
+  return Math.min(4000, Math.max(1200, 800 + len * 12));
+}
+
+type WarRoomProps = {
+  classId?: string;
+  studentDisplayName?: string;
+};
+
+export default function WarRoom({ classId, studentDisplayName = '同学' }: WarRoomProps) {
+  const [messages, setMessages] = useState<WarRoomDebateMessage[]>([]);
+  const [canvas, setCanvas] = useState<WarRoomCanvas>(emptyCanvas);
+  const [filledCount, setFilledCount] = useState(0);
+  const [currentSpeaker, setCurrentSpeaker] = useState<WarRoomHat | null>(null);
+  const [highlightKey, setHighlightKey] = useState<string | null>(null);
+  const [userInput, setUserInput] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [isDebating, setIsDebating] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const scrollChatToBottom = useCallback(() => {
+    const el = chatScrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, []);
 
   useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
+    scrollChatToBottom();
+  }, [messages, isPlaying, scrollChatToBottom]);
 
-  const highlightModule = (moduleId: string) => {
-    setCanvasModules((prev) =>
-      prev.map((m) => ({ ...m, isHighlighted: m.id === moduleId }))
-    );
-    // Remove highlight after a short period
-    setTimeout(() => {
-      setCanvasModules((prev) => prev.map((m) => ({ ...m, isHighlighted: false })));
-    }, 3000);
+  const applyWorkspace = useCallback(
+    (ws: Awaited<ReturnType<typeof fetchBusinessModelWorkspace>>, opts?: { syncMessages?: boolean }) => {
+      const wr = ws.warRoom;
+      if (wr?.canvas) setCanvas(wr.canvas);
+      if (opts?.syncMessages !== false && wr?.transcript?.messages) {
+        setMessages(wr.transcript.messages);
+      }
+      setFilledCount(wr?.filledCount ?? 0);
+    },
+    []
+  );
+
+  useEffect(() => {
+    if (!classId?.trim()) return;
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      try {
+        const ws = await fetchBusinessModelWorkspace(classId.trim());
+        if (!cancelled) applyWorkspace(ws);
+      } catch (e) {
+        if (!cancelled) message.error(e instanceof Error ? e.message : '加载失败');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [classId, applyWorkspace]);
+
+  const highlightModule = (moduleKey: string | null) => {
+    if (!moduleKey) return;
+    setHighlightKey(moduleKey);
+    setTimeout(() => setHighlightKey(null), 3000);
   };
 
-  // ----- Core Logic -----
-  const simulateDebate = () => {
+  const playMessagesSequential = async (roundMsgs: WarRoomDebateMessage[]) => {
+    setIsPlaying(true);
+    const existingIds = new Set(messages.map((m) => m.id));
+    for (const m of roundMsgs) {
+      if (existingIds.has(m.id)) continue;
+      setCurrentSpeaker(m.hat === 'user' ? 'user' : m.hat);
+      await delayMs(messageDelay(m.content));
+      setMessages((prev) => {
+        if (prev.some((x) => x.id === m.id)) return prev;
+        return [...prev, m];
+      });
+      if (m.targetModule) highlightModule(m.targetModule);
+      await delayMs(400);
+      setCurrentSpeaker(null);
+    }
+    setIsPlaying(false);
+  };
+
+  const handleStartDebate = async () => {
+    if (!classId?.trim()) {
+      message.warning('缺少班级信息');
+      return;
+    }
+    if (messages.length > 0) {
+      message.info('辩论已开始，请在下方输入或 @ 某一顶帽子');
+      return;
+    }
     setIsDebating(true);
-    const debateSequence = [
-      {
-        hat: 'blue' as const,
-        content: '各位董事会成员，今天我们要全面审视这个校园配送项目的商业模式。让我们从数据开始。',
-        delay: 1000,
-      },
-      {
-        hat: 'white' as const,
-        content:
-          '根据市场调研数据，85%的学生对现有配送服务不满意，平均等待时间45分钟，配送费5-8元。我们的目标是15分钟配送，费用2-3元。',
-        delay: 3000,
-        targetModule: 'value',
-      },
-      { hat: 'red' as const, content: '作为用户，我必须说——等外卖等到花儿都谢了的感觉真的很糟糕！如果真能15分钟送到，我愿意成为忠实用户！❤️', delay: 5000 },
-      {
-        hat: 'black' as const,
-        content: '⚠️ 等等，15分钟承诺风险极大。恶劣天气怎么办？高峰期怎么办？一旦无法兑现，用户投诉会摧毁品牌信誉。',
-        delay: 7000,
-        targetModule: 'value',
-      },
-      {
-        hat: 'yellow' as const,
-        content: '👍 但这正是差异化优势！如果能做到，市场潜力巨大。校园场景相对封闭，路径可控，技术上可行。我看到了投资价值！',
-        delay: 9000,
-      },
-      {
-        hat: 'green' as const,
-        content: '💡 我有个创意：可以设置"弹性承诺"——正常情况15分钟，恶劣天气自动延长至25分钟，并提前告知用户。透明化管理预期。',
-        delay: 11000,
-        targetModule: 'relationship',
-      },
-      {
-        hat: 'white' as const,
-        content: '成本结构分析：配送员时薪15元，每单平均配送时间8分钟，加上等待时间，每小时可完成4-5单。单均人力成本3元。',
-        delay: 13000,
-        targetModule: 'cost',
-      },
-      {
-        hat: 'black' as const,
-        content: '⚠️ 问题来了：配送费只收2-3元，人力成本就3元，这还没算平台运营、技术维护、推广费用。这个模式根本不赚钱！',
-        delay: 15000,
-        targetModule: 'cost',
-      },
-      {
-        hat: 'yellow' as const,
-        content: '别忘了商家佣金！每单抽取15%佣金，平均客单价25元，就是3.75元。加上配送费2.5元，单均收入6.25元。',
-        delay: 17000,
-        targetModule: 'revenue',
-      },
-      {
-        hat: 'green' as const,
-        content:
-          '💡 还可以开发会员体系：月卡19.9元无限次免配送费。如果一个用户月均点15次，相当于每单只要1.3元，但我们锁定了用户忠诚度。',
-        delay: 19000,
-        targetModule: 'revenue',
-      },
-      {
-        hat: 'red' as const,
-        content: '会员卡我肯定买！但有个问题——如果商家的菜不好吃，再快也没用。你们怎么保证商家质量？',
-        delay: 21000,
-      },
-      {
-        hat: 'blue' as const,
-        content: '好问题。我们需要在"合作伙伴"模块增加商家筛选机制和评价体系。',
-        delay: 23000,
-        targetModule: 'partners',
-      },
-    ];
-
-    debateSequence.forEach(({ hat, content, delay, targetModule }) => {
-      setTimeout(() => {
-        setCurrentSpeaker(hat);
-        const newMessage: Message = {
-          id: Date.now().toString() + Math.random(),
-          hat,
-          content,
-          timestamp: new Date(),
-          targetModule,
-        };
-        setMessages((prev) => [...prev, newMessage]);
-
-        if (targetModule) {
-          highlightModule(targetModule);
-        }
-
-        // Reset speaker after a short highlight period
-        setTimeout(() => setCurrentSpeaker(null), 2000);
-      }, delay);
-    });
-
-    // End debate flag
-    setTimeout(() => setIsDebating(false), 25000);
+    try {
+      const { roundMessages, workspace } = await warRoomDebateStart(classId.trim(), studentDisplayName);
+      applyWorkspace(workspace, { syncMessages: false });
+      await playMessagesSequential(roundMessages);
+      applyWorkspace(workspace);
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '开始辩论失败');
+    } finally {
+      setIsDebating(false);
+    }
   };
 
-  const handleAdopt = (messageId: string, targetModule?: string) => {
-    setMessages((prev) =>
-      prev.map((m) => (m.id === messageId ? { ...m, status: 'adopted' } : m))
-    );
+  const handleSend = async () => {
+    if (!classId?.trim() || !userInput.trim() || isDebating || isPlaying) return;
+    if (messages.length === 0) {
+      message.warning('请先点击开始辩论');
+      return;
+    }
+    const text = userInput.trim();
+    setUserInput('');
+    setIsDebating(true);
+    try {
+      const mentioned = parseMentionedHat(text);
+      if (mentioned) {
+        const { message: reply, workspace } = await warRoomDebateReply(
+          classId.trim(),
+          studentDisplayName,
+          text,
+          mentioned
+        );
+        const prevLen = messages.length;
+        applyWorkspace(workspace, { syncMessages: false });
+        const userMsg = workspace.warRoom?.transcript?.messages?.[prevLen];
+        const toPlay = userMsg ? [userMsg, reply] : [reply];
+        await playMessagesSequential(toPlay);
+        applyWorkspace(workspace);
+      } else {
+        const { roundMessages, workspace } = await warRoomDebateRound(
+          classId.trim(),
+          studentDisplayName,
+          text
+        );
+        applyWorkspace(workspace, { syncMessages: false });
+        await playMessagesSequential(roundMessages);
+        applyWorkspace(workspace);
+      }
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '发送失败');
+    } finally {
+      setIsDebating(false);
+    }
+  };
 
-    if (!targetModule) return;
-
-    // Use functional update to ensure we read the latest state
-    setMessages((msgList) => {
-      const msg = msgList.find((m) => m.id === messageId);
-      if (!msg) return msgList;
-
-      setCanvasModules((prev) =>
-        prev.map((m) =>
-          m.id === targetModule
-            ? {
-                ...m,
-                content: `${m.content}\n[新增] ${msg.content}`,
-                updatedBy: hatConfig[msg.hat].name,
-              }
-            : m
-        )
+  const handleAdopt = async (msg: WarRoomDebateMessage) => {
+    if (!classId?.trim() || !msg.targetModule || !msg.moduleContent?.trim()) return;
+    try {
+      const ws = await adoptWarRoomMessage(classId.trim(), msg.id);
+      applyWorkspace(ws);
+      setMessages((prev) =>
+        prev.map((m) => (m.id === msg.id ? { ...m, status: 'adopted' as const } : m))
       );
-
-      // Trigger a brief highlight animation
-      highlightModule(targetModule);
-      return msgList;
-    });
+      highlightModule(msg.targetModule);
+      message.success('已采纳并更新画布');
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '采纳失败');
+    }
   };
 
   const handleIgnore = (messageId: string) => {
     setMessages((prev) =>
-      prev.map((m) => (m.id === messageId ? { ...m, status: 'ignored' } : m))
+      prev.map((m) => (m.id === messageId ? { ...m, status: 'ignored' as const } : m))
     );
   };
 
-  const handleUserMessage = () => {
-    if (!userInput.trim()) return;
-
-    const newMessage: Message = {
-      id: Date.now().toString(),
-      hat: 'blue',
-      content: `👤 用户: ${userInput}`,
-      timestamp: new Date(),
-    };
-    setMessages((prev) => [...prev, newMessage]);
-    setUserInput('');
+  const handleCanvasBlur = async (moduleKey: string, content: string) => {
+    if (!classId?.trim()) return;
+    try {
+      const ws = await saveWarRoomCanvasCell(classId.trim(), moduleKey, content);
+      applyWorkspace(ws);
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '保存失败');
+    }
   };
 
-  // ----- Render -----
+  const insertMention = (label: string) => {
+    setUserInput((prev) => (prev ? `${prev} ${label} ` : `${label} `));
+    inputRef.current?.focus();
+  };
+
+  const renderMessageMeta = (msg: WarRoomDebateMessage) => {
+    if (msg.hat === 'user') {
+      return { ...hatConfig.user, displayName: studentDisplayName };
+    }
+    const cfg = hatConfig[msg.hat as HatKey];
+    return { ...cfg, displayName: cfg?.name || msg.hat };
+  };
+
+  const debateStarted = messages.length > 0;
+
   return (
-    <div className="h-screen flex bg-gray-50">
-      {/* Left panel – live debate */}
-      <div className="w-2/5 bg-white border-r border-gray-200 flex flex-col">
-        {/* Header – avatars */}
-        <div className="p-6 border-b border-gray-200 bg-gradient-to-r from-gray-50 to-white">
-          <div className="flex items-center justify-between mb-4">
+    <div className="h-[min(72vh,680px)] min-h-[480px] flex bg-gray-50 rounded-xl border border-gray-100 overflow-hidden">
+      <div className="w-[42%] min-w-[320px] bg-white border-r border-gray-200 flex flex-col min-h-0">
+        <div className="p-4 border-b border-gray-200 bg-gradient-to-r from-gray-50 to-white shrink-0">
+          <div className="flex items-center justify-between mb-3">
             <h3 className="text-lg font-bold text-gray-900">虚拟董事会</h3>
             <button
-              onClick={simulateDebate}
-              disabled={isDebating}
+              type="button"
+              onClick={handleStartDebate}
+              disabled={isDebating || isPlaying || debateStarted || loading}
               className={`px-4 py-2 text-sm font-medium rounded-lg whitespace-nowrap transition-all ${
-                isDebating
-                  ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                  : 'bg-gradient-to-r from-teal-500 to-emerald-500 text-white hover:shadow-lg'
+                isDebating || isPlaying || debateStarted || loading
+                  ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
+                  : 'bg-gradient-to-r from-teal-500 to-emerald-500 text-white hover:shadow-lg cursor-pointer'
               }`}
             >
               {isDebating ? (
                 <>
                   <i className="ri-loader-4-line animate-spin mr-2"></i>
-                  辩论中...
+                  生成中…
                 </>
               ) : (
                 <>
@@ -296,134 +388,146 @@ export default function WarRoom() {
               )}
             </button>
           </div>
-
-          <div className="flex items-center justify-between gap-2">
-            {(Object.keys(hatConfig) as Array<keyof typeof hatConfig>).map((hat) => (
-              <div
-                key={hat}
-                className={`relative transition-all duration-500 ${
-                  currentSpeaker === hat ? 'scale-125 z-10' : 'scale-100'
-                }`}
-              >
-                <div className="relative">
+          <div className="flex items-start justify-between gap-0.5">
+            {HAT_HEADER_ORDER.map((hat) => {
+              const cfg = hatConfig[hat];
+              const active = currentSpeaker === hat;
+              return (
+                <button
+                  key={hat}
+                  type="button"
+                  title={cfg.name}
+                  onClick={() => insertMention(HAT_MENTION_LABELS.find((x) => x.hat === hat)?.label || `@${hat}`)}
+                  className={`relative flex flex-col items-center gap-0.5 min-w-0 flex-1 transition-all duration-300 cursor-pointer ${
+                    active ? 'scale-105 z-10' : 'opacity-90 hover:opacity-100'
+                  }`}
+                >
                   <img
-                    src={hatConfig[hat].avatar}
-                    alt={hatConfig[hat].name}
-                    className={`w-14 h-14 rounded-full object-cover border-2 ${
-                      currentSpeaker === hat ? 'border-teal-500' : 'border-gray-200'
-                    }`}
+                    src={cfg.avatar}
+                    alt={cfg.hatLabel}
+                    className={`w-11 h-11 rounded-full object-cover border-2 ${
+                      active ? cfg.avatarBorderActive : cfg.avatarBorder
+                    } ${active ? cfg.ringGlow : ''}`}
                   />
-                  {currentSpeaker === hat && (
-                    <>
-                      <div className="absolute inset-0 rounded-full border-2 border-teal-500 animate-ping"></div>
-                      <div className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full animate-pulse"></div>
-                    </>
-                  )}
-                </div>
-                <div className="text-center mt-1">
-                  <div
-                    className={`text-xs font-medium ${
-                      currentSpeaker === hat ? 'text-teal-600' : 'text-gray-500'
-                    }`}
-                  >
-                    {hatConfig[hat].name.split(' - ')[0]}
-                  </div>
-                </div>
-              </div>
-            ))}
+                  <span className={`text-[10px] font-bold leading-none ${cfg.labelColor}`}>{cfg.hatLabel}</span>
+                  <span className="text-[9px] text-gray-500 leading-tight text-center w-full truncate px-0.5">
+                    {cfg.role}
+                  </span>
+                </button>
+              );
+            })}
           </div>
         </div>
 
-        {/* Chat area */}
-        <div className="flex-1 overflow-y-auto py-1 px-6 space-y-4">
-          {messages.length === 0 ? (
-            <div className="text-center py-12">
-              <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                <i className="ri-chat-3-line text-3xl text-gray-400"></i>
+        <div ref={chatScrollRef} className="flex-1 min-h-0 overflow-y-auto py-3 px-4 space-y-3">
+          {loading ? (
+            <div className="text-center text-sm text-gray-400 py-8">加载中…</div>
+          ) : messages.length === 0 ? (
+            <div className="text-center py-10">
+              <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-3">
+                <i className="ri-chat-3-line text-2xl text-gray-400"></i>
               </div>
-              <p className="text-sm text-gray-500">
-                点击"开始辩论"，让AI董事会成员开始讨论
-              </p>
+              <p className="text-sm text-gray-500">点击「开始辩论」，六顶帽子将围绕商业模式展开讨论</p>
             </div>
           ) : (
-            messages.map((message) => (
-              <div key={message.id} className="animate-fade-in">
-                <div className="flex items-start gap-3">
-                  <img
-                    src={hatConfig[message.hat].avatar}
-                    alt={hatConfig[message.hat].name}
-                    className="w-10 h-10 rounded-full object-cover flex-shrink-0"
-                  />
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="text-sm font-bold text-gray-900">
-                        {hatConfig[message.hat].name}
-                      </span>
+            messages.map((msg) => {
+              const meta = renderMessageMeta(msg);
+              const canAdopt =
+                msg.targetModule &&
+                msg.moduleContent?.trim() &&
+                !msg.status &&
+                msg.hat !== 'user';
+              return (
+                <div key={msg.id} className="flex items-start gap-2">
+                  {msg.hat === 'user' ? (
+                    <div
+                      className={`w-9 h-9 rounded-full flex-shrink-0 flex items-center justify-center border-2 ${meta.avatarBorder} ${meta.color}`}
+                    >
+                      <i className={`${meta.icon} text-base ${meta.textColor}`}></i>
+                    </div>
+                  ) : (
+                    <img
+                      src={meta.avatar}
+                      alt={meta.displayName}
+                      className={`w-9 h-9 rounded-full object-cover flex-shrink-0 border-2 ${meta.avatarBorder}`}
+                    />
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-0.5">
+                      <span className="text-xs font-bold text-gray-900">{meta.displayName}</span>
                       <span className="text-xs text-gray-400">
-                        {message.timestamp.toLocaleTimeString()}
+                        {msg.createdAt ? new Date(msg.createdAt).toLocaleTimeString('zh-CN') : ''}
                       </span>
                     </div>
                     <div
-                      className={`${hatConfig[message.hat].color} ${hatConfig[message.hat].textColor} px-4 py-3 rounded-xl text-sm leading-relaxed`}
+                      className={`${meta.color} ${meta.textColor} px-3 py-2 rounded-xl text-sm leading-relaxed`}
                     >
-                      {message.content}
+                      {msg.content}
                     </div>
-
-                    {/* Action buttons */}
-                    {message.targetModule && !message.status && (
-                      <div className="flex items-center gap-2 mt-2">
+                    {canAdopt && (
+                      <div className="flex items-center gap-2 mt-1.5">
                         <button
-                          onClick={() => handleAdopt(message.id, message.targetModule)}
-                          className="px-3 py-1 bg-green-100 text-green-700 text-xs font-medium rounded-lg hover:bg-green-200 transition-colors whitespace-nowrap"
+                          type="button"
+                          onClick={() => handleAdopt(msg)}
+                          className="px-2.5 py-1 bg-green-100 text-green-700 text-xs font-medium rounded-lg hover:bg-green-200 cursor-pointer"
                         >
                           <i className="ri-check-line mr-1"></i>
                           采纳
                         </button>
                         <button
-                          onClick={() => handleIgnore(message.id)}
-                          className="px-3 py-1 bg-gray-100 text-gray-700 text-xs font-medium rounded-lg hover:bg-gray-200 transition-colors whitespace-nowrap"
+                          type="button"
+                          onClick={() => handleIgnore(msg.id)}
+                          className="px-2.5 py-1 bg-gray-100 text-gray-600 text-xs font-medium rounded-lg hover:bg-gray-200 cursor-pointer"
                         >
-                          <i className="ri-close-line mr-1"></i>
                           忽略
                         </button>
                       </div>
                     )}
-
-                    {/* Status indicators */}
-                    {message.status === 'adopted' && (
-                      <div className="mt-2 text-xs text-green-600 flex items-center gap-1">
-                        <i className="ri-check-double-line"></i>
-                        已采纳并更新到画布
-                      </div>
+                    {msg.status === 'adopted' && (
+                      <p className="mt-1 text-xs text-green-600">
+                        <i className="ri-check-double-line mr-1"></i>
+                        已采纳
+                      </p>
                     )}
-                    {message.status === 'ignored' && (
-                      <div className="mt-2 text-xs text-gray-400 flex items-center gap-1">
-                        <i className="ri-close-circle-line"></i>
-                        已忽略
-                      </div>
+                    {msg.status === 'ignored' && (
+                      <p className="mt-1 text-xs text-gray-400">已忽略</p>
                     )}
                   </div>
                 </div>
-              </div>
-            ))
+              );
+            })
           )}
-          <div ref={messagesEndRef} />
         </div>
 
-        {/* Input area */}
-        <div className="p-4 border-t border-gray-200 bg-white">
+        <div className="p-3 border-t border-gray-200 bg-white shrink-0">
+          <div className="flex flex-wrap gap-1 mb-2">
+            {HAT_MENTION_LABELS.map(({ label }) => (
+              <button
+                key={label}
+                type="button"
+                onClick={() => insertMention(label)}
+                className="px-2 py-0.5 text-xs rounded-md bg-gray-100 text-gray-600 hover:bg-teal-50 hover:text-teal-700 cursor-pointer"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
           <div className="flex items-center gap-2">
             <input
+              ref={inputRef}
               type="text"
               value={userInput}
               onChange={(e) => setUserInput(e.target.value)}
-              onKeyPress={(e) => e.key === 'Enter' && handleUserMessage()}
-              placeholder="@某个帽子，说出你的观点..."
-              className="flex-1 px-4 py-3 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent"
+              onKeyDown={(e) => e.key === 'Enter' && handleSend()}
+              disabled={!debateStarted || isDebating || isPlaying}
+              placeholder={debateStarted ? `@帽子或发表观点，未 @ 时将开启新一轮讨论` : '请先开始辩论'}
+              className="flex-1 px-3 py-2.5 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 disabled:bg-gray-50"
             />
             <button
-              onClick={handleUserMessage}
-              className="px-6 py-3 bg-teal-500 text-white text-sm font-medium rounded-xl hover:bg-teal-600 transition-colors whitespace-nowrap"
+              type="button"
+              onClick={handleSend}
+              disabled={!debateStarted || isDebating || isPlaying || !userInput.trim()}
+              className="px-4 py-2.5 bg-teal-500 text-white text-sm font-medium rounded-xl hover:bg-teal-600 disabled:opacity-50 cursor-pointer"
             >
               <i className="ri-send-plane-line"></i>
             </button>
@@ -431,75 +535,52 @@ export default function WarRoom() {
         </div>
       </div>
 
-      {/* Right panel – canvas */}
-      <div className="flex-1 p-8 overflow-y-auto">
-        <div className="max-w-6xl mx-auto">
-          <div className="mb-6">
-            <h2 className="text-2xl font-bold text-gray-900 mb-2">商业模式画布</h2>
-            <p className="text-sm text-gray-600">根据董事会讨论实时更新</p>
-          </div>
-
-          <div className="grid grid-cols-3 gap-4">
-            {canvasModules.map((module) => (
-              <div
-                key={module.id}
-                className={`bg-white rounded-xl p-5 transition-all duration-500 ${
-                  module.isHighlighted
-                    ? 'ring-4 ring-teal-500 shadow-2xl scale-105 animate-pulse-border'
-                    : 'border border-gray-200 hover:shadow-lg'
-                }`}
-              >
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-sm font-bold text-gray-900">{module.title}</h3>
-                  {module.isHighlighted && (
-                    <div className="flex items-center gap-1">
-                      <div className="w-2 h-2 bg-teal-500 rounded-full animate-ping"></div>
-                      <div className="w-2 h-2 bg-teal-500 rounded-full"></div>
-                    </div>
-                  )}
+      <div className="flex-1 min-w-0 flex flex-col min-h-0 bg-gray-50">
+        <div className="px-4 py-3 border-b border-gray-200 bg-white shrink-0 flex items-center justify-between">
+          <h3 className="text-sm font-bold text-gray-900">商业模式画布</h3>
+          <span className="text-xs text-gray-500">
+            已填写 {filledCount}/{WAR_ROOM_MODULE_DEFS.length}
+          </span>
+        </div>
+        <div className="flex-1 min-h-0 overflow-y-auto p-4">
+          <div className="grid grid-cols-3 gap-3 max-w-6xl mx-auto">
+            {WAR_ROOM_MODULE_DEFS.map((mod) => {
+              const cell = canvas[mod.key] || { content: '', updatedBy: '' };
+              const highlighted = highlightKey === mod.key;
+              return (
+                <div
+                  key={mod.key}
+                  className={`bg-white rounded-xl p-4 transition-all duration-300 flex flex-col min-h-[140px] ${
+                    highlighted
+                      ? 'ring-2 ring-teal-500 shadow-lg scale-[1.02]'
+                      : 'border border-gray-200 shadow-sm'
+                  }`}
+                >
+                  <h4 className="text-sm font-bold text-gray-900 mb-2">{mod.title}</h4>
+                  <textarea
+                    value={cell.content}
+                    onChange={(e) =>
+                      setCanvas((prev) => ({
+                        ...prev,
+                        [mod.key]: { ...prev[mod.key], content: e.target.value, updatedBy: cell.updatedBy },
+                      }))
+                    }
+                    onBlur={(e) => handleCanvasBlur(mod.key, e.target.value)}
+                    rows={5}
+                    placeholder="待填写…"
+                    className="flex-1 w-full text-xs text-gray-700 border border-gray-100 rounded-lg p-2 resize-none focus:outline-none focus:ring-1 focus:ring-teal-400"
+                  />
+                  {cell.updatedBy ? (
+                    <p className="mt-2 text-xs text-teal-600 truncate">{cell.updatedBy}</p>
+                  ) : null}
                 </div>
-                <div className="text-xs text-gray-700 leading-relaxed whitespace-pre-line">
-                  {module.content}
-                </div>
-                {module.updatedBy && (
-                  <div className="mt-3 pt-3 border-t border-gray-100">
-                    <div className="flex items-center gap-2 text-xs text-teal-600">
-                      <i className="ri-edit-line"></i>
-                      <span>Updated by {module.updatedBy}</span>
-                    </div>
-                  </div>
-                )}
-                {module.content && module.content.trim().length > 0 && (
-                  <div className="mt-3 pt-3 border-t border-gray-100">
-                    <a
-                      href={`/bmc-detail?card=${encodeURIComponent(module.title)}`}
-                      className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-medium text-teal-600 border border-teal-200 rounded-lg hover:bg-teal-50 transition-colors cursor-pointer whitespace-nowrap"
-                    >
-                      <i className="ri-eye-line text-xs"></i>
-                      详情
-                    </a>
-                  </div>
-                )}
-              </div>
-            ))}
+              );
+            })}
           </div>
-
-          {/* Tips */}
-          <div className="mt-8 bg-gradient-to-r from-teal-50 to-emerald-50 border border-teal-200 rounded-xl p-6">
-            <div className="flex items-start gap-4">
-              <div className="w-12 h-12 bg-teal-500 rounded-xl flex items-center justify-center flex-shrink-0">
-                <i className="ri-lightbulb-flash-line text-2xl text-white"></i>
-              </div>
-              <div>
-                <h4 className="text-base font-bold text-teal-900 mb-2">使用提示</h4>
-                <ul className="text-sm text-teal-700 space-y-1">
-                  <li>• 点击"开始辩论"，6位AI董事会成员将围绕你的商业模式展开激烈讨论</li>
-                  <li>• 当某个模块被提及时，右侧画布会高亮显示该模块</li>
-                  <li>• 对于AI的建议，你可以选择"采纳"（自动更新到画布）或"忽略"</li>
-                  <li>• 随时在底部输入框插话，@某个帽子表达你的观点</li>
-                </ul>
-              </div>
-            </div>
+          <div className="mt-6 max-w-6xl mx-auto bg-teal-50 border border-teal-200 rounded-xl p-4 text-sm text-teal-800 space-y-1">
+            <p>• 点击「开始辩论」后，将按白帽 → 四帽随机 → 蓝帽顺序讨论</p>
+            <p>• 提及某模块时右侧格子会高亮；可采纳建议替换该格内容</p>
+            <p>• @ 某一顶帽子单独回复；未 @ 时发送将开启新一轮六帽讨论</p>
           </div>
         </div>
       </div>

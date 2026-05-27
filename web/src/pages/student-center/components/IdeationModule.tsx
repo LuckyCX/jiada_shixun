@@ -21,6 +21,7 @@ import {
 import {
   downloadStudentInstanceResource,
   fetchStudentInstanceLibrary,
+  getStudentInstanceCaseCoverUrl,
   getStudentInstanceResourcePreviewUrl,
   type InstanceLibraryCase,
   type InstanceLibraryCategory,
@@ -215,7 +216,7 @@ export default function IdeationModule({
     }
     let cancelled = false;
     setExamplesLoading(true);
-    fetchStudentInstanceLibrary(classId)
+    fetchStudentInstanceLibrary(classId, 'ideation')
       .then((res) => {
         if (cancelled) return;
         const list = res.categories || [];
@@ -620,7 +621,17 @@ export default function IdeationModule({
 
                   <div className="space-y-4 overflow-y-auto pr-2">
                     {selectedCategory.cases.map((caseItem) => (
-                      <div key={caseItem.id} className="border border-gray-200 rounded-xl p-5 hover:shadow-lg hover:border-teal-200 transition-all">
+                      <div key={caseItem.id} className="border border-gray-200 rounded-xl overflow-hidden hover:shadow-lg hover:border-teal-200 transition-all">
+                        {caseItem.hasCoverImage && classId ? (
+                          <div className="w-full h-40 bg-gray-100 border-b border-gray-200">
+                            <img
+                              src={getStudentInstanceCaseCoverUrl(classId, caseItem.id)}
+                              alt=""
+                              className="w-full h-full object-cover"
+                            />
+                          </div>
+                        ) : null}
+                        <div className="p-5">
                         <div className="flex items-start justify-between mb-2 gap-4">
                           <div className="flex-1">
                             <h3 className="text-base font-bold text-gray-900 mb-2">{caseItem.title}</h3>
@@ -648,6 +659,7 @@ export default function IdeationModule({
                           <button type="button" onClick={() => setPreviewCase(caseItem)} className="text-sm text-teal-600 font-medium cursor-pointer">
                             查看详情
                           </button>
+                        </div>
                         </div>
                       </div>
                     ))}
@@ -1312,6 +1324,15 @@ export default function IdeationModule({
       >
         {previewCase && (
           <div className="space-y-4 max-h-[calc(100vh-220px)] overflow-y-auto overflow-x-hidden pr-2">
+            {previewCase.hasCoverImage && classId ? (
+              <div className="rounded-xl overflow-hidden border border-gray-200 bg-gray-100">
+                <img
+                  src={getStudentInstanceCaseCoverUrl(classId, previewCase.id)}
+                  alt=""
+                  className="w-full max-h-[min(420px,60vh)] object-contain block mx-auto"
+                />
+              </div>
+            ) : null}
             <div className="flex items-center gap-2 flex-wrap">
               {previewCase.tags.map((tag) => (
                 <span key={tag} className="px-2.5 py-1 bg-teal-50 text-teal-700 text-xs font-medium rounded-full whitespace-nowrap">

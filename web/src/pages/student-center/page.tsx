@@ -30,6 +30,7 @@ import {
   fetchMyLatestChallengeSession,
   fetchTeamMarketReportUploadStatus,
 } from '../../lib/studentMarketResearchApi';
+import { fetchTeamProductPrototypeStatus } from '../../lib/studentProductDesignApi';
 import ProductDesignModule from './components/ProductDesignModule';
 import BusinessModelModule from './components/BusinessModelModule';
 import RoleSimulationModule from './components/RoleSimulationModule';
@@ -242,6 +243,9 @@ export default function StudentCenterPage() {
   const handleMarketTabProgress = useCallback((done: number) => {
     setModuleProgressState((s) => (s.market === done ? s : { ...s, market: done }));
   }, []);
+  const handleProductTabProgress = useCallback((done: number) => {
+    setModuleProgressState((s) => (s.product === done ? s : { ...s, product: done }));
+  }, []);
   const [teamFormationComplete, setTeamFormationComplete] = useState(false);
   const [notificationFilter, setNotificationFilter] = useState<'all' | 'guidance' | 'reminder' | 'evaluation'>('all');
   const [notificationReadFilter, setNotificationReadFilter] = useState<'all' | 'unread' | 'read'>('all');
@@ -262,6 +266,7 @@ export default function StudentCenterPage() {
   const [ideationTopicApproved, setIdeationTopicApproved] = useState(false);
   const [studentMarketChallengeDone, setStudentMarketChallengeDone] = useState(false);
   const [teamMarketReportUploaded, setTeamMarketReportUploaded] = useState(false);
+  const [teamProductPrototypeUploaded, setTeamProductPrototypeUploaded] = useState(false);
   const [unlockStageModalModuleId, setUnlockStageModalModuleId] = useState<string | null>(null);
   const [catalogResourceNodesByModule, setCatalogResourceNodesByModule] = useState<
     Record<string, TaskResourceNode[]>
@@ -376,6 +381,20 @@ export default function StudentCenterPage() {
     refreshTeamMarketReportUploaded();
   }, [refreshTeamMarketReportUploaded]);
 
+  const refreshTeamProductPrototypeUploaded = useCallback(() => {
+    if (!selectedClassId || !teamFormationComplete) {
+      setTeamProductPrototypeUploaded(false);
+      return;
+    }
+    void fetchTeamProductPrototypeStatus(selectedClassId)
+      .then((st) => setTeamProductPrototypeUploaded(Boolean(st.uploaded)))
+      .catch(() => setTeamProductPrototypeUploaded(false));
+  }, [selectedClassId, teamFormationComplete]);
+
+  useEffect(() => {
+    refreshTeamProductPrototypeUploaded();
+  }, [refreshTeamProductPrototypeUploaded]);
+
   useEffect(() => {
     if (!selectedClassId) {
       setCatalogResourceNodesByModule({});
@@ -406,6 +425,10 @@ export default function StudentCenterPage() {
     return () => {
       cancelled = true;
     };
+  }, [selectedClassId]);
+
+  useEffect(() => {
+    setCompletedKnowledgeIds(new Set());
   }, [selectedClassId]);
 
   // 课程目录的“已检测”状态：从 quiz_attempts(passed) 补齐 completedKnowledgeIds（避免刷新后丢失）
@@ -446,7 +469,11 @@ export default function StudentCenterPage() {
       .then((res) => {
         if (!cancelled) {
           setStudentTodoTasks([...(res.tasks || []), ...(res.completedTasks || [])]);
-          setCompletedKnowledgeIds(new Set(res.completedKnowledgePointIds || []));
+          setCompletedKnowledgeIds((prev) => {
+            const next = new Set(prev);
+            (res.completedKnowledgePointIds || []).forEach((id) => next.add(String(id)));
+            return next;
+          });
         }
       })
       .catch(() => {
@@ -513,6 +540,7 @@ export default function StudentCenterPage() {
     if (moduleId === 'team') return teamFormationComplete;
     if (moduleId === 'ideation') return ideationTopicApproved || (moduleProgressState.ideation || 0) >= (MODULE_COMPLETE_THRESHOLD.ideation ?? 99);
     if (moduleId === 'market') return teamMarketReportUploaded;
+    if (moduleId === 'product') return teamProductPrototypeUploaded;
     const val = moduleProgressState[moduleId] || 0;
     return val >= (MODULE_COMPLETE_THRESHOLD[moduleId] ?? 99);
   };
@@ -543,6 +571,7 @@ export default function StudentCenterPage() {
   };
 
   const getModuleProgressPercent = (moduleId: string): number => {
+    if (moduleId === 'product' && teamProductPrototypeUploaded) return 100;
     const val = moduleProgressState[moduleId as keyof typeof moduleProgressState] ?? 0;
     const th = MODULE_COMPLETE_THRESHOLD[moduleId] ?? 99;
     return Math.min(100, Math.round((val / th) * 100));
@@ -1359,7 +1388,7 @@ export default function StudentCenterPage() {
       }
     }
     return n;
-  }, [ideationTopicApproved, teamFormationComplete, moduleProgressState, teamMarketReportUploaded]);
+  }, [ideationTopicApproved, teamFormationComplete, moduleProgressState, teamMarketReportUploaded, teamProductPrototypeUploaded]);
 
   const overallProgressPercent = Math.round((completedStagesCount / TRAINING_MODULE_ORDER.length) * 100);
 
@@ -1613,9 +1642,27 @@ export default function StudentCenterPage() {
           />
         );
       case 'module-product':
-        return <ProductDesignModule key={selectedClassId} onTaskComplete={() => completeActiveTrainingTask('product')} />;
+        return (
+          <ProductDesignModule
+            key={selectedClassId}
+            classId={selectedClassId}
+            isTeamLeader={isCurrentStudentTeamLeader}
+            onProductTabProgress={handleProductTabProgress}
+            onTeamPrototypeUploaded={() => {
+              setTeamProductPrototypeUploaded(true);
+              refreshTeamProductPrototypeUploaded();
+            }}
+          />
+        );
       case 'module-business':
-        return <BusinessModelModule key={selectedClassId} onTaskComplete={() => completeActiveTrainingTask('business')} />;
+        return (
+          <BusinessModelModule
+            key={selectedClassId}
+            classId={selectedClassId}
+            studentDisplayName={studentDisplayName}
+            onTaskComplete={() => completeActiveTrainingTask('business')}
+          />
+        );
       case 'module-simulation':
         return <RoleSimulationModule key={selectedClassId} onTaskComplete={() => completeActiveTrainingTask('simulation')} />;
       case 'module-plan':
