@@ -262,3 +262,17 @@ export async function submitStudentKnowledgeQuizAttempt(
     body: JSON.stringify(body),
   });
 }
+
+export async function fetchStudentPassedKnowledgePointIds(
+  knowledgePointIds: string[]
+): Promise<string[]> {
+  if (!knowledgePointIds.length) return [];
+  const data = await studentFetch<{ passedKnowledgePointIds: string[] }>(
+    `/api/student/course-resources/knowledge-points/passed-ids`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ knowledgePointIds }),
+    }
+  );
+  return data.passedKnowledgePointIds || [];
+}

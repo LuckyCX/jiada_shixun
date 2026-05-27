@@ -17,17 +17,13 @@ const PERSONA_JSON_SCHEMA = `
 - personas 数量 1 或 2，须与调研材料一致，不得编造与材料无关的虚构统计。
 - 不要输出 avatar URL。`;
 
-export const MARKET_PERSONA_SYSTEM_PROMPT = `你是创业实训课程的用户画像设计助教。根据调研计划、问卷统计与数据分析摘要，生成典型用户画像。
+export const MARKET_PERSONA_SYSTEM_PROMPT = `你是创业实训课程的用户画像设计助教。仅根据线上问卷的题目设计与回收统计，生成典型用户画像。
 ${PERSONA_JSON_SCHEMA}`;
 
-export function buildMarketPersonaUserPrompt(contextText, analysisSummary) {
-  const analysisPart = analysisSummary
-    ? `\n【已有数据分析摘要】\n${analysisSummary}`
-    : '\n【数据分析】尚未生成，请主要依据问卷与文档。';
+export function buildMarketPersonaUserPrompt(contextText) {
   return `请生成 1–2 个用户画像。
 
 ${contextText}
-${analysisPart}
 
 输出 JSON。`;
 }

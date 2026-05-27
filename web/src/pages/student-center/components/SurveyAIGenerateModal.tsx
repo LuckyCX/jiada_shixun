@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Alert, Button, Checkbox, Collapse, Input, InputNumber, Modal, message } from 'antd';
+import dayjs from 'dayjs';
 import {
   SURVEY_QUESTION_TYPES,
   createMarketSurvey,
@@ -15,14 +16,22 @@ type Props = {
   open: boolean;
   classId: string;
   plan: MarketResearchPlan;
+  stageDeadlineDate?: string | null;
   onClose: () => void;
   onCreated: () => void;
 };
 
-export default function SurveyAIGenerateModal({ open, classId, plan, onClose, onCreated }: Props) {
+export default function SurveyAIGenerateModal({
+  open,
+  classId,
+  plan,
+  stageDeadlineDate = null,
+  onClose,
+  onCreated,
+}: Props) {
   const [title, setTitle] = useState('');
   const [questionCount, setQuestionCount] = useState(12);
-  const [includeTypes, setIncludeTypes] = useState<SurveyQuestionType[]>(['单选', '多选', '填空']);
+  const [includeTypes, setIncludeTypes] = useState<SurveyQuestionType[]>(['单选', '多选', '评分', '填空']);
   const [generating, setGenerating] = useState(false);
   const [generated, setGenerated] = useState(false);
   const [questions, setQuestions] = useState<MarketSurveyQuestion[]>([]);
@@ -58,10 +67,14 @@ export default function SurveyAIGenerateModal({ open, classId, plan, onClose, on
   const handleConfirmCreate = async () => {
     setSaving(true);
     try {
+      const closesAt = stageDeadlineDate
+        ? dayjs(`${stageDeadlineDate}T23:59:59`).toISOString()
+        : dayjs().add(7, 'day').toISOString();
       await createMarketSurvey(classId, {
         title: title.trim() || questions[0]?.text.slice(0, 20) || '调研问卷',
         questions: questions.map(({ text, type, options }) => ({ text, type, options: options || [] })),
         source: 'ai',
+        closesAt,
       });
       message.success('问卷已创建');
       onCreated();

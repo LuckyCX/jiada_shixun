@@ -150,7 +150,17 @@ export function friendlyLlmErrorMessage(err) {
   return msg;
 }
 
-export async function chatCompletionStream({ provider, system, user, onEvent }) {
+export async function chatCompletionStream({
+  provider,
+  system,
+  user,
+  onEvent,
+  jsonMode = false,
+  temperature,
+  maxTokens,
+  streamReasoning = true,
+  extraBody,
+}) {
   if (!provider) throw new Error('未配置已启用的 LLM 服务，请在管理后台「系统配置」中配置并启用多模态模型');
   const url = chatCompletionsUrl(provider.baseUrl);
   logPromptToConsole(provider, system, user);
@@ -161,13 +171,19 @@ export async function chatCompletionStream({ provider, system, user, onEvent }) 
       ...(system ? [{ role: 'system', content: system }] : []),
       { role: 'user', content: user },
     ],
-    temperature: 0.3,
+    temperature: temperature ?? 0.3,
     stream: true,
+    ...(maxTokens != null ? { max_tokens: maxTokens } : {}),
+    ...(extraBody && typeof extraBody === 'object' ? extraBody : {}),
   };
+  if (jsonMode) {
+    body.response_format = { type: 'json_object' };
+  }
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), provider.timeoutMs);
   let fullContent = '';
+  let fullReasoning = '';
 
   try {
     const r = await fetch(url, {
@@ -207,22 +223,42 @@ export async function chatCompletionStream({ provider, system, user, onEvent }) 
         } catch {
           continue;
         }
-        const delta = j?.choices?.[0]?.delta;
-        if (!delta) continue;
-        const reasoning =
-          delta.reasoning_content ??
-          delta.reasoning ??
-          (typeof delta.reasoning === 'string' ? delta.reasoning : null);
-        if (reasoning) {
-          onEvent?.({ kind: 'thinking', text: String(reasoning) });
-        }
-        if (delta.content) {
-          fullContent += delta.content;
-          onEvent?.({ kind: 'content', text: delta.content });
+        const choice = j?.choices?.[0];
+        const delta = choice?.delta;
+        const message = choice?.message;
+        if (delta) {
+          const reasoning =
+            delta.reasoning_content ??
+            delta.reasoning ??
+            (typeof delta.reasoning === 'string' ? delta.reasoning : null);
+          if (reasoning) {
+            const r = String(reasoning);
+            fullReasoning += r;
+            if (streamReasoning) onEvent?.({ kind: 'thinking', text: r });
+          }
+          if (delta.content) {
+            fullContent += delta.content;
+            onEvent?.({ kind: 'content', text: delta.content });
+          }
+        } else if (message) {
+          const reasoning =
+            message.reasoning_content ??
+            message.reasoning ??
+            (typeof message.reasoning === 'string' ? message.reasoning : null);
+          if (reasoning) {
+            const r = String(reasoning);
+            fullReasoning += r;
+            if (streamReasoning) onEvent?.({ kind: 'thinking', text: r });
+          }
+          if (message.content) {
+            fullContent += message.content;
+            onEvent?.({ kind: 'content', text: message.content });
+          }
         }
       }
     }
-    return fullContent.trim();
+    const merged = `${fullReasoning}${fullContent}`.trim();
+    return merged || fullContent.trim() || fullReasoning.trim();
   } catch (e) {
     logError(`llmGateway.chatCompletionStream url=${url}`, e);
     throw new Error(friendlyLlmErrorMessage(e));

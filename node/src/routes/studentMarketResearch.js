@@ -22,8 +22,19 @@ import {
   loadSavedPlanRow,
   planPayloadFromRow,
   getSurveyForTeam,
+  validateSurveyClosesAt,
+  assertSurveyIdsForTeam,
 } from '../lib/marketResearchSurveyDb.js';
-import { buildMarketResearchContext, formatContextForPrompt } from '../lib/marketResearchContext.js';
+import {
+  buildMarketResearchContext,
+  buildSurveyOnlyContext,
+  deriveChartsFromSurveyBlocks,
+  formatSurveyOnlyForPrompt,
+  mergeAnalysisCharts,
+  formatUploadsForPrompt,
+  projectTopicTextFromRow,
+  UPLOAD_METHODS,
+} from '../lib/marketResearchContext.js';
 import {
   MARKET_ANALYSIS_SYSTEM_PROMPT,
   buildMarketAnalysisUserPrompt,
@@ -47,17 +58,17 @@ import {
 } from '../lib/marketResearchChallengePrompts.js';
 import {
   extractJsonFromLlmText,
-  onStreamEventForSse,
   setupSseResponse,
   sseWrite,
+  createMarketResearchStreamHandler,
 } from '../lib/marketResearchSse.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UPLOAD_ROOT = path.join(__dirname, '../../uploads/market-research');
 const MAX_UPLOAD_BYTES = 15 * 1024 * 1024;
 
-const METHODS_ALLOWED = ['线上问卷', '用户访谈', '竞品分析', '行业报告', '数据爬取', '实地观察'];
-const UPLOAD_METHODS = ['用户访谈', '竞品分析', '行业报告', '数据爬取', '实地观察'];
+const METHODS_ALLOWED = [...UPLOAD_METHODS];
+const LEGACY_ONLINE_SURVEY_METHOD = '线上问卷';
 const ALLOWED_EXT = new Set(['.txt', '.docx']);
 const ALLOWED_MIME = new Set([
   'text/plain',
@@ -175,11 +186,15 @@ function parseJsonArray(val) {
   return [];
 }
 
+function filterPlanMethods(methods) {
+  return methods.filter((m) => m !== LEGACY_ONLINE_SURVEY_METHOD && METHODS_ALLOWED.includes(m));
+}
+
 function mapPlanRow(row) {
   if (!row) return null;
   return {
     goal: row.goal || '',
-    methods: parseJsonArray(row.methods),
+    methods: filterPlanMethods(parseJsonArray(row.methods)),
     startDate: row.plan_start_date ? String(row.plan_start_date).slice(0, 10) : '',
     endDate: row.plan_end_date ? String(row.plan_end_date).slice(0, 10) : '',
     assignments: parseJsonArray(row.assignments),
@@ -190,9 +205,11 @@ function mapPlanRow(row) {
 function validatePlanBody(body, memberIds, stage) {
   const goal = String(body?.goal || '').trim();
   if (!goal) return { error: '请填写调研目标' };
-  const methods = Array.isArray(body?.methods) ? body.methods.map((m) => String(m).trim()).filter(Boolean) : [];
+  const methodsRaw = Array.isArray(body?.methods) ? body.methods.map((m) => String(m).trim()).filter(Boolean) : [];
+  const methods = filterPlanMethods(methodsRaw);
   if (!methods.length) return { error: '请至少选择一种调研方法' };
-  for (const m of methods) {
+  for (const m of methodsRaw) {
+    if (m === LEGACY_ONLINE_SURVEY_METHOD) continue;
     if (!METHODS_ALLOWED.includes(m)) return { error: `无效的调研方法：${m}` };
   }
   const startDate = String(body?.startDate || '').trim();
@@ -618,7 +635,20 @@ router.post(
       const planRow = await loadSavedPlanRow(ctx.pool, ctx.team.id);
       if (!planRow?.saved_at) return bad(req, res, 400, 40015, '请先保存调研计划');
       const planPayload = planPayloadFromRow(planRow, ctx.members);
-      const userPrompt = buildMarketSurveyUserPrompt(planPayload, params);
+      planPayload.methods = filterPlanMethods(planPayload.methods || []);
+      const { rows: topicRows } = await ctx.pool.query(
+        `SELECT project_name, project_direction, project_description, target_users, core_value,
+                core_problem, solution_overview, market_size, competitive_advantage
+         FROM teacher_personal_class_team_project_topics WHERE team_id = $1 LIMIT 1`,
+        [ctx.team.id]
+      );
+      const projectTopicText = projectTopicTextFromRow(topicRows[0]);
+      const fullCtx = await buildMarketResearchContext(ctx.pool, ctx.team.id, UPLOAD_ROOT);
+      const uploadsText = formatUploadsForPrompt(fullCtx.uploads);
+      const userPrompt = buildMarketSurveyUserPrompt(planPayload, params, {
+        projectTopicText,
+        uploadsText,
+      });
       const provider = await getEnabledProvider('multimodal');
       if (!provider) return bad(req, res, 400, 40011, '未配置已启用的多模态模型');
 
@@ -645,7 +675,7 @@ router.post(
       });
     } catch (e) {
       logError(`POST market-research ai-generate traceId=${req.traceId}`, e);
-      return bad(req, res, 500, 50000, e.message);
+      return bad(req, res, 500, 50000, friendlyLlmErrorMessage(e));
     }
   }
 );
@@ -659,10 +689,10 @@ router.get(
       const ctx = await requireTeamContext(req, res);
       if (!ctx) return;
       const { rows } = await ctx.pool.query(
-        `SELECT id, title, status, collected_count, public_slug, source, created_at
+        `SELECT id, title, status, collected_count, public_slug, source, created_at, published_at, closes_at
          FROM teacher_personal_class_team_surveys
          WHERE team_id = $1
-         ORDER BY created_at DESC`,
+         ORDER BY COALESCE(published_at, created_at) ASC, id ASC`,
         [ctx.team.id]
       );
       const list = [];
@@ -692,14 +722,17 @@ router.post(
       const v = validateQuestionsInput(req.body?.questions);
       if (v.error) return bad(req, res, 400, 40004, v.error);
       const source = req.body?.source === 'ai' ? 'ai' : 'manual';
+      const stage = await getMarketStageDates(ctx.pool, ctx.classId);
+      const closesV = validateSurveyClosesAt(req.body?.closesAt, stage);
+      if (closesV.error) return bad(req, res, 400, 40004, closesV.error);
 
       await client.query('BEGIN');
       open = true;
       const { rows } = await client.query(
-        `INSERT INTO teacher_personal_class_team_surveys (team_id, title, status, source, created_by)
-         VALUES ($1, $2, 'draft', $3, $4)
-         RETURNING id, title, status, collected_count, public_slug, source, created_at`,
-        [ctx.team.id, title, source, ctx.sid]
+        `INSERT INTO teacher_personal_class_team_surveys (team_id, title, status, source, created_by, closes_at)
+         VALUES ($1, $2, 'draft', $3, $4, $5::timestamptz)
+         RETURNING id, title, status, collected_count, public_slug, source, created_at, published_at, closes_at`,
+        [ctx.team.id, title, source, ctx.sid, closesV.closesAt]
       );
       const surveyId = rows[0].id;
       await replaceSurveyQuestions(client, surveyId, v.questions);
@@ -738,15 +771,18 @@ router.put(
       if (!title) return bad(req, res, 400, 40004, '请填写问卷标题');
       const v = validateQuestionsInput(req.body?.questions);
       if (v.error) return bad(req, res, 400, 40004, v.error);
+      const stage = await getMarketStageDates(ctx.pool, ctx.classId);
+      const closesV = validateSurveyClosesAt(req.body?.closesAt, stage);
+      if (closesV.error) return bad(req, res, 400, 40004, closesV.error);
 
       await client.query('BEGIN');
       open = true;
       const { rows } = await client.query(
         `UPDATE teacher_personal_class_team_surveys
-         SET title = $3, updated_at = now()
+         SET title = $3, closes_at = $4::timestamptz, updated_at = now()
          WHERE id = $1 AND team_id = $2
-         RETURNING id, title, status, collected_count, public_slug, source, created_at`,
-        [surveyId, ctx.team.id, title]
+         RETURNING id, title, status, collected_count, public_slug, source, created_at, published_at, closes_at`,
+        [surveyId, ctx.team.id, title, closesV.closesAt]
       );
       await replaceSurveyQuestions(client, surveyId, v.questions);
       await client.query('COMMIT');
@@ -775,8 +811,8 @@ router.delete(
       if (!surveyId) return bad(req, res, 400, 40003, '参数无效');
       const existing = await getSurveyForTeam(ctx.pool, surveyId, ctx.team.id);
       if (!existing) return bad(req, res, 404, 40403, '问卷不存在');
-      if (existing.status !== 'draft') {
-        return bad(req, res, 400, 40005, '仅草稿问卷可删除');
+      if (existing.status !== 'draft' && existing.status !== 'withdrawn') {
+        return bad(req, res, 400, 40005, '仅草稿或已撤回问卷可删除');
       }
       await ctx.pool.query(
         `DELETE FROM teacher_personal_class_team_surveys WHERE id = $1 AND team_id = $2`,
@@ -808,15 +844,24 @@ router.post(
       const questions = await loadSurveyQuestions(ctx.pool, surveyId);
       const v = validateQuestionsInput(questions.map((q) => ({ text: q.text, type: q.type, options: q.options })));
       if (v.error) return bad(req, res, 400, 40004, v.error);
+      if (!existing.closes_at) {
+        return bad(req, res, 400, 40004, '请先在编辑问卷中设置截止时间后再发布');
+      }
+      const stage = await getMarketStageDates(ctx.pool, ctx.classId);
+      const closesV = validateSurveyClosesAt(
+        new Date(existing.closes_at).toISOString(),
+        stage
+      );
+      if (closesV.error) return bad(req, res, 400, 40004, closesV.error);
 
       let slug = existing.public_slug;
       if (!slug) slug = randomUUID().replace(/-/g, '');
 
       const { rows } = await ctx.pool.query(
         `UPDATE teacher_personal_class_team_surveys
-         SET status = 'published', public_slug = $3, published_at = now(), updated_at = now()
+         SET status = 'published', public_slug = $3, published_at = COALESCE(published_at, now()), updated_at = now()
          WHERE id = $1 AND team_id = $2
-         RETURNING id, title, status, collected_count, public_slug, source, created_at`,
+         RETURNING id, title, status, collected_count, public_slug, source, created_at, published_at, closes_at`,
         [surveyId, ctx.team.id, slug]
       );
       const base = publicBaseFromRequest(req);
@@ -852,7 +897,7 @@ router.post(
         `UPDATE teacher_personal_class_team_surveys
          SET status = 'withdrawn', updated_at = now()
          WHERE id = $1 AND team_id = $2
-         RETURNING id, title, status, collected_count, public_slug, source, created_at`,
+         RETURNING id, title, status, collected_count, public_slug, source, created_at, published_at, closes_at`,
         [surveyId, ctx.team.id]
       );
       const questions = await loadSurveyQuestions(ctx.pool, surveyId);
@@ -1040,32 +1085,55 @@ router.post(
         sseWrite(res, 'error', { message: '未配置已启用的 LLM 服务' });
         return res.end();
       }
-      sseWrite(res, 'status', { message: '正在汇总调研材料…' });
-      const mctx = await buildMarketResearchContext(ctx.pool, ctx.team.id, UPLOAD_ROOT);
-      const contextText = formatContextForPrompt(mctx);
+      const picked = await assertSurveyIdsForTeam(ctx.pool, ctx.team.id, req.body?.surveyIds);
+      if (picked.error) {
+        sseWrite(res, 'error', { message: picked.error });
+        return res.end();
+      }
+      sseWrite(res, 'status', { message: '正在汇总问卷数据…' });
+      const mctx = await buildSurveyOnlyContext(ctx.pool, ctx.team.id, picked.surveyIds);
+      const contextText = formatSurveyOnlyForPrompt(mctx);
       const hardStats = mctx.stats;
       const userMsg = buildMarketAnalysisUserPrompt(contextText, hardStats);
       logPromptToConsole(provider, MARKET_ANALYSIS_SYSTEM_PROMPT, userMsg);
       sseWrite(res, 'status', { message: '正在连接模型…' });
-      const onEvent = onStreamEventForSse(res);
+      const streamHandler = createMarketResearchStreamHandler(res);
       let fullText = '';
       try {
-        fullText = await chatCompletionStream({
-          provider,
-          system: MARKET_ANALYSIS_SYSTEM_PROMPT,
-          user: userMsg,
-          onEvent,
-        });
+        try {
+          fullText = await chatCompletionStream({
+            provider,
+            system: MARKET_ANALYSIS_SYSTEM_PROMPT,
+            user: userMsg,
+            onEvent: streamHandler.onEvent,
+            jsonMode: true,
+          });
+        } catch (streamErr) {
+          const sm = String(streamErr?.message || '');
+          if (!/response_format|json_object|json mode/i.test(sm)) throw streamErr;
+          fullText = await chatCompletionStream({
+            provider,
+            system: MARKET_ANALYSIS_SYSTEM_PROMPT,
+            user: userMsg,
+            onEvent: streamHandler.onEvent,
+            jsonMode: false,
+          });
+        }
       } catch (e) {
         sseWrite(res, 'error', { message: friendlyLlmErrorMessage(e) });
         return res.end();
       }
-      const parsed = extractJsonFromLlmText(fullText);
+      const parseText = streamHandler.getParseText(fullText);
+      const parsed = extractJsonFromLlmText(parseText);
       const norm = normalizeAnalysisResult(parsed, hardStats);
       if (norm.error) {
-        sseWrite(res, 'error', { message: norm.error });
+        const hint = !parsed ? 'AI 返回无法解析为 JSON，请重试' : norm.error;
+        logError(`analysis parse failed traceId=${req.traceId} len=${parseText.length}`, new Error(hint));
+        sseWrite(res, 'error', { message: hint });
         return res.end();
       }
+      const derivedCharts = deriveChartsFromSurveyBlocks(mctx.surveys);
+      norm.result.charts = mergeAnalysisCharts(norm.result.charts, derivedCharts);
       await ctx.pool.query(
         `INSERT INTO teacher_personal_class_team_market_analysis (team_id, result, generated_by, generated_at)
          VALUES ($1, $2, $3, now())
@@ -1221,35 +1289,36 @@ router.post(
         sseWrite(res, 'error', { message: '未配置已启用的 LLM 服务' });
         return res.end();
       }
-      const { rows: analysisRows } = await ctx.pool.query(
-        `SELECT result FROM teacher_personal_class_team_market_analysis WHERE team_id = $1`,
-        [ctx.team.id]
-      );
-      const analysisSummary = analysisSummaryText(analysisRows[0]?.result);
       const { rows: personaCountRows } = await ctx.pool.query(
         `SELECT COUNT(*)::int AS c FROM teacher_personal_class_team_market_personas WHERE team_id = $1`,
         [ctx.team.id]
       );
       const startIndex = Number(personaCountRows[0]?.c || 0);
-      sseWrite(res, 'status', { message: '正在汇总材料…' });
-      const mctx = await buildMarketResearchContext(ctx.pool, ctx.team.id, UPLOAD_ROOT);
-      const contextText = formatContextForPrompt(mctx);
-      const userMsg = buildMarketPersonaUserPrompt(contextText, analysisSummary);
+      const picked = await assertSurveyIdsForTeam(ctx.pool, ctx.team.id, req.body?.surveyIds);
+      if (picked.error) {
+        sseWrite(res, 'error', { message: picked.error });
+        return res.end();
+      }
+      sseWrite(res, 'status', { message: '正在汇总问卷数据…' });
+      const mctx = await buildSurveyOnlyContext(ctx.pool, ctx.team.id, picked.surveyIds);
+      const contextText = formatSurveyOnlyForPrompt(mctx);
+      const userMsg = buildMarketPersonaUserPrompt(contextText);
       logPromptToConsole(provider, MARKET_PERSONA_SYSTEM_PROMPT, userMsg);
-      const onEvent = onStreamEventForSse(res);
+      const streamHandler = createMarketResearchStreamHandler(res);
       let fullText = '';
       try {
         fullText = await chatCompletionStream({
           provider,
           system: MARKET_PERSONA_SYSTEM_PROMPT,
           user: userMsg,
-          onEvent,
+          onEvent: streamHandler.onEvent,
+          jsonMode: true,
         });
       } catch (e) {
         sseWrite(res, 'error', { message: friendlyLlmErrorMessage(e) });
         return res.end();
       }
-      const parsed = extractJsonFromLlmText(fullText);
+      const parsed = extractJsonFromLlmText(streamHandler.getParseText(fullText));
       const norm = normalizePersonaPayload(parsed, startIndex);
       if (norm.error) {
         sseWrite(res, 'error', { message: norm.error });
@@ -1305,6 +1374,45 @@ router.post(
       });
     } catch (e) {
       logError(`POST challenge session traceId=${req.traceId}`, e);
+      return bad(req, res, 500, 50000, e.message);
+    }
+  }
+);
+
+router.get(
+  '/student/personal-classes/:classId/market-research/challenge/sessions/me/latest',
+  requireAuth(),
+  requireStudent(),
+  async (req, res) => {
+    try {
+      const ctx = await requireTeamContext(req, res);
+      if (!ctx) return;
+      const { rows } = await ctx.pool.query(
+        `SELECT id, project_info, selected_agents, rounds, final_report, status, created_at, completed_at
+         FROM teacher_personal_class_team_market_challenge_sessions
+         WHERE team_id = $1 AND student_id = $2
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        [ctx.team.id, ctx.sid]
+      );
+      if (!rows[0]) {
+        return ok(req, res, { session: null });
+      }
+      const r = rows[0];
+      return ok(req, res, {
+        session: {
+          id: String(r.id),
+          status: r.status,
+          projectInfo: r.project_info || {},
+          selectedAgents: Array.isArray(r.selected_agents) ? r.selected_agents : [],
+          rounds: Array.isArray(r.rounds) ? r.rounds : [],
+          finalReport: r.final_report || null,
+          createdAt: r.created_at ? new Date(r.created_at).toISOString() : '',
+          completedAt: r.completed_at ? new Date(r.completed_at).toISOString() : '',
+        },
+      });
+    } catch (e) {
+      logError(`GET challenge session me/latest traceId=${req.traceId}`, e);
       return bad(req, res, 500, 50000, e.message);
     }
   }
@@ -1434,21 +1542,27 @@ router.post(
         return res.end();
       }
       logPromptToConsole(provider, CHALLENGE_QUESTION_SYSTEM_PROMPT, userMsg);
-      const onEvent = onStreamEventForSse(res);
+      sseWrite(res, 'status', { message: '思考中…' });
+      const streamHandler = createMarketResearchStreamHandler(res, { emitSse: false });
       let fullText = '';
       try {
         fullText = await chatCompletionStream({
           provider,
           system: CHALLENGE_QUESTION_SYSTEM_PROMPT,
           user: userMsg,
-          onEvent,
+          onEvent: streamHandler.onEvent,
+          jsonMode: true,
+          temperature: 0.2,
+          maxTokens: 512,
+          streamReasoning: false,
         });
       } catch (e) {
         sseWrite(res, 'error', { message: friendlyLlmErrorMessage(e) });
         return res.end();
       }
-      const parsed = extractJsonFromLlmText(fullText);
-      const q = normalizeChallengeQuestion(parsed, fullText);
+      const parseSource = streamHandler.getParseText(fullText);
+      const parsed = extractJsonFromLlmText(parseSource);
+      const q = normalizeChallengeQuestion(parsed, parseSource);
       const roundEntry = {
         agentId: expectedAgent,
         agentName: agentMeta.name,
@@ -1532,20 +1646,25 @@ router.post(
         return res.end();
       }
       logPromptToConsole(provider, CHALLENGE_FINAL_REPORT_SYSTEM_PROMPT, userMsg);
-      const onEvent = onStreamEventForSse(res);
+      sseWrite(res, 'status', { message: '思考中…' });
+      const streamHandler = createMarketResearchStreamHandler(res, { emitSse: false });
       let fullText = '';
       try {
         fullText = await chatCompletionStream({
           provider,
           system: CHALLENGE_FINAL_REPORT_SYSTEM_PROMPT,
           user: userMsg,
-          onEvent,
+          onEvent: streamHandler.onEvent,
+          jsonMode: true,
+          temperature: 0.2,
+          maxTokens: 1024,
+          streamReasoning: false,
         });
       } catch (e) {
         sseWrite(res, 'error', { message: friendlyLlmErrorMessage(e) });
         return res.end();
       }
-      const parsed = extractJsonFromLlmText(fullText);
+      const parsed = extractJsonFromLlmText(streamHandler.getParseText(fullText));
       const norm = normalizeChallengeFinalReport(parsed);
       if (norm.error) {
         sseWrite(res, 'error', { message: norm.error });
@@ -1563,6 +1682,151 @@ router.post(
       logError(`POST challenge final stream traceId=${req.traceId}`, e);
       sseWrite(res, 'error', { message: e.message || '生成失败' });
       res.end();
+    }
+  }
+);
+
+router.get(
+  '/student/personal-classes/:classId/market-research/challenge/participation',
+  requireAuth(),
+  requireStudent(),
+  async (req, res) => {
+    try {
+      const ctx = await requireTeamContext(req, res);
+      if (!ctx) return;
+      const members = ctx.members || (await loadTeamMembers(ctx.pool, ctx.team.id));
+      const { rows: sessionRows } = await ctx.pool.query(
+        `SELECT DISTINCT student_id FROM teacher_personal_class_team_market_challenge_sessions WHERE team_id = $1`,
+        [ctx.team.id]
+      );
+      const hasSession = new Set(sessionRows.map((r) => String(r.student_id)));
+      const missingMembers = members
+        .filter((m) => !hasSession.has(String(m.id)))
+        .map((m) => ({ id: String(m.id), name: m.name || '' }));
+      return ok(req, res, {
+        members: members.map((m) => ({
+          id: String(m.id),
+          name: m.name || '',
+          hasChallengeSession: hasSession.has(String(m.id)),
+        })),
+        missingMembers,
+      });
+    } catch (e) {
+      logError(`GET challenge participation traceId=${req.traceId}`, e);
+      return bad(req, res, 500, 50000, e.message);
+    }
+  }
+);
+
+router.get(
+  '/student/personal-classes/:classId/market-research/report-upload',
+  requireAuth(),
+  requireStudent(),
+  async (req, res) => {
+    try {
+      const ctx = await requireTeamContext(req, res);
+      if (!ctx) return;
+      const { rows } = await ctx.pool.query(
+        `SELECT uploaded_by, uploaded_at, payload
+         FROM teacher_personal_class_team_market_report_uploads
+         WHERE team_id = $1`,
+        [ctx.team.id]
+      );
+      if (!rows.length) {
+        return ok(req, res, { uploaded: false, uploadedAt: '', uploadedBy: '', payload: null });
+      }
+      const r = rows[0];
+      return ok(req, res, {
+        uploaded: true,
+        uploadedAt: r.uploaded_at ? new Date(r.uploaded_at).toISOString() : '',
+        uploadedBy: String(r.uploaded_by || ''),
+        payload: r.payload || null,
+      });
+    } catch (e) {
+      logError(`GET market-research report-upload traceId=${req.traceId}`, e);
+      return bad(req, res, 500, 50000, e.message);
+    }
+  }
+);
+
+router.post(
+  '/student/personal-classes/:classId/market-research/report-upload',
+  requireAuth(),
+  requireStudent(),
+  async (req, res) => {
+    try {
+      const ctx = await requireTeamContext(req, res);
+      if (!ctx) return;
+      if (!ctx.isTeamLeader) return bad(req, res, 403, 40304, '仅队长可上传调研报告');
+
+      const members = ctx.members || (await loadTeamMembers(ctx.pool, ctx.team.id));
+      const { rows: sessionRows } = await ctx.pool.query(
+        `SELECT DISTINCT student_id FROM teacher_personal_class_team_market_challenge_sessions WHERE team_id = $1`,
+        [ctx.team.id]
+      );
+      const hasSession = new Set(sessionRows.map((r) => String(r.student_id)));
+      const missingMembers = members.filter((m) => !hasSession.has(String(m.id)));
+      if (missingMembers.length) {
+        const names = missingMembers.map((m) => m.name || m.id).join('、');
+        return res.status(400).json({
+          code: 40006,
+          message: `小组成员${names}还未完成对抗优化分析，请先通知成员完成对抗优化分析吧`,
+          data: { missingMembers },
+          traceId: req.traceId,
+        });
+      }
+
+      const rawSurveyIds = Array.isArray(req.body?.surveyIds)
+        ? req.body.surveyIds.map(parseId).filter(Boolean)
+        : [];
+      if (!rawSurveyIds.length) {
+        return bad(req, res, 400, 40004, '请至少选择 1 份问卷');
+      }
+      const { rows: surveyRows } = await ctx.pool.query(
+        `SELECT id FROM teacher_personal_class_team_surveys
+         WHERE team_id = $1 AND id = ANY($2::bigint[])`,
+        [ctx.team.id, rawSurveyIds]
+      );
+      if (surveyRows.length !== rawSurveyIds.length) {
+        return bad(req, res, 400, 40004, '所选问卷不存在或不属于本组');
+      }
+
+      const { rows: analysisRows } = await ctx.pool.query(
+        `SELECT result, generated_at FROM teacher_personal_class_team_market_analysis WHERE team_id = $1`,
+        [ctx.team.id]
+      );
+      if (!analysisRows.length || !analysisRows[0].result) {
+        return bad(req, res, 400, 40004, '请先生成调研报告');
+      }
+
+      const { rows: personaRows } = await ctx.pool.query(
+        `SELECT id FROM teacher_personal_class_team_market_personas WHERE team_id = $1`,
+        [ctx.team.id]
+      );
+
+      const payload = {
+        surveyIds: rawSurveyIds.map(String),
+        personaIds: personaRows.map((r) => String(r.id)),
+        analysisResult: analysisRows[0].result,
+        analysisGeneratedAt: analysisRows[0].generated_at
+          ? new Date(analysisRows[0].generated_at).toISOString()
+          : '',
+      };
+
+      await ctx.pool.query(
+        `INSERT INTO teacher_personal_class_team_market_report_uploads (team_id, uploaded_by, payload)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (team_id) DO UPDATE SET
+           uploaded_by = EXCLUDED.uploaded_by,
+           uploaded_at = now(),
+           payload = EXCLUDED.payload`,
+        [ctx.team.id, ctx.sid, JSON.stringify(payload)]
+      );
+
+      return ok(req, res, { uploaded: true });
+    } catch (e) {
+      logError(`POST market-research report-upload traceId=${req.traceId}`, e);
+      return bad(req, res, 500, 50000, e.message);
     }
   }
 );

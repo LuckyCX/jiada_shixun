@@ -11,7 +11,7 @@ export default function PublicSurveyPage() {
   const { slug = '' } = useParams();
   const [loading, setLoading] = useState(true);
   const [title, setTitle] = useState('');
-  const [status, setStatus] = useState<'published' | 'withdrawn'>('published');
+  const [status, setStatus] = useState<'published' | 'withdrawn' | 'expired'>('published');
   const [questions, setQuestions] = useState<MarketSurveyQuestion[]>([]);
   const [submitted, setSubmitted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -57,6 +57,14 @@ export default function PublicSurveyPage() {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-green-50 to-teal-50 p-6">
         <Alert type="warning" showIcon message="问卷已暂停" description="该问卷已撤回，暂不接受填写。" className="max-w-md" />
+      </div>
+    );
+  }
+
+  if (status === 'expired') {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-green-50 to-teal-50 p-6">
+        <Alert type="info" showIcon message="问卷已截止" description="已超过回收截止时间，不再接受提交。" className="max-w-md" />
       </div>
     );
   }

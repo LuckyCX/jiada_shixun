@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
-import { Button, Input, Modal, Select, Space, message } from 'antd';
+import { useEffect, useMemo, useState } from 'react';
+import { Button, DatePicker, Input, Modal, Select, Space, message } from 'antd';
+import dayjs, { type Dayjs } from 'dayjs';
 import {
   SURVEY_QUESTION_TYPES,
   type MarketSurveyQuestion,
@@ -9,6 +10,7 @@ import {
 export type SurveyEditorPayload = {
   title: string;
   questions: Omit<MarketSurveyQuestion, 'id'>[];
+  closesAt: string;
 };
 
 type Props = {
@@ -17,6 +19,8 @@ type Props = {
   title: string;
   initialTitle?: string;
   initialQuestions?: MarketSurveyQuestion[];
+  initialClosesAt?: string | null;
+  stageDeadlineDate?: string | null;
   saving?: boolean;
   onCancel: () => void;
   onSave?: (payload: SurveyEditorPayload) => void | Promise<void>;
@@ -37,12 +41,21 @@ export default function SurveyEditorModal({
   title,
   initialTitle = '',
   initialQuestions = [],
+  initialClosesAt = null,
+  stageDeadlineDate = null,
   saving = false,
   onCancel,
   onSave,
 }: Props) {
   const [surveyTitle, setSurveyTitle] = useState(initialTitle);
   const [questions, setQuestions] = useState<MarketSurveyQuestion[]>([]);
+  const [closesAt, setClosesAt] = useState<Dayjs | null>(null);
+
+  const minClosesAt = useMemo(() => dayjs().add(1, 'minute'), [open]);
+  const maxClosesAt = useMemo(
+    () => (stageDeadlineDate ? dayjs(`${stageDeadlineDate}T23:59:59`) : null),
+    [stageDeadlineDate]
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -52,7 +65,14 @@ export default function SurveyEditorModal({
         ? initialQuestions.map((q) => ({ ...q, options: q.options ? [...q.options] : [] }))
         : [newQuestion()]
     );
-  }, [open, initialTitle, initialQuestions]);
+    if (initialClosesAt) {
+      setClosesAt(dayjs(initialClosesAt));
+    } else if (stageDeadlineDate) {
+      setClosesAt(dayjs(`${stageDeadlineDate}T23:59:59`));
+    } else {
+      setClosesAt(dayjs().add(7, 'day'));
+    }
+  }, [open, initialTitle, initialQuestions, initialClosesAt, stageDeadlineDate]);
 
   const updateQuestion = (id: string, patch: Partial<MarketSurveyQuestion>) => {
     setQuestions((prev) =>
@@ -75,6 +95,18 @@ export default function SurveyEditorModal({
       message.warning('请填写问卷标题');
       return;
     }
+    if (!closesAt) {
+      message.warning('请设置问卷截止时间');
+      return;
+    }
+    if (closesAt.isBefore(minClosesAt)) {
+      message.warning('截止时间须晚于当前时间');
+      return;
+    }
+    if (maxClosesAt && closesAt.isAfter(maxClosesAt)) {
+      message.warning(`截止时间不能晚于实训环节截止日（${stageDeadlineDate}）`);
+      return;
+    }
     if (!questions.length) {
       message.warning('请至少添加一道题目');
       return;
@@ -93,7 +125,15 @@ export default function SurveyEditorModal({
     await onSave({
       title: t,
       questions: questions.map(({ text, type, options }) => ({ text, type, options: options || [] })),
+      closesAt: closesAt.toISOString(),
     });
+  };
+
+  const disabledDate = (current: Dayjs) => {
+    if (!current) return false;
+    if (current.isBefore(minClosesAt, 'day')) return true;
+    if (maxClosesAt && current.isAfter(maxClosesAt, 'day')) return true;
+    return false;
   };
 
   return (
@@ -129,6 +169,23 @@ export default function SurveyEditorModal({
             disabled={readOnly}
             placeholder="请输入问卷标题"
           />
+        </div>
+        <div>
+          <div className="text-sm font-medium text-gray-900 mb-1">问卷截止时间</div>
+          <DatePicker
+            showTime
+            className="w-full"
+            value={closesAt}
+            onChange={(v) => setClosesAt(v)}
+            disabled={readOnly}
+            disabledDate={disabledDate}
+            format="YYYY-MM-DD HH:mm"
+          />
+          {stageDeadlineDate && (
+            <p className="text-xs text-gray-500 mt-1 mb-0">
+              须晚于当前时间，且不晚于实训截止日 {stageDeadlineDate}
+            </p>
+          )}
         </div>
         {questions.map((q, idx) => (
           <div key={q.id} className="border border-gray-200 rounded-xl p-4 space-y-3">

@@ -4,27 +4,28 @@ import {
   Alert,
   Button,
   Checkbox,
-  DatePicker,
   Form,
   Input,
+  Modal,
   Select,
   Spin,
-  Tabs,
   message,
   QRCode,
 } from 'antd';
-import dayjs, { type Dayjs } from 'dayjs';
 import VersionControl, { Version } from '../../../components/feature/VersionControl';
 import MarketResearchMethodUpload from './MarketResearchMethodUpload';
 import SurveyAIGenerateModal from './SurveyAIGenerateModal';
 import SurveyEditorModal from './SurveyEditorModal';
+import MarketResearchSurveySelectModal from './MarketResearchSurveySelectModal';
 import SurveyResponsesModal from './SurveyResponsesModal';
 import MarketAnalysisStreamPanel from './MarketAnalysisStreamPanel';
 import ChallengeRecordsDialog from './ChallengeRecordsDialog';
 import ChallengeTab from './ChallengeTab';
 import {
   MARKET_PRESET_ROLES,
-  MARKET_RESEARCH_METHODS,
+  MARKET_UPLOAD_METHODS,
+  METHOD_FORMAT_GUIDES,
+  filterPlanUploadMethods,
   buildPublicSurveyUrl,
   createMarketSurvey,
   deleteMarketSurvey,
@@ -43,6 +44,10 @@ import {
   streamGeneratePersonas,
   listChallengeSessions,
   listMarketMethodUploads,
+  fetchTeamMarketReportUploadStatus,
+  fetchTeamChallengeParticipation,
+  uploadTeamMarketReport,
+  type UploadTeamMarketReportError,
   type MarketAnalysisResult,
   type MarketPersona,
   type MarketPlanAssignment,
@@ -68,7 +73,7 @@ function chartWithColors(items: { label: string; value: number }[], colors: stri
 }
 
 // ─── Constants ───────────────────────────────────────────────────────────────
-const METHODS = [...MARKET_RESEARCH_METHODS];
+const METHODS = [...MARKET_UPLOAD_METHODS];
 
 function presetAssignments(): MarketPlanAssignment[] {
   return MARKET_PRESET_ROLES.map((role) => ({ role, memberIds: [] }));
@@ -215,11 +220,13 @@ function QRCodeModal({ survey, onClose }: { survey: Survey; onClose: () => void 
 // ─── AI Generate Persona Modal ────────────────────────────────────────────────
 function AIGeneratePersonaModal({
   classId,
+  surveyIds,
   totalCollected,
   onComplete,
   onClose,
 }: {
   classId: string;
+  surveyIds: string[];
   totalCollected: number;
   onComplete: () => void;
   onClose: () => void;
@@ -235,7 +242,7 @@ function AIGeneratePersonaModal({
     setStreamThinking('');
     setStreamStatus('');
     setGeneratedPersonas([]);
-    void streamGeneratePersonas(classId, {
+    void streamGeneratePersonas(classId, surveyIds, {
       onStatus: setStreamStatus,
       onThinking: (t) => setStreamThinking((s) => s + t),
       onDone: (list) => {
@@ -532,6 +539,10 @@ type MarketResearchModuleProps = {
   teamMembers?: MarketTeamMember[];
   hasConfirmedTeam?: boolean;
   onTaskComplete?: () => void;
+  studentMarketChallengeDone?: boolean;
+  onMarketChallengeReportComplete?: () => void;
+  onMarketTabProgress?: (doneCount: number, total?: number) => void;
+  onTeamMarketReportUploaded?: () => void;
 };
 
 export default function MarketResearchModule({
@@ -541,13 +552,16 @@ export default function MarketResearchModule({
   teamMembers: teamMembersProp = [],
   hasConfirmedTeam = false,
   onTaskComplete,
+  studentMarketChallengeDone = false,
+  onMarketChallengeReportComplete,
+  onMarketTabProgress,
+  onTeamMarketReportUploaded,
 }: MarketResearchModuleProps) {
   const [searchParams] = useSearchParams();
   const marketTabParam = searchParams.get('marketTab');
-  const [activeTab, setActiveTab] = useState<'plan' | 'methods' | 'analysis' | 'persona' | 'challenge'>(
-    marketTabParam === 'methods' ? 'methods' : 'plan'
-  );
-  const [methodSubTab, setMethodSubTab] = useState<string>('');
+  const [activeTab, setActiveTab] = useState<
+    'plan' | 'methods' | 'survey' | 'analysis' | 'persona' | 'challenge'
+  >(marketTabParam === 'methods' ? 'methods' : marketTabParam === 'survey' ? 'survey' : 'plan');
   const [toast, setToast] = useState('');
 
   // Plan state
@@ -575,10 +589,11 @@ export default function MarketResearchModule({
   const [editingPersona, setEditingPersona] = useState<UserPersona | null>(null);
   const [showCreatePersona, setShowCreatePersona] = useState(false);
   const [showAIGeneratePersona, setShowAIGeneratePersona] = useState(false);
+  const [personaSurveyIds, setPersonaSurveyIds] = useState<string[]>([]);
+  const [surveySelectMode, setSurveySelectMode] = useState<'analysis' | 'persona' | null>(null);
 
   const [analysisResult, setAnalysisResult] = useState<MarketAnalysisResult | null>(null);
   const [analysisExpanded, setAnalysisExpanded] = useState(true);
-  const [interviewUploadCount, setInterviewUploadCount] = useState(0);
   const [analysisStreamStatus, setAnalysisStreamStatus] = useState('');
   const [analysisStreamThinking, setAnalysisStreamThinking] = useState('');
   const [isAiAnalyzing, setIsAiAnalyzing] = useState(false);
@@ -586,6 +601,11 @@ export default function MarketResearchModule({
   const [challengeRecordsOpen, setChallengeRecordsOpen] = useState(false);
   const [challengeRecords, setChallengeRecords] = useState<Awaited<ReturnType<typeof listChallengeSessions>>>([]);
   const [challengeRecordsLoading, setChallengeRecordsLoading] = useState(false);
+  const [hasMethodUpload, setHasMethodUpload] = useState(false);
+  const [teamReportUploaded, setTeamReportUploaded] = useState(false);
+  const [reportUploadModalOpen, setReportUploadModalOpen] = useState(false);
+  const [reportUploading, setReportUploading] = useState(false);
+  const [reportUploadSurveyIds, setReportUploadSurveyIds] = useState<string[]>([]);
 
   const totalCollected = surveys.reduce((s, sv) => s + sv.collected, 0);
   const activeSurveyCount = surveys.filter((s) => s.status === '进行中').length;
@@ -607,6 +627,16 @@ export default function MarketResearchModule({
   const improvementData = useMemo(
     () => analysisResult?.charts?.improvementRanking ?? [],
     [analysisResult]
+  );
+  const hasChartData = useMemo(
+    () =>
+      Boolean(
+        ageData.length ||
+          spendingData.length ||
+          satisfactionData.length ||
+          improvementData.length
+      ),
+    [ageData.length, spendingData.length, satisfactionData.length, improvementData.length]
   );
   const keyFindings = analysisResult?.keyFindings ?? [];
 
@@ -630,7 +660,7 @@ export default function MarketResearchModule({
       if (res.plan) {
         setPlan({
           goal: res.plan.goal || '',
-          methods: res.plan.methods || [],
+          methods: filterPlanUploadMethods(res.plan.methods || []),
           startDate: res.plan.startDate || '',
           endDate: res.plan.endDate || '',
           assignments: normalizeAssignments(res.plan.assignments),
@@ -705,15 +735,103 @@ export default function MarketResearchModule({
     void loadStoredAnalysis();
   }, [loadStoredAnalysis]);
 
-  useEffect(() => {
+  const loadReportUploadStatus = useCallback(async () => {
     if (!classId || !hasConfirmedTeam) {
-      setInterviewUploadCount(0);
+      setTeamReportUploaded(false);
       return;
     }
-    void listMarketMethodUploads(classId, '用户访谈')
-      .then((list) => setInterviewUploadCount(list.length))
-      .catch(() => setInterviewUploadCount(0));
-  }, [classId, hasConfirmedTeam, activeTab]);
+    try {
+      const st = await fetchTeamMarketReportUploadStatus(classId);
+      setTeamReportUploaded(Boolean(st.uploaded));
+    } catch {
+      setTeamReportUploaded(false);
+    }
+  }, [classId, hasConfirmedTeam]);
+
+  useEffect(() => {
+    void loadReportUploadStatus();
+  }, [loadReportUploadStatus]);
+
+  const formatMissingChallengeNames = (list: { id: string; name: string }[]) =>
+    list.map((m) => m.name || m.id).join('、');
+
+  const reportUploadDialogOkProps = {
+    okText: '确定',
+    okButtonProps: { className: '!bg-teal-500 !border-teal-500 hover:!bg-teal-600' },
+  } as const;
+
+  const showReportUploadDialog = (title: string, content: string) => {
+    Modal.info({
+      title,
+      content,
+      centered: true,
+      ...reportUploadDialogOkProps,
+    });
+  };
+
+  const showMissingChallengeDialog = (missingMembers: { id: string; name: string }[]) => {
+    showReportUploadDialog(
+      '无法上传调研报告',
+      `小组成员 ${formatMissingChallengeNames(missingMembers)} 还未完成对抗优化分析，请先通知成员完成对抗优化分析吧。`
+    );
+  };
+
+  const ensureAllMembersHaveChallengeSession = async (): Promise<boolean> => {
+    if (!classId) return false;
+    const { missingMembers } = await fetchTeamChallengeParticipation(classId);
+    if (missingMembers.length) {
+      showMissingChallengeDialog(missingMembers);
+      return false;
+    }
+    return true;
+  };
+
+  const handleOpenReportUpload = async () => {
+    if (!classId) return;
+    if (!surveys.length) {
+      showReportUploadDialog('无法上传调研报告', '请先在「线上问卷」中创建至少 1 份问卷。');
+      return;
+    }
+    try {
+      const okMembers = await ensureAllMembersHaveChallengeSession();
+      if (!okMembers) return;
+    } catch (e) {
+      showReportUploadDialog('校验失败', e instanceof Error ? e.message : '请稍后重试');
+      return;
+    }
+    setReportUploadSurveyIds(surveys.map((s) => s.id));
+    setReportUploadModalOpen(true);
+  };
+
+  const handleConfirmReportUpload = async () => {
+    if (!classId) return;
+    if (reportUploadSurveyIds.length < 1) {
+      showReportUploadDialog('无法上传调研报告', '请至少选择 1 份线上问卷调查记录。');
+      return;
+    }
+    setReportUploading(true);
+    try {
+      const okMembers = await ensureAllMembersHaveChallengeSession();
+      if (!okMembers) {
+        setReportUploading(false);
+        return;
+      }
+      await uploadTeamMarketReport(classId, { surveyIds: reportUploadSurveyIds });
+      setTeamReportUploaded(true);
+      setReportUploadModalOpen(false);
+      showToast('调研报告已上传');
+      onTeamMarketReportUploaded?.();
+    } catch (e) {
+      const err = e as UploadTeamMarketReportError;
+      if (err.missingMembers?.length) {
+        showMissingChallengeDialog(err.missingMembers);
+      } else {
+        showReportUploadDialog('上传失败', err.message || '请稍后重试');
+      }
+    } finally {
+      setReportUploading(false);
+    }
+  };
 
   const openChallengeRecords = () => {
     if (!classId) return;
@@ -725,24 +843,40 @@ export default function MarketResearchModule({
       .finally(() => setChallengeRecordsLoading(false));
   };
 
-  const planMethodsForSubTabs = useMemo(() => plan.methods.filter((m) => METHODS.includes(m as (typeof METHODS)[number])), [plan.methods]);
+  const planUploadMethods = useMemo(
+    () => filterPlanUploadMethods(plan.methods),
+    [plan.methods]
+  );
 
   useEffect(() => {
-    if (!planMethodsForSubTabs.length) {
-      setMethodSubTab('');
+    if (!classId || !planUploadMethods.length) {
+      setHasMethodUpload(false);
       return;
     }
-    if (!planMethodsForSubTabs.includes(methodSubTab)) {
-      setMethodSubTab(planMethodsForSubTabs[0]);
-    }
-  }, [planMethodsForSubTabs, methodSubTab]);
+    void Promise.all(planUploadMethods.map((m) => listMarketMethodUploads(classId, m)))
+      .then((lists) => setHasMethodUpload(lists.some((l) => l.length > 0)))
+      .catch(() => setHasMethodUpload(false));
+  }, [classId, planUploadMethods, activeTab]);
 
-  const stageRangeDisabled = (current: Dayjs) => {
-    if (!stagePeriod?.startDate || !stagePeriod?.deadlineDate) return true;
-    const start = dayjs(stagePeriod.startDate).startOf('day');
-    const end = dayjs(stagePeriod.deadlineDate).endOf('day');
-    return current.isBefore(start, 'day') || current.isAfter(end, 'day');
-  };
+  useEffect(() => {
+    if (!onMarketTabProgress) return;
+    let done = 0;
+    if (plan.savedAt) done += 1;
+    if (hasMethodUpload) done += 1;
+    if (surveys.length > 0) done += 1;
+    if (teamReportUploaded) done += 1;
+    if (personas.length > 0) done += 1;
+    if (studentMarketChallengeDone) done += 1;
+    onMarketTabProgress(done, 6);
+  }, [
+    plan.savedAt,
+    hasMethodUpload,
+    surveys.length,
+    teamReportUploaded,
+    personas.length,
+    studentMarketChallengeDone,
+    onMarketTabProgress,
+  ]);
 
   // ── Plan handlers ──
   const handleSavePlan = async () => {
@@ -759,8 +893,8 @@ export default function MarketResearchModule({
       message.warning('请至少选择一种调研方法');
       return;
     }
-    if (!plan.startDate || !plan.endDate) {
-      message.warning('请设置计划起止时间');
+    if (!stagePeriod?.startDate || !stagePeriod?.deadlineDate) {
+      message.warning('本实训环节尚未配置开始与结束时间，请联系教师');
       return;
     }
     if (!plan.assignments.length) {
@@ -773,11 +907,16 @@ export default function MarketResearchModule({
     }
     setSaving(true);
     try {
-      const res = await saveMarketResearchPlan(classId, plan);
+      const res = await saveMarketResearchPlan(classId, {
+        ...plan,
+        methods: filterPlanUploadMethods(plan.methods),
+        startDate: stagePeriod.startDate,
+        endDate: stagePeriod.deadlineDate,
+      });
       if (res.plan) {
         setPlan({
           goal: res.plan.goal,
-          methods: res.plan.methods,
+          methods: filterPlanUploadMethods(res.plan.methods),
           startDate: res.plan.startDate,
           endDate: res.plan.endDate,
           assignments: normalizeAssignments(res.plan.assignments),
@@ -979,19 +1118,20 @@ export default function MarketResearchModule({
 
   const tabs = [
     { key: 'plan' as const, label: '调研计划', icon: 'ri-file-list-3-line' },
-    { key: 'methods' as const, label: '调研方法', icon: 'ri-questionnaire-line' },
-    { key: 'analysis' as const, label: '数据分析', icon: 'ri-bar-chart-box-line' },
+    { key: 'methods' as const, label: '调研数据上传', icon: 'ri-upload-cloud-2-line' },
+    { key: 'survey' as const, label: '线上问卷', icon: 'ri-questionnaire-line' },
     { key: 'persona' as const, label: '用户画像', icon: 'ri-user-heart-line' },
-    { key: 'challenge' as const, label: '人机对抗', icon: 'ri-sword-line' },
+    { key: 'challenge' as const, label: '对抗优化分析', icon: 'ri-file-text-line' },
+    { key: 'analysis' as const, label: '调研报告', icon: 'ri-bar-chart-box-line' },
   ];
 
-  const handleAiAnalysis = async () => {
+  const runAiAnalysis = async (surveyIds: string[]) => {
     if (!classId) return;
     setIsAiAnalyzing(true);
     setAnalysisStreamThinking('');
     setAnalysisStreamStatus('');
     try {
-      await streamMarketAnalysis(classId, {
+      await streamMarketAnalysis(classId, surveyIds, {
         onStatus: setAnalysisStreamStatus,
         onThinking: (t) => setAnalysisStreamThinking((s) => s + t),
         onDone: (result) => {
@@ -1035,10 +1175,26 @@ export default function MarketResearchModule({
           open={showAI}
           classId={classId}
           plan={plan}
+          stageDeadlineDate={stagePeriod?.deadlineDate ?? null}
           onClose={() => setShowAI(false)}
           onCreated={() => void loadSurveys()}
         />
       )}
+      <MarketResearchSurveySelectModal
+        open={surveySelectMode !== null}
+        title={surveySelectMode === 'persona' ? '选择问卷生成用户画像' : '选择问卷进行数据分析'}
+        surveys={surveys}
+        onCancel={() => setSurveySelectMode(null)}
+        onConfirm={(ids) => {
+          setSurveySelectMode(null);
+          if (surveySelectMode === 'analysis') {
+            void runAiAnalysis(ids);
+          } else if (surveySelectMode === 'persona') {
+            setPersonaSurveyIds(ids);
+            setShowAIGeneratePersona(true);
+          }
+        }}
+      />
       {surveyEditor && (
         <SurveyEditorModal
           open
@@ -1052,6 +1208,8 @@ export default function MarketResearchModule({
           }
           initialTitle={surveyEditor.survey?.title || ''}
           initialQuestions={surveyEditor.survey?.questions || []}
+          initialClosesAt={surveyEditor.survey?.closesAt ?? null}
+          stageDeadlineDate={stagePeriod?.deadlineDate ?? null}
           saving={surveySaving}
           onCancel={() => setSurveyEditor(null)}
           onSave={
@@ -1065,6 +1223,7 @@ export default function MarketResearchModule({
                       await createMarketSurvey(classId, {
                         title: payload.title,
                         questions: payload.questions,
+                        closesAt: payload.closesAt,
                         source: 'manual',
                       });
                       showToast('问卷已创建');
@@ -1096,12 +1255,16 @@ export default function MarketResearchModule({
       )}
       {editingPersona && <EditPersonaModal persona={editingPersona} onSave={handleSaveEdit} onClose={() => setEditingPersona(null)} />}
       {showCreatePersona && <CreatePersonaModal onSave={handleCreatePersona} onClose={() => setShowCreatePersona(false)} />}
-      {showAIGeneratePersona && classId && (
+      {showAIGeneratePersona && classId && personaSurveyIds.length > 0 && (
         <AIGeneratePersonaModal
           classId={classId}
+          surveyIds={personaSurveyIds}
           totalCollected={totalCollected}
           onComplete={() => void loadPersonas()}
-          onClose={() => setShowAIGeneratePersona(false)}
+          onClose={() => {
+            setShowAIGeneratePersona(false);
+            setPersonaSurveyIds([]);
+          }}
         />
       )}
       <ChallengeRecordsDialog
@@ -1111,8 +1274,66 @@ export default function MarketResearchModule({
         onClose={() => setChallengeRecordsOpen(false)}
       />
 
+      <Modal
+        title="上传调研报告"
+        open={reportUploadModalOpen}
+        onCancel={() => {
+          if (!reportUploading) setReportUploadModalOpen(false);
+        }}
+        footer={
+          <div className="flex gap-3 pt-1">
+            <button
+              type="button"
+              disabled={reportUploading}
+              onClick={() => setReportUploadModalOpen(false)}
+              className="flex-1 py-2.5 border border-gray-200 text-gray-700 text-sm font-medium rounded-xl hover:bg-gray-50 transition-colors cursor-pointer disabled:opacity-50"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              disabled={reportUploading || reportUploadSurveyIds.length < 1}
+              onClick={() => void handleConfirmReportUpload()}
+              className="flex-1 py-2.5 bg-gradient-to-r from-green-500 to-teal-500 text-white text-sm font-semibold rounded-xl hover:opacity-90 transition-all cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2"
+            >
+              {reportUploading ? (
+                <>
+                  <i className="ri-loader-4-line animate-spin" />
+                  上传中…
+                </>
+              ) : (
+                '确认上传'
+              )}
+            </button>
+          </div>
+        }
+        destroyOnClose
+      >
+        <p className="text-sm text-gray-600 leading-relaxed mb-4">
+          确认上传后，将提交本小组以下数据，用于完成市场调研环节并解锁下一实训流程（需满足流程开始时间）：
+        </p>
+        <div className="mb-4">
+          <p className="text-sm font-medium text-gray-800 mb-2">线上问卷调查记录（至少选择 1 份）</p>
+          <Checkbox.Group
+            className="flex flex-col gap-2"
+            value={reportUploadSurveyIds}
+            onChange={(vals) => setReportUploadSurveyIds(vals as string[])}
+          >
+            {surveys.map((s) => (
+              <Checkbox key={s.id} value={s.id}>
+                <span className="text-sm text-gray-700">{s.title}</span>
+              </Checkbox>
+            ))}
+          </Checkbox.Group>
+        </div>
+        <ul className="text-sm text-gray-700 list-disc pl-5 space-y-1">
+          <li>用户画像（当前 {personas.length} 个，将全部上传）</li>
+          <li>调研报告（AI 分析结果）</li>
+        </ul>
+      </Modal>
+
       {/* Module Header */}
-      <div className="bg-gradient-to-br from-green-500 to-green-600 rounded-2xl shadow-xl p-8 text-white">
+      <div className="bg-gradient-to-br from-green-500 to-green-600 rounded-2xl shadow-xl px-8 py-4 text-white">
         <div className="flex items-start justify-between  ">
           <div className="flex items-center gap-4">
             <div className="w-16 h-16 bg-white/20 rounded-2xl flex items-center justify-center backdrop-blur-sm">
@@ -1144,17 +1365,19 @@ export default function MarketResearchModule({
       </div>
 
       {/* Data flow hint */}
-      <div className="flex items-center gap-2 text-xs text-gray-500 bg-gray-50 border border-gray-200 rounded-xl px-4 py-3">
+      {/* <div className="flex items-center gap-2 text-xs text-gray-500 bg-gray-50 border border-gray-200 rounded-xl px-4 py-3">
         <i className="ri-links-line text-green-400 text-base"></i>
         <span>数据流向：</span>
         <span className="px-2 py-0.5 bg-green-100 text-green-700 rounded-lg">调研计划</span>
+        <i className="ri-arrow-right-line"></i>
+        <span className="px-2 py-0.5 bg-green-100 text-green-700 rounded-lg">调研数据上传</span>
         <i className="ri-arrow-right-line"></i>
         <span className="px-2 py-0.5 bg-green-100 text-green-700 rounded-lg">AI生成问卷</span>
         <i className="ri-arrow-right-line"></i>
         <span className="px-2 py-0.5 bg-green-100 text-green-700 rounded-lg">数据分析图表</span>
         <i className="ri-arrow-right-line"></i>
         <span className="px-2 py-0.5 bg-green-100 text-green-700 rounded-lg">用户画像</span>
-      </div>
+      </div> */}
 
       {/* Tabs */}
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100">
@@ -1188,7 +1411,7 @@ export default function MarketResearchModule({
                   <Alert type="info" showIcon message="仅队长可编辑调研计划，当前为查看模式" />
                 )}
                 {hasConfirmedTeam && !stagePeriod && (
-                  <Alert type="warning" showIcon message="市场调研环节尚未配置开始与截止日期，请联系教师配置后再设置计划时间" />
+                  <Alert type="warning" showIcon message="市场调研环节尚未配置开始与结束时间，请联系教师配置" />
                 )}
                 {stagePeriod && (
                   <Alert
@@ -1202,9 +1425,9 @@ export default function MarketResearchModule({
                   <h3 className="text-base font-bold text-green-900 mb-3">调研计划制定指南</h3>
                   <ul className="text-sm text-green-700 space-y-2">
                     <li>• 明确调研目标：围绕核心创意，了解市场需求、竞争情况</li>
-                    <li>• 选择调研方法：线上问卷、访谈、行业数据查询等</li>
+                    <li>• 选择调研方法：访谈、竞品分析、行业报告等（线上问卷在后续步骤完成）</li>
                     <li>• 明确成员分工：可自定义分工项并指定负责成员</li>
-                    <li>• 设定时间节点：须在实训环节时间范围内</li>
+                    <li>• 计划时间以本实训环节的开始、结束日期为准</li>
                   </ul>
                 </div>
 
@@ -1222,7 +1445,7 @@ export default function MarketResearchModule({
                     />
                   </Form.Item>
 
-                  <Form.Item label="调研方法" required>
+                  <Form.Item label="调研数据上传" required>
                     <Checkbox.Group
                       value={plan.methods}
                       onChange={(vals) => setPlan({ ...plan, methods: vals as string[] })}
@@ -1289,31 +1512,6 @@ export default function MarketResearchModule({
                       ))}
                     </div>
                   </Form.Item>
-
-                  <Form.Item label="时间节点" required>
-                    <div className="grid md:grid-cols-2 gap-4">
-                      <div>
-                        <div className="text-xs text-gray-500 mb-1">开始时间</div>
-                        <DatePicker
-                          className="w-full"
-                          value={plan.startDate ? dayjs(plan.startDate) : null}
-                          onChange={(d) => setPlan({ ...plan, startDate: d ? d.format('YYYY-MM-DD') : '' })}
-                          disabledDate={stageRangeDisabled}
-                          disabled={!canEditPlan || !stagePeriod}
-                        />
-                      </div>
-                      <div>
-                        <div className="text-xs text-gray-500 mb-1">结束时间</div>
-                        <DatePicker
-                          className="w-full"
-                          value={plan.endDate ? dayjs(plan.endDate) : null}
-                          onChange={(d) => setPlan({ ...plan, endDate: d ? d.format('YYYY-MM-DD') : '' })}
-                          disabledDate={stageRangeDisabled}
-                          disabled={!canEditPlan || !stagePeriod}
-                        />
-                      </div>
-                    </div>
-                  </Form.Item>
                 </Form>
 
                 {canEditPlan && (
@@ -1322,6 +1520,7 @@ export default function MarketResearchModule({
                     block
                     size="large"
                     loading={saving}
+                    disabled={!stagePeriod}
                     onClick={() => void handleSavePlan()}
                     className="!bg-green-500 hover:!bg-green-600"
                   >
@@ -1332,26 +1531,49 @@ export default function MarketResearchModule({
             </Spin>
           )}
 
-          {/* ══ 调研方法 ══ */}
+          {/* ══ 调研数据上传 ══ */}
           {activeTab === 'methods' && (
             <div className="space-y-6">
               {!plan.savedAt ? (
-                <Alert type="warning" showIcon message="请队长先在「调研计划」中保存计划后再开展调研方法" />
+                <Alert type="warning" showIcon message="请队长先在「调研计划」中保存计划后再上传调研数据" />
               ) : (
                 <>
-              {!planMethodsForSubTabs.length && (
-                <Alert type="info" showIcon message="调研计划中未选择调研方法" />
+                  {!planUploadMethods.length && (
+                    <Alert type="info" showIcon message="调研计划中未选择调研方法" />
+                  )}
+                  {planUploadMethods.length > 0 && classId && (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {planUploadMethods.map((method) => {
+                        const guide = METHOD_FORMAT_GUIDES[method];
+                        return (
+                          <div
+                            key={method}
+                            className="bg-white rounded-xl border border-gray-200 p-5 flex flex-col min-h-[280px]"
+                          >
+                            <h3 className="text-base font-bold text-gray-900 mb-2">{method}</h3>
+                            {guide && (
+                              <p className="text-xs text-gray-500 mb-4 line-clamp-2">{guide.title}</p>
+                            )}
+                            <div className="mt-auto pt-2 border-t border-gray-100">
+                              <MarketResearchMethodUpload classId={classId} method={method} compact />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </>
               )}
-              {planMethodsForSubTabs.length > 0 && (
-                <Tabs
-                  activeKey={methodSubTab}
-                  onChange={setMethodSubTab}
-                  items={planMethodsForSubTabs.map((method) => ({
-                    key: method,
-                    label: method,
-                    children:
-                      method === '线上问卷' ? (
-                        <div className="space-y-8 pt-4">
+            </div>
+          )}
+
+          {/* ══ 线上问卷 ══ */}
+          {activeTab === 'survey' && (
+            <div className="space-y-8">
+              {!plan.savedAt ? (
+                <Alert type="warning" showIcon message="请队长先在「调研计划」中保存计划后再开展线上问卷" />
+              ) : (
+                <>
               <div className="flex items-center justify-between">
                 <h3 className="text-lg font-bold text-gray-900">问卷管理</h3>
                 <div className="flex gap-2">
@@ -1371,12 +1593,14 @@ export default function MarketResearchModule({
               </div>
 
               <Spin spinning={surveysLoading}>
-              <div className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {!surveysLoading && surveys.length === 0 && (
-                  <Alert type="info" showIcon message="暂无问卷，请使用 AI 生成或手动创建" />
+                  <div className="md:col-span-2">
+                    <Alert type="info" showIcon message="暂无问卷，请使用 AI 生成或手动创建" />
+                  </div>
                 )}
                 {surveys.map((survey) => (
-                  <div key={survey.id} className="bg-white rounded-xl p-6 border border-gray-200 hover:shadow-lg transition-shadow">
+                  <div key={survey.id} className="bg-white rounded-xl p-6 border border-gray-200 hover:shadow-lg transition-shadow flex flex-col">
                     <div className="flex items-center justify-between mb-4">
                       <div className="flex items-center gap-2 flex-wrap">
                         <h4 className="text-base font-bold text-gray-900">{survey.title}</h4>
@@ -1414,9 +1638,21 @@ export default function MarketResearchModule({
                           <span className="font-medium text-gray-900">0份</span>
                         )}
                       </div>
+                      {survey.publishedAtDisplay && (
+                        <div className="flex items-center justify-between text-sm">
+                          <span className="text-gray-600">发布时间</span>
+                          <span className="font-medium text-gray-900">{survey.publishedAtDisplay}</span>
+                        </div>
+                      )}
+                      {survey.closesAtDisplay && (
+                        <div className="flex items-center justify-between text-sm">
+                          <span className="text-gray-600">截止时间</span>
+                          <span className="font-medium text-gray-900">{survey.closesAtDisplay}</span>
+                        </div>
+                      )}
                     </div>
 
-                    <div className="flex flex-wrap gap-2">
+                    <div className="flex flex-wrap gap-2 mt-auto pt-2">
                       {survey.status === '草稿' && (
                         <>
                           <button
@@ -1453,6 +1689,12 @@ export default function MarketResearchModule({
                           >
                             编辑
                           </button>
+                          <button
+                            onClick={() => void handleDeleteSurvey(survey.id)}
+                            className="px-4 py-2 text-red-600 text-sm font-medium rounded-lg hover:bg-red-50 transition-colors whitespace-nowrap cursor-pointer"
+                          >
+                            删除
+                          </button>
                         </>
                       )}
                       {survey.status === '进行中' && (
@@ -1482,15 +1724,6 @@ export default function MarketResearchModule({
                 ))}
               </div>
               </Spin>
-                        </div>
-                      ) : classId ? (
-                        <div className="pt-4">
-                          <MarketResearchMethodUpload classId={classId} method={method} />
-                        </div>
-                      ) : null,
-                  }))}
-                />
-              )}
                 </>
               )}
             </div>
@@ -1501,7 +1734,7 @@ export default function MarketResearchModule({
             <div className="space-y-8">
               <div className="flex justify-end">
                 <button
-                  onClick={() => void handleAiAnalysis()}
+                  onClick={() => setSurveySelectMode('analysis')}
                   disabled={isAiAnalyzing}
                   className="px-6 py-3 bg-gradient-to-r from-green-500 to-teal-500 text-white text-sm font-medium rounded-xl hover:opacity-90 transition-all shadow-lg cursor-pointer disabled:opacity-60 flex items-center gap-2 whitespace-nowrap"
                 >
@@ -1520,8 +1753,13 @@ export default function MarketResearchModule({
                 content=""
               />
 
-              {analysisResult && (
-                <div className="bg-gradient-to-br from-green-50 to-teal-50 rounded-xl p-6 border-2 border-green-200">
+              {!analysisResult && !isAiAnalyzing && (
+                <p className="text-sm text-gray-500 text-center py-12">请点击「一键 AI 分析」生成调研数据分析报告</p>
+              )}
+
+              {analysisResult && !isAiAnalyzing && (
+                <>
+              <div className="bg-gradient-to-br from-green-50 to-teal-50 rounded-xl p-6 border-2 border-green-200">
                   <div className="flex items-start justify-between mb-4">
                     <div className="flex items-center gap-3">
                       <div className="w-16 h-16 rounded-full bg-gradient-to-br from-green-500 to-teal-500 flex items-center justify-center text-white text-2xl font-bold shadow-lg">
@@ -1532,7 +1770,7 @@ export default function MarketResearchModule({
                           <i className="ri-sparkling-fill text-green-600"></i>
                           AI智能分析报告
                         </h3>
-                        <p className="text-sm text-gray-600 mt-1">基于 {totalCollected} 份问卷数据生成</p>
+                        <p className="text-sm text-gray-600 mt-1">基于 {analysisResult.stats.totalCollected} 份问卷数据生成</p>
                       </div>
                     </div>
                     <button
@@ -1574,54 +1812,66 @@ export default function MarketResearchModule({
                     </div>
                   )}
                 </div>
-              )}
 
-              <div className="grid md:grid-cols-3 gap-6">
+              <div className="grid md:grid-cols-2 gap-6">
                 <div className="bg-gradient-to-br from-green-500 to-emerald-500 rounded-xl p-6 text-white">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-sm text-white/80">问卷回收</span>
                     <i className="ri-file-list-3-line text-2xl text-white/80"></i>
                   </div>
-                  <div className="text-3xl font-bold mb-1">{totalCollected}份</div>
-                  <div className="text-xs text-white/80">来自 {activeSurveyCount} 份进行中问卷</div>
+                  <div className="text-3xl font-bold mb-1">{analysisResult.stats.totalCollected}份</div>
+                  <div className="text-xs text-white/80">来自 {analysisResult.stats.activeSurveyCount} 份进行中问卷</div>
                 </div>
                 <div className="bg-gradient-to-br from-teal-500 to-cyan-500 rounded-xl p-6 text-white">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-sm text-white/80">有效样本</span>
                     <i className="ri-checkbox-circle-line text-2xl text-white/80"></i>
                   </div>
-                  <div className="text-3xl font-bold mb-1">{validSamplesDisplay}</div>
-                </div>
-                <div className="bg-gradient-to-br from-orange-500 to-amber-500 rounded-xl p-6 text-white">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-sm text-white/80">访谈记录</span>
-                    <i className="ri-user-voice-line text-2xl text-white/80"></i>
+                  <div className="text-3xl font-bold mb-1">
+                    {analysisResult.stats.validSamples != null ? `${analysisResult.stats.validSamples}份` : '—'}
                   </div>
-                  <div className="text-3xl font-bold mb-1">{interviewUploadCount}份</div>
-                  <div className="text-xs text-white/80">用户访谈上传</div>
                 </div>
               </div>
 
+              {!hasChartData ? (
+                <Alert
+                  type="info"
+                  showIcon
+                  message="暂无统计图表"
+                  description="当前所选问卷回收量较少，或题目中未包含可对应年龄、消费、满意度等维度的选择题统计；详细结论见上方 AI 分析报告。"
+                />
+              ) : (
+                <>
               <div className="grid md:grid-cols-2 gap-6">
+                {ageData.length > 0 && (
                 <div className="bg-white border border-gray-200 rounded-xl p-6">
                   <h3 className="text-base font-bold text-gray-900 mb-4">年龄分布</h3>
-                  {ageData.length ? <PieChart items={ageData} /> : <p className="text-sm text-gray-500">暂无数据</p>}
+                  <PieChart items={ageData} />
                 </div>
+                )}
+                {spendingData.length > 0 && (
                 <div className="bg-white border border-gray-200 rounded-xl p-6">
                   <h3 className="text-base font-bold text-gray-900 mb-4">月均消费分布</h3>
-                  {spendingData.length ? <PieChart items={spendingData} /> : <p className="text-sm text-gray-500">暂无数据</p>}
+                  <PieChart items={spendingData} />
                 </div>
+                )}
               </div>
 
+              {satisfactionData.length > 0 && (
               <div className="bg-white border border-gray-200 rounded-xl p-6">
                 <h3 className="text-base font-bold text-gray-900 mb-4">满意度分布</h3>
-                {satisfactionData.length ? <PieChart items={satisfactionData} /> : <p className="text-sm text-gray-500">暂无数据</p>}
+                <PieChart items={satisfactionData} />
               </div>
+              )}
 
+              {improvementData.length > 0 && (
               <div className="bg-white border border-gray-200 rounded-xl p-6">
                 <h3 className="text-base font-bold text-gray-900 mb-6">用户改进需求排行</h3>
-                {improvementData.length ? <BarChart items={improvementData} /> : <p className="text-sm text-gray-500">暂无数据</p>}
+                <BarChart items={improvementData} />
               </div>
+              )}
+                </>
+              )}
 
               <div className="bg-white border border-gray-200 rounded-xl p-6">
                 <h3 className="text-base font-bold text-gray-900 mb-4">核心发现</h3>
@@ -1640,9 +1890,31 @@ export default function MarketResearchModule({
                     ))}
                   </div>
                 ) : (
-                  <p className="text-sm text-gray-500">暂无数据，请先完成 AI 分析</p>
+                  <p className="text-sm text-gray-500">暂无数据</p>
                 )}
               </div>
+
+              {canEditPlan && (
+                <div className="flex flex-wrap items-center justify-end gap-3 pt-2">
+                  {teamReportUploaded ? (
+                    <span className="text-sm text-green-600 font-medium">
+                      <i className="ri-checkbox-circle-fill mr-1" />
+                      调研报告已上传
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={!analysisResult}
+                      onClick={() => void handleOpenReportUpload()}
+                      className="px-6 py-3 bg-gradient-to-r from-green-500 to-teal-500 text-white text-sm font-medium rounded-xl hover:opacity-90 transition-all shadow-lg cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      上传调研报告
+                    </button>
+                  )}
+                </div>
+              )}
+                </>
+              )}
             </div>
           )}
 
@@ -1733,7 +2005,7 @@ export default function MarketResearchModule({
 
               <div className="flex gap-4">
                 <button
-                  onClick={() => setShowAIGeneratePersona(true)}
+                  onClick={() => setSurveySelectMode('persona')}
                   className="flex-1 px-6 py-3 bg-gradient-to-r from-purple-600 to-blue-600 text-white text-sm font-medium rounded-xl hover:from-purple-700 hover:to-blue-700 transition-all shadow-lg cursor-pointer flex items-center justify-center gap-2 whitespace-nowrap"
                 >
                   <i className="ri-robot-line"></i>AI 生成画像
@@ -1757,17 +2029,13 @@ export default function MarketResearchModule({
           {/* ══ 人机对抗 ══ */}
           {activeTab === 'challenge' && (
             <div className="space-y-4">
-              <div className="flex justify-end">
-                <button
-                  type="button"
-                  onClick={openChallengeRecords}
-                  className="px-4 py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer"
-                >
-                  对抗记录
-                </button>
-              </div>
               {classId ? (
-                <ChallengeTab classId={classId} personas={personas} onSessionComplete={openChallengeRecords} />
+                <ChallengeTab
+                  classId={classId}
+                  personas={personas}
+                  onOpenRecords={openChallengeRecords}
+                  onMarketChallengeReportComplete={onMarketChallengeReportComplete}
+                />
               ) : null}
             </div>
           )}

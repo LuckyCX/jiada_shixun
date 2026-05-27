@@ -65,7 +65,7 @@ export default function VersionControl({
   return (
     <>
       {/* 版本控制工具栏 */}
-      <div className="bg-white border border-gray-200 rounded-xl p-4 flex items-center justify-between">
+      {/* <div className="bg-white border border-gray-200 rounded-xl p-4 flex items-center justify-between">
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 bg-gradient-to-br from-indigo-500 to-purple-500 rounded-lg flex items-center justify-center">
@@ -97,7 +97,7 @@ export default function VersionControl({
           <i className="ri-save-line"></i>
           保存当前版本
         </button>
-      </div>
+      </div> */}
 
       {/* 历史版本侧边抽屉 */}
       {isOpen && (

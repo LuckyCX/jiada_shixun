@@ -1,13 +1,21 @@
 import { getPortalToken, portalAuthenticatedFetch } from './authApi';
 
-export const MARKET_RESEARCH_METHODS = [
-  '线上问卷',
+/** 调研计划中可选的「调研数据上传」类方法（不含线上问卷） */
+export const MARKET_UPLOAD_METHODS = [
   '用户访谈',
   '竞品分析',
   '行业报告',
   '数据爬取',
   '实地观察',
 ] as const;
+
+export const MARKET_RESEARCH_METHODS = [...MARKET_UPLOAD_METHODS] as const;
+
+export function filterPlanUploadMethods(methods: string[]): string[] {
+  return methods.filter(
+    (m) => m !== '线上问卷' && (MARKET_UPLOAD_METHODS as readonly string[]).includes(m)
+  );
+}
 
 export const MARKET_PRESET_ROLES = [
   '问卷设计',
@@ -81,6 +89,10 @@ export type MarketSurvey = {
   publicSlug?: string;
   fromPlan?: boolean;
   createdAt: string;
+  publishedAt?: string | null;
+  publishedAtDisplay?: string;
+  closesAt?: string | null;
+  closesAtDisplay?: string;
 };
 
 export type SurveyPromptEcho = {
@@ -134,7 +146,12 @@ export async function listMarketSurveys(classId: string): Promise<MarketSurvey[]
 
 export async function createMarketSurvey(
   classId: string,
-  payload: { title: string; questions: Omit<MarketSurveyQuestion, 'id'>[]; source?: 'manual' | 'ai' }
+  payload: {
+    title: string;
+    questions: Omit<MarketSurveyQuestion, 'id'>[];
+    source?: 'manual' | 'ai';
+    closesAt: string;
+  }
 ): Promise<MarketSurvey> {
   return portalAuthenticatedFetch(
     'student',
@@ -149,7 +166,7 @@ export async function createMarketSurvey(
 export async function updateMarketSurvey(
   classId: string,
   surveyId: string,
-  payload: { title: string; questions: Omit<MarketSurveyQuestion, 'id'>[] }
+  payload: { title: string; questions: Omit<MarketSurveyQuestion, 'id'>[]; closesAt: string }
 ): Promise<MarketSurvey> {
   return portalAuthenticatedFetch(
     'student',
@@ -323,7 +340,7 @@ export const METHOD_FORMAT_GUIDES: Record<string, { title: string; bullets: stri
 
 export async function fetchPublicMarketSurvey(slug: string): Promise<{
   title: string;
-  status: 'published' | 'withdrawn';
+  status: 'published' | 'withdrawn' | 'expired';
   questions: MarketSurveyQuestion[];
 }> {
   const r = await fetch(`/api/public/market-surveys/${encodeURIComponent(slug)}`);
@@ -395,7 +412,6 @@ export type MarketAnalysisResult = {
   stats: {
     totalCollected: number;
     validSamples: number | null;
-    interviewUploadCount: number;
     activeSurveyCount: number;
   };
   charts: {
@@ -437,6 +453,35 @@ export type ChallengeSessionRecord = {
   completedAt: string;
   finalReport: ChallengeFinalReport | null;
 };
+
+export type MyLatestChallengeSession = {
+  id: string;
+  status: 'in_progress' | 'completed' | string;
+  projectInfo: Record<string, unknown>;
+  selectedAgents: string[];
+  rounds: Array<{
+    agentId?: string;
+    agentName?: string;
+    agentRole?: string;
+    question?: string;
+    briefFeedback?: string;
+    answer?: string;
+  }>;
+  finalReport: ChallengeFinalReport | null;
+  createdAt: string;
+  completedAt: string;
+};
+
+export async function fetchMyLatestChallengeSession(
+  classId: string
+): Promise<MyLatestChallengeSession | null> {
+  const data = await portalAuthenticatedFetch(
+    'student',
+    `/api/student/personal-classes/${encodeURIComponent(classId)}/market-research/challenge/sessions/me/latest`
+  );
+  const session = (data as { session?: MyLatestChallengeSession | null })?.session;
+  return session ?? null;
+}
 
 export function totalChallengeRounds(agentCount: number): number {
   if (agentCount <= 0) return 0;
@@ -587,11 +632,12 @@ async function readMarketResearchSse(
 
 export async function streamMarketAnalysis(
   classId: string,
+  surveyIds: string[],
   handlers: StreamHandlers & { onDone?: (result: MarketAnalysisResult) => void }
 ) {
   await readMarketResearchSse(
     `/api/student/personal-classes/${encodeURIComponent(classId)}/market-research/analysis/stream`,
-    {},
+    { surveyIds },
     {
       ...handlers,
       onDone: (data) => {
@@ -603,11 +649,12 @@ export async function streamMarketAnalysis(
 
 export async function streamGeneratePersonas(
   classId: string,
+  surveyIds: string[],
   handlers: StreamHandlers & { onDone?: (personas: MarketPersona[]) => void }
 ) {
   await readMarketResearchSse(
     `/api/student/personal-classes/${encodeURIComponent(classId)}/market-research/personas/ai-generate/stream`,
-    {},
+    { surveyIds },
     {
       ...handlers,
       onDone: (data) => {
@@ -666,4 +713,72 @@ export async function streamChallengeFinalReport(
       },
     }
   );
+}
+
+export type TeamMarketReportUploadStatus = {
+  uploaded: boolean;
+  uploadedAt: string;
+  uploadedBy: string;
+  payload: {
+    surveyIds: string[];
+    personaIds: string[];
+    analysisResult: MarketAnalysisResult;
+    analysisGeneratedAt?: string;
+  } | null;
+};
+
+export async function fetchTeamMarketReportUploadStatus(
+  classId: string
+): Promise<TeamMarketReportUploadStatus> {
+  return portalAuthenticatedFetch(
+    'student',
+    `/api/student/personal-classes/${encodeURIComponent(classId)}/market-research/report-upload`
+  ) as Promise<TeamMarketReportUploadStatus>;
+}
+
+export type UploadTeamMarketReportError = Error & {
+  missingMembers?: { id: string; name: string }[];
+};
+
+export type TeamChallengeParticipation = {
+  members: { id: string; name: string; hasChallengeSession: boolean }[];
+  missingMembers: { id: string; name: string }[];
+};
+
+export async function fetchTeamChallengeParticipation(
+  classId: string
+): Promise<TeamChallengeParticipation> {
+  return portalAuthenticatedFetch(
+    'student',
+    `/api/student/personal-classes/${encodeURIComponent(classId)}/market-research/challenge/participation`
+  ) as Promise<TeamChallengeParticipation>;
+}
+
+export async function uploadTeamMarketReport(
+  classId: string,
+  body: { surveyIds: string[] }
+): Promise<{ uploaded: boolean }> {
+  const token = getPortalToken('student');
+  const r = await fetch(
+    `/api/student/personal-classes/${encodeURIComponent(classId)}/market-research/report-upload`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(body),
+    }
+  );
+  const j = (await r.json().catch(() => ({ code: -1, message: '无效响应' }))) as {
+    code: number;
+    message?: string;
+    data?: { uploaded?: boolean; missingMembers?: { id: string; name: string }[] };
+  };
+  if (!r.ok || j.code !== 0) {
+    const err = new Error(typeof j.message === 'string' ? j.message : '上传失败') as UploadTeamMarketReportError;
+    if (j.data?.missingMembers?.length) err.missingMembers = j.data.missingMembers;
+    throw err;
+  }
+  return { uploaded: Boolean(j.data?.uploaded) };
 }

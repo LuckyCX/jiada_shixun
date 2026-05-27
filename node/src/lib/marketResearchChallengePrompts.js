@@ -53,10 +53,10 @@ export function resolveAgentMeta(agentId, personaMap) {
   return { id: agentId, name: '挑战者', role: '质疑者' };
 }
 
-export const CHALLENGE_QUESTION_SYSTEM_PROMPT = `你是创业实训「人机对抗」中的挑战角色。根据项目信息、数据分析报告与对话历史，以所选角色身份提出一个尖锐、具体的问题。
-仅输出一个 JSON 对象：
-{"question":"问题正文","briefFeedback":"可选，对用户上一轮回答的一句简短点评，无则空字符串"}
-不要 markdown。`;
+export const CHALLENGE_QUESTION_SYSTEM_PROMPT = `你是创业实训「人机对抗」中的挑战角色。根据项目信息与对话历史，以当前角色身份提出一个尖锐、具体的问题。
+要求：直接输出 JSON，不要推理过程、不要 markdown、不要多余说明；问题尽量简短（一两句话）；briefFeedback 最多一句或空字符串。
+仅输出：
+{"question":"问题正文","briefFeedback":""}`;
 
 export function buildChallengeQuestionUserPrompt({
   projectInfo,
@@ -89,15 +89,10 @@ ${hist || '（首轮，无历史）'}
 请以当前角色输出本轮问题 JSON。`;
 }
 
-export const CHALLENGE_FINAL_REPORT_SYSTEM_PROMPT = `你是创业实训人机对抗裁判。根据完整项目信息、数据分析、各轮问答，输出最终评估报告。
-仅输出 JSON：
-{
-  "totalScore": 0-100 整数,
-  "strengths": ["字符串"],
-  "weaknesses": ["字符串"],
-  "suggestions": ["字符串"]
-}
-不要 markdown。`;
+export const CHALLENGE_FINAL_REPORT_SYSTEM_PROMPT = `你是创业实训人机对抗裁判。根据项目信息与各轮问答，输出最终评估。
+要求：直接输出 JSON，不要推理过程、不要 markdown；每项列表 2～4 条简短要点即可。
+仅输出：
+{"totalScore":0-100整数,"strengths":[],"weaknesses":[],"suggestions":[]}`;
 
 export function buildChallengeFinalUserPrompt({ projectInfo, analysisSummary, rounds }) {
   const transcript = (rounds || [])
@@ -119,14 +114,25 @@ ${transcript}
 }
 
 export function normalizeChallengeQuestion(raw, fallbackText) {
-  if (raw && typeof raw === 'object' && raw.question) {
-    return {
-      question: String(raw.question).trim(),
-      briefFeedback: String(raw.briefFeedback || '').trim(),
-    };
+  if (raw && typeof raw === 'object') {
+    const q = String(raw.question || raw.问题 || '').trim();
+    if (q) {
+      return {
+        question: q,
+        briefFeedback: String(raw.briefFeedback || raw.feedback || '').trim(),
+      };
+    }
   }
   const t = String(fallbackText || '').trim();
-  return { question: t || '请进一步说明你的方案如何验证市场需求？', briefFeedback: '' };
+  const fromText = t.match(/"question"\s*:\s*"([^"]+)"/);
+  if (fromText?.[1]) {
+    return { question: fromText[1].trim(), briefFeedback: '' };
+  }
+  const plain = t.replace(/```[\s\S]*?```/g, '').trim();
+  if (plain.length > 10 && !plain.startsWith('{')) {
+    return { question: plain.slice(0, 2000), briefFeedback: '' };
+  }
+  return { question: '请进一步说明你的方案如何验证市场需求？', briefFeedback: '' };
 }
 
 export function normalizeChallengeFinalReport(raw) {

@@ -14,9 +14,14 @@ function bad(req, res, status, code, message) {
   return res.status(status).json({ code, message, data: null, traceId: req.traceId });
 }
 
+function isSurveyClosed(row) {
+  if (!row?.closes_at) return false;
+  return new Date(row.closes_at).getTime() <= Date.now();
+}
+
 async function loadPublishedSurvey(pool, slug) {
   const { rows } = await pool.query(
-    `SELECT id, title, status, collected_count
+    `SELECT id, title, status, collected_count, closes_at
      FROM teacher_personal_class_team_surveys
      WHERE public_slug = $1`,
     [slug]
@@ -61,6 +66,9 @@ router.get('/public/market-surveys/:slug', async (req, res) => {
     if (survey.status !== 'published') {
       return bad(req, res, 404, 40404, '问卷未发布');
     }
+    if (isSurveyClosed(survey)) {
+      return ok(req, res, { title: survey.title, status: 'expired', questions: [] });
+    }
     const questions = await loadSurveyQuestions(pool, survey.id);
     return ok(req, res, {
       title: survey.title,
@@ -83,6 +91,9 @@ router.post('/public/market-surveys/:slug/responses', async (req, res) => {
     if (!survey) return bad(req, res, 404, 40403, '问卷不存在');
     if (survey.status !== 'published') {
       return bad(req, res, 400, 40005, '问卷已暂停或未发布');
+    }
+    if (isSurveyClosed(survey)) {
+      return bad(req, res, 400, 40006, '问卷已截止，不再接受提交');
     }
     const questions = await loadSurveyQuestions(client, survey.id);
     const v = validateAnswers(questions, req.body?.answers);

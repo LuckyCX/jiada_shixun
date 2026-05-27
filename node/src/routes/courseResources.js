@@ -1104,4 +1104,31 @@ router.post('/student/course-resources/knowledge-points/:knowledgeId/quiz-attemp
   }
 });
 
+// 批量查询学生已通过的知识点（用于课程目录知识点“已检测”状态）
+router.post('/student/course-resources/knowledge-points/passed-ids', requireAuth(), requireStudent(), async (req, res) => {
+  try {
+    const uid = userIdFromReq(req);
+    if (!uid) return bad(req, res, 401, 40101, '未登录');
+    const ids = Array.isArray(req.body?.knowledgePointIds)
+      ? req.body.knowledgePointIds.map(parseId).filter(Boolean)
+      : [];
+    if (!ids.length) return ok(req, res, { passedKnowledgePointIds: [] });
+
+    const pool = getPool();
+    const { rows } = await pool.query(
+      `SELECT DISTINCT q.knowledge_point_id AS "knowledgePointId"
+       FROM quiz_attempts a
+       JOIN quizzes q ON q.id = a.quiz_id
+       WHERE a.user_id = $1
+         AND a.passed = true
+         AND q.knowledge_point_id = ANY($2::bigint[])`,
+      [uid, ids]
+    );
+    return ok(req, res, { passedKnowledgePointIds: rows.map((r) => String(r.knowledgePointId)) });
+  } catch (e) {
+    logError(`POST student passed knowledge ids traceId=${req.traceId}`, e);
+    return bad(req, res, 500, 50000, e.message);
+  }
+});
+
 export default router;

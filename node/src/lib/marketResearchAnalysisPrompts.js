@@ -9,7 +9,6 @@ const ANALYSIS_JSON_SCHEMA = `
   "stats": {
     "totalCollected": 整数,
     "validSamples": 整数或 null,
-    "interviewUploadCount": 整数,
     "activeSurveyCount": 整数
   },
   "charts": {
@@ -21,31 +20,55 @@ const ANALYSIS_JSON_SCHEMA = `
   "keyFindings": [{"title":"", "desc":""}]
 }
 规则：
-- stats.totalCollected、stats.interviewUploadCount、stats.activeSurveyCount 必须与材料中给出的数字一致，不得编造。
-- 若问卷或文档不足以支撑某类图表，对应数组必须为 []，并在 conclusions 中说明数据不足。
+- stats.totalCollected、stats.activeSurveyCount 必须与材料中给出的数字一致，不得编造。
+- 若问卷数据不足以支撑某类图表，对应数组必须为 []，并在 conclusions 中说明数据不足。
 - charts 各 item 的 value 为计数或百分比权重（improvementRanking 为 0-100），不得虚构样本。
 - validSamples 仅在材料可推断时填写，否则为 null。`;
 
-export const MARKET_ANALYSIS_SYSTEM_PROMPT = `你是创业实训课程的市场调研数据分析助教。根据小组提供的问卷统计与方法上传文档，输出结构化分析结论。
+export const MARKET_ANALYSIS_SYSTEM_PROMPT = `你是创业实训课程的市场调研数据分析助教。仅根据小组线上问卷的题目与回收统计，输出结构化分析结论。
 ${ANALYSIS_JSON_SCHEMA}`;
 
 export function buildMarketAnalysisUserPrompt(contextText, hardStats) {
-  return `请基于以下调研材料进行分析。
+  return `请基于以下问卷材料进行分析。
 
 【系统统计（必须使用）】
 问卷回收总量：${hardStats.totalCollected}
 进行中问卷数：${hardStats.activeSurveyCount}
-用户访谈上传文件数：${hardStats.interviewUploadCount}
 
 ${contextText}
 
 请输出 JSON。`;
 }
 
+function unwrapAnalysisPayload(raw) {
+  if (!raw || typeof raw !== 'object') return raw;
+  if (raw.score != null || raw.Score != null) return raw;
+  if (raw.result && typeof raw.result === 'object') return raw.result;
+  if (raw.data && typeof raw.data === 'object') return raw.data;
+  return raw;
+}
+
+function parseScoreValue(raw) {
+  const payload = unwrapAnalysisPayload(raw);
+  if (!payload || typeof payload !== 'object') return NaN;
+  let scoreRaw = payload.score ?? payload.Score ?? payload.评分;
+  if (scoreRaw == null) return NaN;
+  if (typeof scoreRaw === 'string') {
+    const m = scoreRaw.match(/\d{1,3}/);
+    scoreRaw = m ? m[0] : scoreRaw;
+  }
+  const score = Number(scoreRaw);
+  if (!Number.isFinite(score)) return NaN;
+  return Math.min(100, Math.max(0, Math.round(score)));
+}
+
 export function normalizeAnalysisResult(raw, hardStats) {
-  if (!raw || typeof raw !== 'object') return { error: 'AI 返回格式无效' };
-  const score = Number(raw.score);
-  if (!Number.isFinite(score) || score < 0 || score > 100) return { error: 'AI 未返回有效 score' };
+  const payload = unwrapAnalysisPayload(raw);
+  if (!payload || typeof payload !== 'object') return { error: 'AI 返回格式无效' };
+  const score = parseScoreValue(payload);
+  if (!Number.isFinite(score)) {
+    return { error: 'AI 未返回有效 score' };
+  }
   const pickStrings = (arr) =>
     Array.isArray(arr) ? arr.map((s) => String(s).trim()).filter(Boolean) : [];
   const pickChart = (arr) => {
@@ -60,8 +83,8 @@ export function normalizeAnalysisResult(raw, hardStats) {
       })
       .filter(Boolean);
   };
-  const keyFindings = Array.isArray(raw.keyFindings)
-    ? raw.keyFindings
+  const keyFindings = Array.isArray(payload.keyFindings)
+    ? payload.keyFindings
         .map((k) => {
           if (!k || typeof k !== 'object') return null;
           const title = String(k.title || '').trim();
@@ -71,7 +94,7 @@ export function normalizeAnalysisResult(raw, hardStats) {
         })
         .filter(Boolean)
     : [];
-  const statsIn = raw.stats && typeof raw.stats === 'object' ? raw.stats : {};
+  const statsIn = payload.stats && typeof payload.stats === 'object' ? payload.stats : {};
   const validRaw = statsIn.validSamples;
   const validSamples =
     validRaw == null || validRaw === ''
@@ -82,22 +105,21 @@ export function normalizeAnalysisResult(raw, hardStats) {
 
   return {
     result: {
-      score: Math.round(score),
-      conclusions: pickStrings(raw.conclusions),
-      opportunities: pickStrings(raw.opportunities),
-      risks: pickStrings(raw.risks),
-      suggestions: pickStrings(raw.suggestions),
+      score,
+      conclusions: pickStrings(payload.conclusions),
+      opportunities: pickStrings(payload.opportunities),
+      risks: pickStrings(payload.risks),
+      suggestions: pickStrings(payload.suggestions),
       stats: {
         totalCollected: hardStats.totalCollected,
         validSamples,
-        interviewUploadCount: hardStats.interviewUploadCount,
         activeSurveyCount: hardStats.activeSurveyCount,
       },
       charts: {
-        ageDistribution: pickChart(raw.charts?.ageDistribution),
-        spendingDistribution: pickChart(raw.charts?.spendingDistribution),
-        satisfactionDistribution: pickChart(raw.charts?.satisfactionDistribution),
-        improvementRanking: pickChart(raw.charts?.improvementRanking),
+        ageDistribution: pickChart(payload.charts?.ageDistribution),
+        spendingDistribution: pickChart(payload.charts?.spendingDistribution),
+        satisfactionDistribution: pickChart(payload.charts?.satisfactionDistribution),
+        improvementRanking: pickChart(payload.charts?.improvementRanking),
       },
       keyFindings,
     },

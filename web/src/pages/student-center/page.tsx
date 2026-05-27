@@ -6,7 +6,16 @@ import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useSiteBrand } from '../../lib/publicSite';
 import LearningDetail, { type LearningDetailResource } from '../knowledge-system/components/LearningDetail';
 import QuizModal, { type QuizConfig } from './components/QuizModal';
-import { fetchStudentKnowledgeQuiz, submitStudentKnowledgeQuizAttempt } from '../../lib/courseResourceApi';
+import {
+  fetchStudentKnowledgeQuiz,
+  submitStudentKnowledgeQuizAttempt,
+  fetchStudentCourseResources,
+  fetchStudentPassedKnowledgePointIds,
+} from '../../lib/courseResourceApi';
+import {
+  flattenPublishedCourseLeaves,
+  TRAINING_MODULE_CATALOG_KEYS,
+} from '../../lib/studentCourseCatalog';
 import {
   fetchStudentNotifications,
   markStudentNotificationRead,
@@ -16,6 +25,11 @@ import StudentClassSwitcher from './components/StudentClassSwitcher';
 import TeamFormationModule from './components/TeamFormationModule';
 import IdeationModule, { type IdeationLearningResource, type IdeationModuleTab } from './components/IdeationModule';
 import MarketResearchModule from './components/MarketResearchModule';
+import UnlockTrainingStageModal from './components/UnlockTrainingStageModal';
+import {
+  fetchMyLatestChallengeSession,
+  fetchTeamMarketReportUploadStatus,
+} from '../../lib/studentMarketResearchApi';
 import ProductDesignModule from './components/ProductDesignModule';
 import BusinessModelModule from './components/BusinessModelModule';
 import RoleSimulationModule from './components/RoleSimulationModule';
@@ -38,6 +52,7 @@ import {
   fetchStudentTodoTasks,
   TRAINING_ID_TO_TAB,
   type StudentTodoTask,
+  type TaskResourceNode,
 } from '../../lib/personalClassTaskApi';
 import { fetchStudentIdeationProjectTopic, fetchStudentIdeationTeamPrerequisites } from '../../lib/studentIdeationApi';
 
@@ -46,7 +61,7 @@ const TRAINING_MODULE_ORDER = ['team', 'ideation', 'market', 'product', 'busines
 const MODULE_COMPLETE_THRESHOLD: Record<string, number> = {
   team: 4,
   ideation: 6,
-  market: 8,
+  market: 6,
   product: 7,
   business: 9,
   simulation: 4,
@@ -224,6 +239,9 @@ export default function StudentCenterPage() {
     simulation: 0,
     plan: 0,
   });
+  const handleMarketTabProgress = useCallback((done: number) => {
+    setModuleProgressState((s) => (s.market === done ? s : { ...s, market: done }));
+  }, []);
   const [teamFormationComplete, setTeamFormationComplete] = useState(false);
   const [notificationFilter, setNotificationFilter] = useState<'all' | 'guidance' | 'reminder' | 'evaluation'>('all');
   const [notificationReadFilter, setNotificationReadFilter] = useState<'all' | 'unread' | 'read'>('all');
@@ -242,6 +260,12 @@ export default function StudentCenterPage() {
   const [resourceProgressOverrides, setResourceProgressOverrides] = useState<Record<string, ResourceProgress>>({});
   const [overviewMyTeam, setOverviewMyTeam] = useState<GroupingTeam | null>(null);
   const [ideationTopicApproved, setIdeationTopicApproved] = useState(false);
+  const [studentMarketChallengeDone, setStudentMarketChallengeDone] = useState(false);
+  const [teamMarketReportUploaded, setTeamMarketReportUploaded] = useState(false);
+  const [unlockStageModalModuleId, setUnlockStageModalModuleId] = useState<string | null>(null);
+  const [catalogResourceNodesByModule, setCatalogResourceNodesByModule] = useState<
+    Record<string, TaskResourceNode[]>
+  >({});
   const [overviewPanelTab, setOverviewPanelTab] = useState<'notifications' | 'tasks'>('notifications');
   const [overviewNotificationPage, setOverviewNotificationPage] = useState(1);
   const [overviewTaskPage, setOverviewTaskPage] = useState(1);
@@ -316,6 +340,101 @@ export default function StudentCenterPage() {
       cancelled = true;
     };
   }, [selectedClassId]);
+
+  useEffect(() => {
+    if (!selectedClassId || !teamFormationComplete) {
+      setStudentMarketChallengeDone(false);
+      return;
+    }
+    let cancelled = false;
+    void fetchMyLatestChallengeSession(selectedClassId)
+      .then((session) => {
+        if (cancelled) return;
+        setStudentMarketChallengeDone(
+          Boolean(session?.status === 'completed' && session.finalReport)
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setStudentMarketChallengeDone(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedClassId, teamFormationComplete]);
+
+  const refreshTeamMarketReportUploaded = useCallback(() => {
+    if (!selectedClassId || !teamFormationComplete) {
+      setTeamMarketReportUploaded(false);
+      return;
+    }
+    void fetchTeamMarketReportUploadStatus(selectedClassId)
+      .then((st) => setTeamMarketReportUploaded(Boolean(st.uploaded)))
+      .catch(() => setTeamMarketReportUploaded(false));
+  }, [selectedClassId, teamFormationComplete]);
+
+  useEffect(() => {
+    refreshTeamMarketReportUploaded();
+  }, [refreshTeamMarketReportUploaded]);
+
+  useEffect(() => {
+    if (!selectedClassId) {
+      setCatalogResourceNodesByModule({});
+      return;
+    }
+    let cancelled = false;
+    const moduleLabels: Record<string, string> = {
+      ideation: '创新思维与创意生成',
+      market: '市场调研与用户画像',
+      product: '产品设计与迭代',
+      business: '商业模式设计',
+      simulation: 'AI仿真模拟',
+      plan: '商业计划书要点',
+    };
+    void Promise.all(
+      TRAINING_MODULE_CATALOG_KEYS.map(async (key) => {
+        try {
+          const { nodes } = await fetchStudentCourseResources(key);
+          return [key, flattenPublishedCourseLeaves(nodes, key, moduleLabels[key] || key)] as const;
+        } catch {
+          return [key, [] as TaskResourceNode[]] as const;
+        }
+      })
+    ).then((entries) => {
+      if (cancelled) return;
+      setCatalogResourceNodesByModule(Object.fromEntries(entries));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedClassId]);
+
+  // 课程目录的“已检测”状态：从 quiz_attempts(passed) 补齐 completedKnowledgeIds（避免刷新后丢失）
+  useEffect(() => {
+    if (!selectedClassId) return;
+    const kpIds = [
+      ...new Set(
+        Object.values(catalogResourceNodesByModule)
+          .flatMap((nodes) => nodes)
+          .flatMap((n) => (n.knowledgePoints || []).map((k) => String(k.id)))
+          .filter(Boolean)
+      ),
+    ];
+    if (!kpIds.length) return;
+    let cancelled = false;
+    void fetchStudentPassedKnowledgePointIds(kpIds)
+      .then((passedIds) => {
+        if (cancelled || !passedIds.length) return;
+        setCompletedKnowledgeIds((prev) => {
+          const next = new Set(prev);
+          passedIds.forEach((id) => next.add(String(id)));
+          return next;
+        });
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedClassId, catalogResourceNodesByModule]);
 
   useEffect(() => {
     if (!selectedClassId) {
@@ -393,6 +512,7 @@ export default function StudentCenterPage() {
   const isModuleCompletedByProgress = (moduleId: string) => {
     if (moduleId === 'team') return teamFormationComplete;
     if (moduleId === 'ideation') return ideationTopicApproved || (moduleProgressState.ideation || 0) >= (MODULE_COMPLETE_THRESHOLD.ideation ?? 99);
+    if (moduleId === 'market') return teamMarketReportUploaded;
     const val = moduleProgressState[moduleId] || 0;
     return val >= (MODULE_COMPLETE_THRESHOLD[moduleId] ?? 99);
   };
@@ -514,57 +634,70 @@ export default function StudentCenterPage() {
   const knowledgePoints = (() => {
     const byId = new Map<string, KnowledgeCardData>();
 
+    const ingestNode = (
+      node: TaskResourceNode,
+      moduleId: string,
+      taskModuleLabel: string
+    ) => {
+      node.knowledgePoints.forEach((point) => {
+        const completed = completedKnowledgeIds.has(point.id);
+        const locked = getSidebarModuleUi(moduleId).locked;
+        const existing = byId.get(point.id);
+        const resources = node.resources.map((resource) => {
+          const meta = resource as typeof resource & Partial<LearningDetailResource>;
+          return {
+            id: resource.id,
+            nodeId: resource.nodeId,
+            title: resource.name,
+            type: resource.type,
+            previewType: meta.previewType,
+            previewStatus: meta.previewStatus,
+            contentHash: meta.contentHash,
+            mimeType: resource.mimeType,
+            size: resource.size,
+            canPreview: resource.canPreview,
+            progress: mergeResourceProgress(meta.progress, resourceProgressOverrides[resource.id]),
+          };
+        });
+        if (existing) {
+          if (!existing.nodeIds.includes(node.id)) existing.nodeIds.push(node.id);
+          resources.forEach((resource) => {
+            if (!existing.resources.some((item) => item.id === resource.id)) {
+              existing.resources.push(resource);
+            }
+          });
+          if (!resources.length && !existing.resources.some((item) => item.id === `node-${node.id}`)) {
+            existing.resources.push({ id: `node-${node.id}`, nodeId: node.id, title: node.title, type: 'case', mimeType: '', size: '', canPreview: false });
+          }
+          return;
+        }
+        byId.set(point.id, {
+          id: point.id,
+          name: point.title,
+          module: moduleId,
+          moduleName: node.moduleName || taskModuleLabel,
+          description: point.description,
+          status: completed ? 'completed' : locked ? 'locked' : 'learning',
+          progress: completed ? 100 : calculateKnowledgeResourceProgress(resources),
+          abilityPoints: [],
+          resources: resources.length ? resources : [{ id: `node-${node.id}`, nodeId: node.id, title: node.title, type: 'case', mimeType: '', size: '', canPreview: false }],
+          nodeIds: [node.id],
+          quizId: point.id,
+          sortOrder: point.sortOrder,
+        });
+      });
+    };
+
     studentTodoTasks.forEach((task) => {
       (task.resourceNodes || []).forEach((node) => {
         const moduleId = node.moduleKey || task.moduleId || '';
-        node.knowledgePoints.forEach((point) => {
-          const completed = completedKnowledgeIds.has(point.id);
-          const locked = getSidebarModuleUi(moduleId).locked;
-          const existing = byId.get(point.id);
-          const resources = node.resources.map((resource) => {
-            const meta = resource as typeof resource & Partial<LearningDetailResource>;
-            return {
-              id: resource.id,
-              nodeId: resource.nodeId,
-              title: resource.name,
-              type: resource.type,
-              previewType: meta.previewType,
-              previewStatus: meta.previewStatus,
-              contentHash: meta.contentHash,
-              mimeType: resource.mimeType,
-              size: resource.size,
-              canPreview: resource.canPreview,
-              progress: mergeResourceProgress(meta.progress, resourceProgressOverrides[resource.id]),
-            };
-          });
-          if (existing) {
-            if (!existing.nodeIds.includes(node.id)) existing.nodeIds.push(node.id);
-            resources.forEach((resource) => {
-              if (!existing.resources.some((item) => item.id === resource.id)) {
-                existing.resources.push(resource);
-              }
-            });
-            if (!resources.length && !existing.resources.some((item) => item.id === `node-${node.id}`)) {
-              existing.resources.push({ id: `node-${node.id}`, nodeId: node.id, title: node.title, type: 'case', mimeType: '', size: '', canPreview: false });
-            }
-            return;
-          }
-          byId.set(point.id, {
-            id: point.id,
-            name: point.title,
-            module: moduleId,
-            moduleName: node.moduleName || task.module,
-            description: point.description,
-            status: completed ? 'completed' : locked ? 'locked' : 'learning',
-            progress: completed ? 100 : calculateKnowledgeResourceProgress(resources),
-            abilityPoints: [],
-            resources: resources.length ? resources : [{ id: `node-${node.id}`, nodeId: node.id, title: node.title, type: 'case', mimeType: '', size: '', canPreview: false }],
-            nodeIds: [node.id],
-            quizId: point.id,
-            sortOrder: point.sortOrder,
-          });
-        });
+        ingestNode(node, moduleId, task.module);
       });
+    });
+
+    Object.entries(catalogResourceNodesByModule).forEach(([moduleId, nodes]) => {
+      const label = moduleProgress.find((m) => m.moduleId === moduleId)?.moduleName || moduleId;
+      nodes.forEach((node) => ingestNode(node, moduleId, label));
     });
 
     return Array.from(byId.values()).map((item) => ({
@@ -825,6 +958,21 @@ export default function StudentCenterPage() {
       });
     });
 
+    // 补充全局课程目录中未被班级待办覆盖的节点
+    (catalogResourceNodesByModule[selectedModule] || []).forEach((node) => {
+      if (leafIds.has(node.id)) return; // 已由待办任务添加，跳过
+      leafIds.add(node.id);
+      [...(node.ancestors || []), node].forEach((item) => {
+        ensureNode({
+          id: item.id,
+          parentId: item.parentId,
+          title: item.title,
+          level: item.level,
+          sortOrder: item.sortOrder,
+        });
+      });
+    });
+
     const roots: ChapterTreeNode[] = [];
     nodeMap.forEach((node) => {
       if (node.parentId && nodeMap.has(node.parentId)) {
@@ -875,28 +1023,33 @@ export default function StudentCenterPage() {
     : [];
   const selectedChapterResources = (() => {
     const byId = new Map<string, LearningDetailResource>();
+    const ingestNode = (node: TaskResourceNode) => {
+      if (!selectedChapterLeafIds.has(node.id)) return;
+      node.resources.forEach((resource) => {
+        const meta = resource as typeof resource & Partial<LearningDetailResource>;
+        byId.set(resource.id, {
+          id: resource.id,
+          nodeId: resource.nodeId,
+          title: resource.name,
+          type: resource.type,
+          previewType: meta.previewType,
+          previewStatus: meta.previewStatus,
+          contentHash: meta.contentHash,
+          mimeType: resource.mimeType,
+          size: resource.size,
+          canPreview: resource.canPreview,
+          progress: mergeResourceProgress(meta.progress, resourceProgressOverrides[resource.id]),
+        });
+      });
+    };
     courseTaskSource.forEach((task) => {
       (task.resourceNodes || []).forEach((node) => {
         if (!shouldShowCourseNode(node)) return;
-        if (!selectedChapterLeafIds.has(node.id)) return;
-        node.resources.forEach((resource) => {
-          const meta = resource as typeof resource & Partial<LearningDetailResource>;
-          byId.set(resource.id, {
-            id: resource.id,
-            nodeId: resource.nodeId,
-            title: resource.name,
-            type: resource.type,
-            previewType: meta.previewType,
-            previewStatus: meta.previewStatus,
-            contentHash: meta.contentHash,
-            mimeType: resource.mimeType,
-            size: resource.size,
-            canPreview: resource.canPreview,
-            progress: mergeResourceProgress(meta.progress, resourceProgressOverrides[resource.id]),
-          });
-        });
+        ingestNode(node);
       });
     });
+    // 补充全局课程目录资源
+    (catalogResourceNodesByModule[selectedModule] || []).forEach(ingestNode);
     return Array.from(byId.values());
   })();
 
@@ -1178,10 +1331,23 @@ export default function StudentCenterPage() {
         !isTaskKnowledgeCompleted(task)
     );
 
+  /** 是否存在来自全局课程目录的未完成知识点（不依赖班级待办任务） */
+  const hasCatalogKnowledgePending = (moduleId: string): boolean => {
+    const nodes = catalogResourceNodesByModule[moduleId] || [];
+    if (!nodes.length) return false;
+    const kpIds = nodes.flatMap((n) => n.knowledgePoints.map((k) => k.id));
+    return kpIds.length > 0 && !kpIds.every((id) => completedKnowledgeIds.has(id));
+  };
+
   const activeTrainingModuleId = activeTab.startsWith('module-') ? TAB_TO_MODULE_ID[activeTab] : undefined;
   const activeModulePrerequisiteTask = activeTrainingModuleId
     ? getModulePrerequisiteTask(activeTrainingModuleId)
     : undefined;
+  /** 当班级待办无前置任务、但课程目录有未完成知识点时也应拦截 */
+  const activeModuleCatalogPending =
+    !activeModulePrerequisiteTask &&
+    Boolean(activeTrainingModuleId && hasCatalogKnowledgePending(activeTrainingModuleId));
+  const shouldBlockModule = Boolean(activeModulePrerequisiteTask) || activeModuleCatalogPending;
 
   const completedStagesCount = useMemo(() => {
     let n = 0;
@@ -1193,7 +1359,7 @@ export default function StudentCenterPage() {
       }
     }
     return n;
-  }, [ideationTopicApproved, teamFormationComplete, moduleProgressState]);
+  }, [ideationTopicApproved, teamFormationComplete, moduleProgressState, teamMarketReportUploaded]);
 
   const overallProgressPercent = Math.round((completedStagesCount / TRAINING_MODULE_ORDER.length) * 100);
 
@@ -1306,17 +1472,11 @@ export default function StudentCenterPage() {
     }
     const ui = getSidebarModuleUi(moduleId);
     if (ui.locked) {
-      notification.warning({
-        message: '模块未解锁',
-        description: !teamFormationComplete
-          ? '请先完成组队与团队管理（教师确认组队后解锁下一环节）'
-          : '请先完成上一实训模块（进度需达到 100%）',
-        placement: 'topRight',
-      });
+      setUnlockStageModalModuleId(moduleId);
       return;
     }
     const prerequisiteTask = getModulePrerequisiteTask(moduleId);
-    if (prerequisiteTask) {
+    if (prerequisiteTask || hasCatalogKnowledgePending(moduleId)) {
       setActiveTab(moduleKey);
       return;
     }
@@ -1324,6 +1484,11 @@ export default function StudentCenterPage() {
     if (moduleKey === 'module-team') {
       refreshTeamFormationComplete();
     }
+  };
+
+  const getStartDateLabelForUnlock = (moduleId: string) => {
+    const d = getStageDateSetting(moduleId)?.startDate;
+    return d || '待教师配置';
   };
 
   const completeActiveTrainingTask = (moduleId: string) => {
@@ -1437,6 +1602,13 @@ export default function StudentCenterPage() {
               })) ?? []
             }
             hasConfirmedTeam={Boolean(overviewMyTeam)}
+            studentMarketChallengeDone={studentMarketChallengeDone}
+            onMarketChallengeReportComplete={() => setStudentMarketChallengeDone(true)}
+            onMarketTabProgress={handleMarketTabProgress}
+            onTeamMarketReportUploaded={() => {
+              setTeamMarketReportUploaded(true);
+              refreshTeamMarketReportUploaded();
+            }}
             onTaskComplete={() => completeActiveTrainingTask('market')}
           />
         );
@@ -1509,7 +1681,6 @@ export default function StudentCenterPage() {
                 <button
                   key={item.key}
                   type="button"
-                  disabled={ui.locked}
                   onClick={() => handleModuleClick(item.key)}
                   title={
                     sidebarCollapsed
@@ -1520,7 +1691,7 @@ export default function StudentCenterPage() {
                           : '请先完成上一模块'
                         : item.label
                   }
-                  className={`w-full px-3 py-2.5 rounded-xl transition-all ${ui.locked ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'} ${isActive ? 'bg-gradient-to-r from-teal-500 to-cyan-600 text-white shadow-sm' : ui.locked ? 'text-gray-400' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'} ${sidebarCollapsed ? 'flex items-center justify-center' : 'flex flex-col items-stretch'}`}
+                  className={`w-full px-3 py-2.5 rounded-xl transition-all cursor-pointer ${ui.locked ? 'opacity-60' : ''} ${isActive ? 'bg-gradient-to-r from-teal-500 to-cyan-600 text-white shadow-sm' : ui.locked ? 'text-gray-400 hover:bg-gray-50' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'} ${sidebarCollapsed ? 'flex items-center justify-center' : 'flex flex-col items-stretch'}`}
                 >
                   {sidebarCollapsed ? (
                     <div className="w-5 h-5 flex items-center justify-center flex-shrink-0">
@@ -1697,9 +1868,8 @@ export default function StudentCenterPage() {
                         )}
                         <button
                           type="button"
-                          disabled={ui.locked}
                           onClick={() => handleModuleClick(tabMap[mod.moduleId])}
-                          className={`relative z-10 w-10 h-10 rounded-full flex items-center justify-center mb-2 transition-all shadow-sm ${ui.locked ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'} ${isCompleted ? 'bg-teal-500 text-white' : isCurrent ? 'bg-white border-2 border-teal-500 text-teal-600 ring-4 ring-teal-100' : 'bg-white border-2 border-gray-200 text-gray-400'}`}
+                          className={`relative z-10 w-10 h-10 rounded-full flex items-center justify-center mb-2 transition-all shadow-sm cursor-pointer ${ui.locked ? 'opacity-50' : ''} ${isCompleted ? 'bg-teal-500 text-white' : isCurrent ? 'bg-white border-2 border-teal-500 text-teal-600 ring-4 ring-teal-100' : 'bg-white border-2 border-gray-200 text-gray-400'}`}
                         >
                           {isCompleted ? <i className="ri-check-line text-sm font-bold"></i> : <i className={`${icons[index]} text-sm`}></i>}
                         </button>
@@ -2154,28 +2324,56 @@ export default function StudentCenterPage() {
                           const modKnowledge = knowledgePoints.filter(k => k.module === mod.id);
                           const completed = modKnowledge.filter(k => k.status === 'completed').length;
                           const total = modKnowledge.length;
+                          const noCourse = total === 0;
                           const isLocked = getSidebarModuleUi(mod.id).locked;
-                          const isActive = !isLocked && total > 0 && completed < total;
+                          const isActive = !isLocked && !noCourse && completed < total;
+                          const pct = noCourse ? 100 : total > 0 ? Math.round((completed / total) * 100) : 0;
+                          const statusLabel = isLocked
+                            ? '未解锁'
+                            : noCourse
+                              ? '已完成'
+                              : completed === total
+                                ? '已完成'
+                                : isActive
+                                  ? '进行中'
+                                  : '待开始';
                           return (
                             <div key={mod.id} className="relative pl-20">
                               <div className={`absolute left-0 w-16 h-16 ${mod.color} rounded-2xl flex items-center justify-center shadow-lg ${isActive ? 'ring-4 ring-teal-200' : ''} ${isLocked ? 'opacity-50' : ''}`}>
-                                <i className={`ri-${isLocked ? 'lock' : completed === total && total > 0 ? 'checkbox-circle' : 'play'}-line text-2xl text-white`}></i>
+                                <i className={`ri-${isLocked ? 'lock' : noCourse || completed === total ? 'checkbox-circle' : 'play'}-line text-2xl text-white`}></i>
                               </div>
                               <div className={`bg-gray-50 rounded-xl p-6 ${isActive ? 'ring-2 ring-teal-500' : ''}`}>
                                 <div className="flex items-center justify-between mb-3">
                                   <h4 className="text-base font-bold text-gray-900">{mod.name}</h4>
                                   <div className="flex items-center gap-3">
-                                    <span className={`px-3 py-1 rounded-lg text-sm font-medium ${isLocked ? 'bg-gray-200 text-gray-600' : completed === total && total > 0 ? 'bg-green-100 text-green-700' : isActive ? 'bg-teal-100 text-teal-700' : 'bg-yellow-100 text-yellow-700'}`}>
-                                      {isLocked ? '未解锁' : completed === total && total > 0 ? '已完成' : isActive ? '进行中' : '待开始'}
+                                    <span className={`px-3 py-1 rounded-lg text-sm font-medium ${isLocked ? 'bg-gray-200 text-gray-600' : statusLabel === '已完成' ? 'bg-green-100 text-green-700' : isActive ? 'bg-teal-100 text-teal-700' : 'bg-yellow-100 text-yellow-700'}`}>
+                                      {statusLabel}
                                     </span>
-                                    {!isLocked && <button onClick={() => { setKnowledgeSubTab('knowledge'); setSelectedModule(mod.id); }} className="px-4 py-2 bg-gradient-to-r from-teal-500 to-cyan-600 text-white rounded-lg text-sm font-medium hover:shadow-md transition-all whitespace-nowrap cursor-pointer">进入学习</button>}
+                                    {!isLocked && (
+                                      <button
+                                        type="button"
+                                        disabled={noCourse}
+                                        onClick={() => {
+                                          if (noCourse) return;
+                                          setKnowledgeSubTab('knowledge');
+                                          setSelectedModule(mod.id);
+                                        }}
+                                        className="px-4 py-2 bg-gradient-to-r from-teal-500 to-cyan-600 text-white rounded-lg text-sm font-medium hover:shadow-md transition-all whitespace-nowrap cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                                      >
+                                        进入学习
+                                      </button>
+                                    )}
                                   </div>
                                 </div>
                                 <div className="flex items-center justify-between mb-3">
-                                  <span className="text-sm text-gray-600">{completed}/{total} 知识点完成</span>
-                                  <span className="text-sm font-bold text-teal-600">{total > 0 ? Math.round((completed / total) * 100) : 0}%</span>
+                                  <span className="text-sm text-gray-600">
+                                    {noCourse ? '暂无关联课程，无需学习' : `${completed}/${total} 知识点完成`}
+                                  </span>
+                                  <span className="text-sm font-bold text-teal-600">{pct}%</span>
                                 </div>
-                                <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden"><div className={`h-full ${mod.color} rounded-full`} style={{ width: `${total > 0 ? (completed / total) * 100 : 0}%` }}></div></div>
+                                <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
+                                  <div className={`h-full ${mod.color} rounded-full`} style={{ width: `${pct}%` }} />
+                                </div>
                               </div>
                             </div>
                           );
@@ -2335,7 +2533,7 @@ export default function StudentCenterPage() {
           {/* 实训模块内容 */}
           {activeTab.startsWith('module-') && (
             <div>
-              {!activeModulePrerequisiteTask && renderModuleContent()}
+              {!shouldBlockModule && renderModuleContent()}
             </div>
           )}
 
@@ -2560,11 +2758,28 @@ export default function StudentCenterPage() {
         )}
       </Modal>
 
+      <UnlockTrainingStageModal
+        open={Boolean(unlockStageModalModuleId)}
+        moduleId={unlockStageModalModuleId}
+        onClose={() => setUnlockStageModalModuleId(null)}
+        getStartDateLabel={getStartDateLabelForUnlock}
+        teamFormationComplete={teamFormationComplete}
+        ideationTopicApproved={ideationTopicApproved}
+        teamMarketReportUploaded={teamMarketReportUploaded}
+        isBeforeStageStart={isBeforeStageStart}
+        isStageCompleted={isModuleCompletedByProgress}
+      />
+
       <Modal
-        open={Boolean(activeModulePrerequisiteTask)}
+        open={shouldBlockModule}
         title={
           <div className="flex items-center gap-2 text-gray-900">
-            <span>请先完成实践课程</span>
+            <span>
+              请先完成实践课程
+              {activeTrainingModuleId
+                ? `（${moduleProgress.find((m) => m.moduleId === activeTrainingModuleId)?.moduleName || ''}）`
+                : ''}
+            </span>
           </div>
         }
         closable={false}

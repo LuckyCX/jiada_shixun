@@ -46,6 +46,11 @@ export async function loadSurveyQuestions(pool, surveyId) {
   }));
 }
 
+function formatTs(ts) {
+  if (!ts) return '';
+  return new Date(ts).toLocaleString('zh-CN', { hour12: false });
+}
+
 export function mapSurveyRow(row, questions, publicBasePath) {
   const slug = row.public_slug || '';
   const link =
@@ -61,7 +66,47 @@ export function mapSurveyRow(row, questions, publicBasePath) {
     source: row.source === 'ai' ? 'ai' : 'manual',
     fromPlan: row.source === 'ai',
     createdAt: row.created_at ? new Date(row.created_at).toLocaleDateString('zh-CN') : '',
+    publishedAt: row.published_at ? new Date(row.published_at).toISOString() : null,
+    publishedAtDisplay: formatTs(row.published_at),
+    closesAt: row.closes_at ? new Date(row.closes_at).toISOString() : null,
+    closesAtDisplay: formatTs(row.closes_at),
   };
+}
+
+/** @param {string} closesAtIso ISO 时间 */
+export function validateSurveyClosesAt(closesAtIso, stage) {
+  const raw = String(closesAtIso || '').trim();
+  if (!raw) return { error: '请设置问卷截止时间' };
+  const closes = new Date(raw);
+  if (Number.isNaN(closes.getTime())) return { error: '截止时间格式无效' };
+  const now = new Date();
+  if (closes.getTime() <= now.getTime()) {
+    return { error: '截止时间须晚于当前时间' };
+  }
+  if (stage?.deadlineDate) {
+    const moduleEnd = new Date(`${stage.deadlineDate}T23:59:59.999`);
+    if (closes.getTime() > moduleEnd.getTime()) {
+      return { error: `截止时间不能晚于实训环节截止日（${stage.deadlineDate}）` };
+    }
+  }
+  return { closesAt: closes.toISOString() };
+}
+
+export async function assertSurveyIdsForTeam(pool, teamId, surveyIds) {
+  if (!Array.isArray(surveyIds) || !surveyIds.length) {
+    return { error: '请至少选择一份问卷' };
+  }
+  if (surveyIds.length > 3) return { error: '最多选择 3 份问卷' };
+  const ids = surveyIds
+    .map((id) => Number(String(id).trim()))
+    .filter((n) => Number.isFinite(n) && n > 0);
+  if (ids.length !== surveyIds.length) return { error: '问卷参数无效' };
+  const { rows } = await pool.query(
+    `SELECT id FROM teacher_personal_class_team_surveys WHERE team_id = $1 AND id = ANY($2::bigint[])`,
+    [teamId, ids]
+  );
+  if (rows.length !== ids.length) return { error: '所选问卷不存在或不属于本组' };
+  return { surveyIds: ids };
 }
 
 export async function replaceSurveyQuestions(client, surveyId, questions) {
@@ -120,7 +165,7 @@ export function planPayloadFromRow(row, members) {
 
 export async function getSurveyForTeam(pool, surveyId, teamId) {
   const { rows } = await pool.query(
-    `SELECT id, team_id, title, status, collected_count, public_slug, source, created_at
+    `SELECT id, team_id, title, status, collected_count, public_slug, source, created_at, published_at, closes_at
      FROM teacher_personal_class_team_surveys
      WHERE id = $1 AND team_id = $2`,
     [surveyId, teamId]
