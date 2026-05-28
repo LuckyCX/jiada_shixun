@@ -5,6 +5,7 @@ export type RoleSimulationEntry = {
   prerequisiteModuleKey?: string;
   requiredKnowledgePointCount?: number;
   passedKnowledgePointCount?: number;
+  summary?: string;
 };
 
 export type RoleSimulationDayResult = {

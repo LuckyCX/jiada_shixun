@@ -7,7 +7,6 @@ interface StageProgress {
   marketResearch: number;
   productDesign: number;
   businessModel: number;
-  aiValidation: number;
   roleSimulation: number;
   businessPlan: number;
 }
@@ -45,7 +44,6 @@ const stages = [
   { id: 'marketResearch', name: '调研', icon: 'ri-search-line' },
   { id: 'productDesign', name: '设计', icon: 'ri-pencil-ruler-2-line' },
   { id: 'businessModel', name: '商模', icon: 'ri-bar-chart-box-line' },
-  { id: 'aiValidation', name: 'AI验', icon: 'ri-robot-line' },
   { id: 'roleSimulation', name: '角色', icon: 'ri-user-star-line' },
   { id: 'businessPlan', name: '计划', icon: 'ri-file-text-line' },
 ];
@@ -90,9 +88,8 @@ export default function TeamCard({
 }: TeamCardProps) {
   const [hovered, setHovered] = useState(false);
 
-  // Defensive fallbacks – they protect the component if an unexpected value slips through
-  const cfg = statusConfig[team.status] ?? statusConfig['on-track'];
-  const evalCfg = evalConfig[team.evaluationStatus] ?? evalConfig.pending;
+  const cfg = statusConfig[team.status];
+  const evalCfg = evalConfig[team.evaluationStatus];
 
   return (
     <div
@@ -145,9 +142,9 @@ export default function TeamCard({
                 <span className={`inline-block w-1.5 h-1.5 rounded-full mr-1 ${cfg.dot}`} />
                 {cfg.label}
               </span>
-              <span className={`px-2 py-0.5 text-xs rounded-full whitespace-nowrap ${evalCfg.cls}`}>
+              {/* <span className={`px-2 py-0.5 text-xs rounded-full whitespace-nowrap ${evalCfg.cls}`}>
                 {evalCfg.label}
-              </span>
+              </span> */}
             </div>
           </div>
           <div className="text-right flex-shrink-0 ml-2">
@@ -175,7 +172,15 @@ export default function TeamCard({
               </div>
             )}
           </div>
-          <span className="text-xs text-gray-500">队长：{team.leader}</span>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-500 flex-shrink-0">队长：{team.leader}</span>
+              <span className="text-xs text-gray-300">|</span>
+              <span className="text-xs text-gray-500 truncate">
+                成员：{team.members.map((m) => m.name).join('、')}
+              </span>
+            </div>
+          </div>
           <span className="text-xs text-gray-400 ml-auto">{team.lastActive}</span>
         </div>
 
@@ -233,13 +238,13 @@ export default function TeamCard({
           <span>
             当前：<strong className="text-gray-700">{team.currentStage}</strong>
           </span>
-          <span>
+          {/* <span>
             能力点 <strong className="text-teal-600">{team.abilityPoints}</strong>
-          </span>
+          </span> */}
         </div>
 
         {/* 三项评分 */}
-        <div className="grid grid-cols-3 gap-2 mb-3">
+        {/* <div className="grid grid-cols-3 gap-2 mb-3">
           <div className="bg-gray-50 rounded-lg p-2 text-center">
             <div className="text-sm font-bold text-gray-900">{team.knowledgeProgress}%</div>
             <div className="text-xs text-gray-500">知识进度</div>
@@ -252,7 +257,7 @@ export default function TeamCard({
             <div className="text-sm font-bold text-gray-900">{team.qualityScore}</div>
             <div className="text-xs text-gray-500">质量评分</div>
           </div>
-        </div>
+        </div> */}
 
         {/* 预警信息 */}
         {team.warnings.length > 0 && (
@@ -270,7 +275,12 @@ export default function TeamCard({
                     ${team.status === 'delayed' ? 'ri-error-warning-fill text-red-500' : 'ri-alert-fill text-orange-500'}
                   `}
                 />
-                <span className={team.status === 'delayed' ? 'text-xs text-red-700' : 'text-xs text-orange-700'}>
+                <span
+                  className={`text-xs break-words line-clamp-2 ${
+                    team.status === 'delayed' ? 'text-red-700' : 'text-orange-700'
+                  }`}
+                  title={w}
+                >
                   {w}
                 </span>
               </div>
@@ -279,7 +289,7 @@ export default function TeamCard({
         )}
 
         {/* 底部操作 */}
-        <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
+        {/* <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
           <button
             onClick={() => onViewDetail(team)}
             className="flex-1 py-2 bg-teal-500 text-white text-xs font-medium rounded-lg hover:bg-teal-600 transition-colors whitespace-nowrap cursor-pointer"
@@ -299,7 +309,7 @@ export default function TeamCard({
               干预
             </button>
           )}
-        </div>
+        </div> */}
       </div>
     </div>
   );

@@ -535,6 +535,7 @@ function CreatePersonaModal({ onSave, onClose }: { onSave: (p: Omit<UserPersona,
 type MarketResearchModuleProps = {
   classId?: string;
   isTeamLeader?: boolean;
+  trainingEnded?: boolean;
   stagePeriod?: { startDate: string; deadlineDate: string } | null;
   teamMembers?: MarketTeamMember[];
   hasConfirmedTeam?: boolean;
@@ -548,6 +549,7 @@ type MarketResearchModuleProps = {
 export default function MarketResearchModule({
   classId = '',
   isTeamLeader = false,
+  trainingEnded = false,
   stagePeriod: stagePeriodProp = null,
   teamMembers: teamMembersProp = [],
   hasConfirmedTeam = false,
@@ -1552,7 +1554,7 @@ export default function MarketResearchModule({
                               <p className="text-xs text-gray-500 mb-4 line-clamp-2">{guide.title}</p>
                             )}
                             <div className="mt-auto pt-2 border-t border-gray-100">
-                              <MarketResearchMethodUpload classId={classId} method={method} compact />
+                              <MarketResearchMethodUpload classId={classId} method={method} compact disabled={trainingEnded} />
                             </div>
                           </div>
                         );
@@ -1576,12 +1578,14 @@ export default function MarketResearchModule({
                 <div className="flex gap-2">
                   <button
                     onClick={() => setShowAI(true)}
+                    disabled={trainingEnded}
                     className="px-4 py-2 bg-gradient-to-r from-green-500 to-teal-500 text-white text-sm font-medium rounded-lg hover:opacity-90 transition-opacity whitespace-nowrap cursor-pointer flex items-center gap-2"
                   >
                     <i className="ri-robot-line"></i>AI 生成问卷
                   </button>
                   <button
                     onClick={() => setSurveyEditor({ mode: 'create', survey: null })}
+                    disabled={trainingEnded}
                     className="px-4 py-2 bg-gray-100 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-200 transition-colors whitespace-nowrap cursor-pointer"
                   >
                     <i className="ri-add-line mr-1"></i>手动创建
@@ -1654,18 +1658,21 @@ export default function MarketResearchModule({
                         <>
                           <button
                             onClick={() => void handlePublish(survey.id)}
+                            disabled={trainingEnded}
                             className="flex-1 min-w-[120px] px-4 py-2 bg-green-500 text-white text-sm font-medium rounded-lg hover:bg-green-600 transition-colors whitespace-nowrap cursor-pointer"
                           >
                             发布问卷
                           </button>
                           <button
                             onClick={() => setSurveyEditor({ mode: 'edit', survey })}
+                            disabled={trainingEnded}
                             className="flex-1 min-w-[120px] px-4 py-2 bg-gray-100 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-200 transition-colors whitespace-nowrap cursor-pointer"
                           >
                             编辑
                           </button>
                           <button
                             onClick={() => void handleDeleteSurvey(survey.id)}
+                            disabled={trainingEnded}
                             className="px-4 py-2 text-red-600 text-sm font-medium rounded-lg hover:bg-red-50 transition-colors whitespace-nowrap cursor-pointer"
                           >
                             删除
@@ -1676,18 +1683,21 @@ export default function MarketResearchModule({
                         <>
                           <button
                             onClick={() => void handlePublish(survey.id)}
+                            disabled={trainingEnded}
                             className="flex-1 min-w-[120px] px-4 py-2 bg-green-500 text-white text-sm font-medium rounded-lg hover:bg-green-600 transition-colors whitespace-nowrap cursor-pointer"
                           >
                             再次发布
                           </button>
                           <button
                             onClick={() => setSurveyEditor({ mode: 'edit', survey })}
+                            disabled={trainingEnded}
                             className="flex-1 min-w-[120px] px-4 py-2 bg-gray-100 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-200 transition-colors whitespace-nowrap cursor-pointer"
                           >
                             编辑
                           </button>
                           <button
                             onClick={() => void handleDeleteSurvey(survey.id)}
+                            disabled={trainingEnded}
                             className="px-4 py-2 text-red-600 text-sm font-medium rounded-lg hover:bg-red-50 transition-colors whitespace-nowrap cursor-pointer"
                           >
                             删除
@@ -1710,6 +1720,7 @@ export default function MarketResearchModule({
                           </button>
                           <button
                             onClick={() => void handleWithdraw(survey.id)}
+                            disabled={trainingEnded}
                             className="px-4 py-2 text-amber-700 text-sm font-medium rounded-lg hover:bg-amber-50 transition-colors whitespace-nowrap cursor-pointer"
                           >
                             撤回
@@ -1732,7 +1743,7 @@ export default function MarketResearchModule({
               <div className="flex justify-end">
                 <button
                   onClick={() => setSurveySelectMode('analysis')}
-                  disabled={isAiAnalyzing}
+                  disabled={trainingEnded || isAiAnalyzing}
                   className="px-6 py-3 bg-gradient-to-r from-green-500 to-teal-500 text-white text-sm font-medium rounded-xl hover:opacity-90 transition-all shadow-lg cursor-pointer disabled:opacity-60 flex items-center gap-2 whitespace-nowrap"
                 >
                   {isAiAnalyzing ? (
@@ -2003,12 +2014,14 @@ export default function MarketResearchModule({
               <div className="flex gap-4">
                 <button
                   onClick={() => setSurveySelectMode('persona')}
+                  disabled={trainingEnded}
                   className="flex-1 px-6 py-3 bg-gradient-to-r from-purple-600 to-blue-600 text-white text-sm font-medium rounded-xl hover:from-purple-700 hover:to-blue-700 transition-all shadow-lg cursor-pointer flex items-center justify-center gap-2 whitespace-nowrap"
                 >
                   <i className="ri-robot-line"></i>AI 生成画像
                 </button>
                 <button
                   onClick={() => setShowCreatePersona(true)}
+                  disabled={trainingEnded}
                   className="flex-1 px-6 py-3 bg-green-500 text-white text-sm font-medium rounded-xl hover:bg-green-600 transition-colors whitespace-nowrap cursor-pointer flex items-center justify-center gap-2"
                 >
                   <i className="ri-add-line"></i>手动创建画像
@@ -2032,6 +2045,7 @@ export default function MarketResearchModule({
                   personas={personas}
                   onOpenRecords={openChallengeRecords}
                   onMarketChallengeReportComplete={onMarketChallengeReportComplete}
+                  disabled={trainingEnded}
                 />
               ) : null}
             </div>

@@ -1,5 +1,7 @@
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
+import { DatePicker, Select } from 'antd';
+import dayjs, { type Dayjs } from 'dayjs';
 import { TeamProject } from './TeamCard';
 
 interface InterveneModalProps {
@@ -47,6 +49,22 @@ export default function InterveneModal({
   const [message, setMessage] = useState('');
   const [deadline, setDeadline] = useState('');
   const [submitted, setSubmitted] = useState(false);
+
+  const teamOptions = useMemo(
+    () =>
+      teams.map((t) => ({
+        value: t.id,
+        label: `${t.teamName} — ${t.course}`,
+      })),
+    [teams]
+  );
+
+  const deadlineValue: Dayjs | null = useMemo(() => {
+    const v = String(deadline || '').trim();
+    if (!v) return null;
+    const d = dayjs(v);
+    return d.isValid() ? d : null;
+  }, [deadline]);
 
   const handleSubmit = () => {
     if (!message.trim()) return;
@@ -100,17 +118,14 @@ export default function InterveneModal({
             <label className="block text-sm font-medium text-gray-700 mb-2">
               选择团队
             </label>
-            <select
-              value={selectedTeamId}
-              onChange={(e) => setSelectedTeamId(Number(e.target.value))}
-              className="w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 cursor-pointer"
-            >
-              {teams.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.teamName} — {t.course}
-                </option>
-              ))}
-            </select>
+            <Select
+              value={selectedTeamId || undefined}
+              onChange={(v) => setSelectedTeamId(Number(v))}
+              options={teamOptions}
+              className="w-full"
+              size="large"
+              placeholder="请选择团队"
+            />
           </div>
 
           {/* 干预类型 */}
@@ -181,11 +196,14 @@ export default function InterveneModal({
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 补做截止时间
               </label>
-              <input
-                type="datetime-local"
-                value={deadline}
-                onChange={(e) => setDeadline(e.target.value)}
-                className="w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500"
+              <DatePicker
+                value={deadlineValue}
+                onChange={(v) => setDeadline(v ? v.format('YYYY-MM-DDTHH:mm') : '')}
+                showTime
+                format="YYYY-MM-DD HH:mm"
+                className="w-full"
+                size="large"
+                placeholder="请选择截止时间"
               />
             </div>
           )}

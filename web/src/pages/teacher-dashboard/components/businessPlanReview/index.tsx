@@ -1,16 +1,42 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { message } from 'antd';
 import { BusinessPlan, ReviewFormData } from './types';
-import { mockBusinessPlans } from './mockData';
 import DetailModal from './DetailModal';
 import ReviewModal from './ReviewModal';
+import type { TeacherPersonalClassRow } from '../../teacherPortalApi';
+import {
+  fetchTeacherBusinessPlanSubmissions,
+  reviewTeacherBusinessPlanSubmission,
+} from '../../../../lib/teacherBusinessPlanApi';
 
-export default function BusinessPlanReview() {
-  const [plans, setPlans] = useState<BusinessPlan[]>(mockBusinessPlans);
+type BusinessPlanReviewProps = {
+  personalClass: TeacherPersonalClassRow;
+};
+
+export default function BusinessPlanReview({ personalClass }: BusinessPlanReviewProps) {
+  const classId = personalClass.id;
+  const [plans, setPlans] = useState<BusinessPlan[]>([]);
+  const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'approved' | 'rejected'>('all');
   const [selectedPlan, setSelectedPlan] = useState<BusinessPlan | null>(null);
   const [reviewingPlan, setReviewingPlan] = useState<BusinessPlan | null>(null);
   const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+
+  const loadPlans = useCallback(() => {
+    setLoading(true);
+    return fetchTeacherBusinessPlanSubmissions(classId, statusFilter === 'all' ? 'all' : statusFilter)
+      .then(setPlans)
+      .catch((e) => {
+        setPlans([]);
+        message.error(e instanceof Error ? e.message : '加载失败');
+      })
+      .finally(() => setLoading(false));
+  }, [classId, statusFilter]);
+
+  useEffect(() => {
+    void loadPlans();
+  }, [loadPlans]);
 
   // 统计数据
   const stats = {
@@ -28,39 +54,22 @@ export default function BusinessPlanReview() {
     return matchSearch && matchStatus;
   });
 
-  // 处理审核提交
   const handleReviewSubmit = (data: ReviewFormData) => {
     if (!reviewingPlan) return;
-
-    const updatedPlans = plans.map(plan => {
-      if (plan.id === reviewingPlan.id) {
-        return {
-          ...plan,
-          status: data.status,
-          reviewComment: data.comment,
-          reviewTime: new Date().toLocaleString('zh-CN', {
-            year: 'numeric',
-            month: '2-digit',
-            day: '2-digit',
-            hour: '2-digit',
-            minute: '2-digit',
-            second: '2-digit'
-          }),
-          reviewer: '当前教师'
-        };
-      }
-      return plan;
-    });
-
-    setPlans(updatedPlans);
-    setReviewingPlan(null);
-    setSelectedPlan(null);
-    
-    setNotification({
-      message: data.status === 'approved' ? '审核通过！团队可以进入下一阶段' : '已退回修改，团队将收到通知',
-      type: 'success'
-    });
-    setTimeout(() => setNotification(null), 3000);
+    void reviewTeacherBusinessPlanSubmission(classId, reviewingPlan.id, data)
+      .then(() => {
+        setReviewingPlan(null);
+        setSelectedPlan(null);
+        void loadPlans();
+        setNotification({
+          message: data.status === 'approved' ? '审核通过，该团队实训流程已结束' : '已退回，团队可重新提交',
+          type: 'success',
+        });
+        setTimeout(() => setNotification(null), 3000);
+      })
+      .catch((e) => {
+        message.error(e instanceof Error ? e.message : '审核失败');
+      });
   };
 
   const getStatusBadge = (status: string) => {
@@ -195,7 +204,11 @@ export default function BusinessPlanReview() {
 
         {/* 计划书列表 */}
         <div className="space-y-4">
-          {filteredPlans.length === 0 ? (
+          {loading ? (
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-12 text-center text-gray-500 text-sm">
+              加载中…
+            </div>
+          ) : filteredPlans.length === 0 ? (
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-12 text-center">
               <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
                 <i className="ri-file-list-3-line text-4xl text-gray-400"></i>
@@ -281,17 +294,7 @@ export default function BusinessPlanReview() {
                           重新审核
                         </button>
                       )}
-                      {plan.pptUrl && (
-                        <a
-                          href={plan.pptUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors whitespace-nowrap"
-                        >
-                          <i className="ri-download-line mr-1"></i>
-                          下载PPT
-                        </a>
-                      )}
+                     
                     </div>
                   </div>
                 </div>

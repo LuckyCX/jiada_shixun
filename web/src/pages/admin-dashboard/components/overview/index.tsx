@@ -101,7 +101,7 @@ export default function Overview() {
       </div>
 
       {/* 课程内容统计区块 */}
-      <div className="bg-white rounded-xl border border-gray-100 p-5">
+      {/* <div className="bg-white rounded-xl border border-gray-100 p-5">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-base font-semibold text-gray-900 flex items-center gap-2">
             <i className="ri-book-2-line text-teal-500"></i>
@@ -128,7 +128,6 @@ export default function Overview() {
           ))}
         </div>
 
-        {/* 课件类型分布 */}
         <div className="border-t border-gray-100 pt-4">
           <div className="text-xs font-medium text-gray-500 mb-3">课件类型分布</div>
           <div className="flex items-center gap-6">
@@ -172,9 +171,9 @@ export default function Overview() {
                 </div>
               );
             })}
-          </div>
+          </div> 
         </div>
-      </div>
+      </div>*/}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* 平台活跃度趋势图 */}
@@ -379,8 +378,7 @@ export default function Overview() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* 课程完成率统计 */}
+      {/* <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="bg-white rounded-xl p-6 border border-gray-100">
           <h3 className="text-base font-semibold text-gray-900 mb-4">课程完成率统计</h3>
           <div className="space-y-4">
@@ -442,7 +440,7 @@ export default function Overview() {
               );
             })}
           </div>
-        </div>
+        </div> */}
 
         {/* 最近操作日志 */}
         <div className="bg-white rounded-xl p-6 border border-gray-100">
@@ -474,64 +472,7 @@ export default function Overview() {
             ))}
           </div>
         </div>
-      </div>
-
-      {/* 全平台实训进度统计 */}
-      <div className="bg-white rounded-xl border border-gray-100 p-5">
-        <div className="flex items-center justify-between mb-5">
-          <h3 className="text-base font-semibold text-gray-900 flex items-center gap-2">
-            <i className="ri-bar-chart-grouped-line text-teal-500"></i>
-            全平台实训进度统计
-          </h3>
-          <span className="text-xs text-gray-400">数据实时更新</span>
-        </div>
-
-        {/* 总览卡片 */}
-        <div className="grid grid-cols-4 gap-4 mb-6">
-          {[
-            { label: '团队总数', value: trainingProgressStats.totalTeams, icon: 'ri-team-line', bg: 'bg-teal-50', iconCls: 'text-teal-500', valCls: 'text-teal-700', desc: '已组建团队' },
-            { label: '活跃团队', value: trainingProgressStats.activeTeams, icon: 'ri-fire-line', bg: 'bg-orange-50', iconCls: 'text-orange-500', valCls: 'text-orange-700', desc: '近7天有操作' },
-            { label: '已完成团队', value: trainingProgressStats.completedTeams, icon: 'ri-checkbox-circle-line', bg: 'bg-green-50', iconCls: 'text-green-500', valCls: 'text-green-700', desc: '完成全部模块' },
-            { label: '平均进度', value: `${trainingProgressStats.avgProgress}%`, icon: 'ri-pie-chart-line', bg: 'bg-indigo-50', iconCls: 'text-indigo-500', valCls: 'text-indigo-700', desc: '全平台均值' },
-          ].map((item, i) => (
-            <div key={i} className={`${item.bg} rounded-xl p-4`}>
-              <div className="flex items-center gap-2 mb-2">
-                <div className="w-8 h-8 bg-white rounded-lg flex items-center justify-center">
-                  <i className={`${item.icon} ${item.iconCls} text-base`}></i>
-                </div>
-                <span className="text-xs text-gray-500">{item.label}</span>
-              </div>
-              <div className={`text-2xl font-bold ${item.valCls} mb-0.5`}>{item.value}</div>
-              <div className="text-xs text-gray-400">{item.desc}</div>
-            </div>
-          ))}
-        </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* 各模块完成率 */}
-          <div>
-            <div className="text-sm font-medium text-gray-700 mb-3 flex items-center gap-1.5">
-              <i className="ri-layout-grid-line text-gray-400"></i>
-              各实训模块完成率
-            </div>
-            <div className="space-y-3">
-              {moduleCompletionRates.map((item, i) => (
-                <ModuleRateRow key={i} item={item} />
-              ))}
-            </div>
-          </div>
-
-          {/* 团队进度分布 */}
-          <div>
-            <div className="text-sm font-medium text-gray-700 mb-3 flex items-center gap-1.5">
-              <i className="ri-bar-chart-2-line text-gray-400"></i>
-              团队进度分布
-            </div>
-            <TeamProgressChart data={teamProgressDistribution} total={trainingProgressStats.totalTeams} />
-          </div>
-        </div>
-      </div>
-    </div>
+       </div>
   );
 }
 

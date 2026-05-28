@@ -70,9 +70,10 @@ type Props = {
   personas: MarketPersona[];
   onOpenRecords?: () => void;
   onMarketChallengeReportComplete?: () => void;
+  disabled?: boolean;
 };
 
-export default function ChallengeTab({ classId, personas, onOpenRecords, onMarketChallengeReportComplete }: Props) {
+export default function ChallengeTab({ classId, personas, onOpenRecords, onMarketChallengeReportComplete, disabled = false }: Props) {
   const [step, setStep] = useState<'info' | 'select' | 'challenge' | 'report'>('info');
   const [projectInfo, setProjectInfo] = useState<ChallengeProjectInfo>(emptyProject());
   const [autoFilled, setAutoFilled] = useState(false);
@@ -576,7 +577,12 @@ export default function ChallengeTab({ classId, personas, onOpenRecords, onMarke
               </ul>
             </div>
           ))}
-          <button type="button" onClick={resetChallenge} className="px-6 py-3 border rounded-xl cursor-pointer">
+          <button
+            type="button"
+            onClick={resetChallenge}
+            disabled={disabled}
+            className="px-6 py-3 border rounded-xl cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+          >
             重新开始挑战
           </button>
           </>

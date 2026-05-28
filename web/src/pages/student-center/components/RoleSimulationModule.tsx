@@ -154,9 +154,10 @@ const LineChart = ({
 type RoleSimulationModuleProps = {
   classId: string;
   onTaskComplete?: () => void;
+  trainingEnded?: boolean;
 };
 
-const RoleSimulationModule = ({ classId, onTaskComplete }: RoleSimulationModuleProps) => {
+const RoleSimulationModule = ({ classId, onTaskComplete, trainingEnded = false }: RoleSimulationModuleProps) => {
   const [step, setStep] = useState<'config' | 'tracking' | 'optimize'>('config');
   const [isRunning, setIsRunning] = useState(false);
   const [simDay, setSimDay] = useState(0);
@@ -249,6 +250,7 @@ const RoleSimulationModule = ({ classId, onTaskComplete }: RoleSimulationModuleP
         if (!mounted) return;
         setEntryAllowed(Boolean(entry.allowed));
         setPrerequisiteModuleKey(String(entry.prerequisiteModuleKey || ''));
+        if (!entry.allowed && entry.summary) setEntryError(entry.summary);
       } catch (e: any) {
         if (!mounted) return;
         setEntryAllowed(false);
@@ -622,7 +624,7 @@ const RoleSimulationModule = ({ classId, onTaskComplete }: RoleSimulationModuleP
                 <div className="flex-1">
                   <p className="text-sm font-semibold text-gray-900">暂不可开始仿真模拟</p>
                   <p className="text-xs text-gray-500 mt-1 leading-relaxed">
-                    {entryError ? entryError : '请先完成关联课程的知识点检测后再开始。'}
+                    {entryError || '请先完成关联课程学习及知识点检测后再开始。'}
                   </p>
                   {prerequisiteModuleKey && (
                     <p className="text-xs text-gray-400 mt-1">关联课程：{prerequisiteModuleKey}</p>
@@ -741,9 +743,9 @@ const RoleSimulationModule = ({ classId, onTaskComplete }: RoleSimulationModuleP
           <div className="flex gap-3">
             <button
               onClick={startSimulation}
-              disabled={entryLoading || !entryAllowed}
+              disabled={trainingEnded || entryLoading || !entryAllowed}
               className={`flex-[3] py-3 rounded-xl font-bold text-sm transition-colors flex items-center justify-center gap-2 ${
-                entryLoading || !entryAllowed
+                trainingEnded || entryLoading || !entryAllowed
                   ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
                   : 'bg-emerald-500 text-white hover:bg-emerald-600'
               }`}

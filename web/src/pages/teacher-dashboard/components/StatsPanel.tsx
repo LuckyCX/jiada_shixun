@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { fetchTeacherMonitorStats } from '../../../lib/teacherMonitorApi';
 
 interface TeamProject {
   id: number;
@@ -12,6 +13,7 @@ interface TeamProject {
 }
 
 interface StatsPanelProps {
+  classId: string;
   teams: TeamProject[];
 }
 
@@ -21,24 +23,31 @@ const stageColors: Record<string, string> = {
   '市场调研': 'bg-teal-500',
   '产品设计': 'bg-green-500',
   '商业模式': 'bg-indigo-500',
-  'AI验证': 'bg-pink-500',
   '角色推荐': 'bg-orange-500',
   '商业计划': 'bg-cyan-500',
+  '已完成': 'bg-emerald-500',
 };
 
-// 模拟本周活跃度数据（7天）
-const weeklyActivityData = [
-  { day: '周一', value: 68 },
-  { day: '周二', value: 72 },
-  { day: '周三', value: 85 },
-  { day: '周四', value: 78 },
-  { day: '周五', value: 92 },
-  { day: '周六', value: 65 },
-  { day: '周日', value: 58 },
-];
+function todayLabelZh() {
+  const w = new Date().getDay(); // 0 Sun
+  return w === 0 ? '周日' : w === 1 ? '周一' : w === 2 ? '周二' : w === 3 ? '周三' : w === 4 ? '周四' : w === 5 ? '周五' : '周六';
+}
 
-export default function StatsPanel({ teams }: StatsPanelProps) {
+export default function StatsPanel({ classId, teams }: StatsPanelProps) {
   const [showAllWarnings, setShowAllWarnings] = useState(false);
+  const [weeklyActivityData, setWeeklyActivityData] = useState<{ day: string; value: number }[]>([]);
+
+  useEffect(() => {
+    if (!classId) {
+      setWeeklyActivityData([]);
+      return;
+    }
+    fetchTeacherMonitorStats(classId)
+      .then((r) => {
+        setWeeklyActivityData(Array.isArray(r.weeklyActivityData) ? r.weeklyActivityData : []);
+      })
+      .catch(() => setWeeklyActivityData([]));
+  }, [classId]);
 
   const onTrack = teams.filter(t => t.status === 'on-track').length;
   const atRisk = teams.filter(t => t.status === 'at-risk').length;
@@ -62,7 +71,11 @@ export default function StatsPanel({ teams }: StatsPanelProps) {
     : 0;
 
   // 计算本周活跃度最大值用于归一化
-  const maxActivity = Math.max(...weeklyActivityData.map(d => d.value));
+  const maxActivity = weeklyActivityData.length ? Math.max(...weeklyActivityData.map(d => d.value)) : 0;
+  const todayLabel = todayLabelZh();
+  const avgWeeklyActivity = weeklyActivityData.length
+    ? Math.round(weeklyActivityData.reduce((sum, d) => sum + d.value, 0) / weeklyActivityData.length)
+    : 0;
 
   return (
     <div className="space-y-4">
@@ -100,15 +113,15 @@ export default function StatsPanel({ teams }: StatsPanelProps) {
               <div className="text-xs text-red-400">滞后</div>
             </div>
           </div>
-          {pendingEval > 0 && (
-            <div className="flex items-center justify-between bg-amber-50 rounded-xl px-3 py-2">
-              <div className="flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
-                <span className="text-xs text-amber-700">待评价</span>
-              </div>
-              <span className="text-sm font-bold text-amber-600">{pendingEval} 组</span>
-            </div>
-          )}
+          {/* {pendingEval > 0 && (
+            // <div className="flex items-center justify-between bg-amber-50 rounded-xl px-3 py-2">
+            //   <div className="flex items-center gap-2">
+            //     <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
+            //     <span className="text-xs text-amber-700">待评价</span>
+            //   </div>
+            //   <span className="text-sm font-bold text-amber-600">{pendingEval} 组</span>
+            // </div>
+          )} */}
         </div>
       </div>
 
@@ -124,8 +137,8 @@ export default function StatsPanel({ teams }: StatsPanelProps) {
           {/* 迷你折线图 */}
           <div className="relative h-24 flex items-end justify-between gap-1">
             {weeklyActivityData.map((data, index) => {
-              const height = (data.value / maxActivity) * 100;
-              const isToday = index === 4; // 假设今天是周五
+              const height = maxActivity > 0 ? (data.value / maxActivity) * 100 : 0;
+              const isToday = data.day === todayLabel;
               return (
                 <div key={index} className="flex-1 flex flex-col items-center gap-1 group">
                   {/* 数值标签（悬停显示） */}
@@ -155,7 +168,7 @@ export default function StatsPanel({ teams }: StatsPanelProps) {
           <div className="pt-3 border-t border-gray-100 flex items-center justify-between text-xs">
             <span className="text-gray-500">平均活跃度</span>
             <span className="font-bold text-teal-600">
-              {Math.round(weeklyActivityData.reduce((sum, d) => sum + d.value, 0) / weeklyActivityData.length)}
+              {avgWeeklyActivity}
             </span>
           </div>
         </div>
@@ -178,7 +191,7 @@ export default function StatsPanel({ teams }: StatsPanelProps) {
                 <div className="w-16 h-1.5 bg-gray-100 rounded-full overflow-hidden">
                   <div
                     className={`h-full rounded-full ${stageColors[stage] || 'bg-gray-400'}`}
-                    style={{ width: `${(count / teams.length) * 100}%` }}
+                    style={{ width: `${teams.length ? (count / teams.length) * 100 : 0}%` }}
                   />
                 </div>
                 <span className="text-xs font-bold text-gray-700 w-4 text-right">{count}</span>
@@ -227,7 +240,7 @@ export default function StatsPanel({ teams }: StatsPanelProps) {
       )}
 
       {/* 能力点排行 */}
-      <div className="bg-white rounded-2xl border border-gray-100 p-5 shadow-sm">
+      {/* <div className="bg-white rounded-2xl border border-gray-100 p-5 shadow-sm">
         <div className="flex items-center gap-2 mb-4">
           <div className="w-8 h-8 flex items-center justify-center bg-gradient-to-br from-amber-500 to-orange-500 rounded-lg">
             <i className="ri-trophy-line text-white text-sm"></i>
@@ -256,7 +269,7 @@ export default function StatsPanel({ teams }: StatsPanelProps) {
             </div>
           ))}
         </div>
-      </div>
+      </div> */}
     </div>
   );
 }

@@ -18,6 +18,10 @@ export interface BusinessPlan {
   financialPlan: string;
   teamIntroduction: string;
   riskAnalysis: string;
+
+  /** 动态章节（后端返回） */
+  sections?: Array<{ key: string; title: string; content: string }>;
+  fullText?: string;
   
   // 附件
   pptUrl?: string;

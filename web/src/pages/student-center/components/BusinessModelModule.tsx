@@ -97,6 +97,7 @@ type BusinessModelModuleProps = {
   classId?: string;
   studentDisplayName?: string;
   isTeamLeader?: boolean;
+  trainingEnded?: boolean;
   onTaskComplete?: () => void;
   onBusinessTabProgress?: (doneCount: number) => void;
 };
@@ -105,6 +106,7 @@ export default function BusinessModelModule({
   classId,
   studentDisplayName = '同学',
   isTeamLeader = false,
+  trainingEnded = false,
   onTaskComplete,
   onBusinessTabProgress,
 }: BusinessModelModuleProps) {
@@ -615,7 +617,7 @@ export default function BusinessModelModule({
                 <button
                   type="button"
                   onClick={handleAIGenerate}
-                  disabled={isGenerating}
+                  disabled={trainingEnded || isGenerating}
                   className="px-6 py-3 bg-gradient-to-r from-teal-500 to-emerald-500 text-white text-sm font-bold rounded-xl hover:shadow-lg transition-all whitespace-nowrap cursor-pointer disabled:opacity-50 flex items-center gap-2"
                 >
                   {isGenerating ? (
@@ -667,7 +669,7 @@ export default function BusinessModelModule({
                 <button
                   type="button"
                   onClick={handleUploadCanvas}
-                  disabled={isUploadingCanvas}
+                  disabled={trainingEnded || isUploadingCanvas}
                   className="flex-1 px-6 py-3 bg-pink-500 text-white text-sm font-medium rounded-xl hover:bg-pink-600 transition-colors whitespace-nowrap cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
                 >
                   <i className="ri-upload-line"></i>
@@ -709,7 +711,7 @@ export default function BusinessModelModule({
                     <button
                       type="button"
                       onClick={handleAiSwot}
-                      disabled={aiSwotRunning || !classId?.trim()}
+                      disabled={trainingEnded || aiSwotRunning || !classId?.trim()}
                       className="px-4 py-2 bg-gradient-to-r from-teal-500 to-emerald-500 text-white text-sm font-semibold rounded-xl hover:shadow-md transition-all whitespace-nowrap cursor-pointer disabled:opacity-50 flex items-center gap-2"
                     >
                       {aiSwotRunning ? <i className="ri-loader-4-line animate-spin" /> : <i className="ri-sparkling-line" />}
@@ -770,7 +772,7 @@ export default function BusinessModelModule({
                     <button
                       type="button"
                       onClick={handleAiMarketing}
-                      disabled={aiMarketingRunning || !classId?.trim()}
+                      disabled={trainingEnded || aiMarketingRunning || !classId?.trim()}
                       className="px-4 py-2 bg-gradient-to-r from-teal-500 to-emerald-500 text-white text-sm font-semibold rounded-xl hover:shadow-md transition-all whitespace-nowrap cursor-pointer disabled:opacity-50 flex items-center gap-2"
                     >
                       {aiMarketingRunning ? <i className="ri-loader-4-line animate-spin" /> : <i className="ri-sparkling-line" />}
@@ -831,7 +833,7 @@ export default function BusinessModelModule({
                     <button
                       type="button"
                       onClick={handleAiFinanceItems}
-                      disabled={aiFinanceRunning || !classId?.trim()}
+                      disabled={trainingEnded || aiFinanceRunning || !classId?.trim()}
                       className="px-4 py-2 bg-gradient-to-r from-teal-500 to-emerald-500 text-white text-sm font-semibold rounded-xl hover:shadow-md transition-all whitespace-nowrap cursor-pointer disabled:opacity-50 flex items-center gap-2"
                     >
                       {aiFinanceRunning ? <i className="ri-loader-4-line animate-spin" /> : <i className="ri-sparkling-line" />}
@@ -951,13 +953,14 @@ export default function BusinessModelModule({
               classId={classId}
               studentDisplayName={studentDisplayName}
               onRecordSaved={() => setWarRoomRecordSaved(true)}
+              disabled={trainingEnded}
             />
           )}
         </div>
       </div>
 
       {/* 可获得能力点 */}
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+      {/* <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
         <h3 className="text-lg font-bold text-gray-900 mb-5 flex items-center gap-2">
           <i className="ri-medal-line text-teal-600"></i>可获得能力点
         </h3>
@@ -969,7 +972,7 @@ export default function BusinessModelModule({
             </div>
           ))}
         </div>
-      </div>
+      </div> */}
 
       {/* 添加成本项弹窗 */}
       {showAddCost && (

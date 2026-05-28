@@ -7,6 +7,7 @@ import { requireAuth, requireStudent } from '../middleware/auth.js';
 import { chatCompletionStream, friendlyLlmErrorMessage, getEnabledProvider } from '../lib/llmGateway.js';
 import { ROLE_SIMULATION_SYSTEM_PROMPT, buildRoleSimulationUserPrompt } from '../lib/roleSimulationPrompts.js';
 import { assembleBusinessModelAiBundle } from '../lib/businessModelContext.js';
+import { evaluateModulePrerequisiteForStudent } from '../lib/trainingModulePrerequisite.js';
 
 const router = Router();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -266,16 +267,14 @@ router.get('/student/personal-classes/:classId/role-simulation/entry', requireAu
     if (!ctx) return;
 
     const prerequisiteModuleKey = 'simulation';
-    const knowledgePointIds = await loadPrerequisiteKnowledgePointIds(ctx.pool, prerequisiteModuleKey);
-    const passed = await countPassedKnowledgePoints(ctx.pool, ctx.sid, knowledgePointIds);
-    const required = knowledgePointIds.length;
-    const allowed = required === 0 ? true : passed >= required;
+    const result = await evaluateModulePrerequisiteForStudent(ctx.pool, ctx.sid, prerequisiteModuleKey);
 
     return ok(req, res, {
-      allowed,
+      allowed: result.allowed,
       prerequisiteModuleKey,
-      requiredKnowledgePointCount: required,
-      passedKnowledgePointCount: passed,
+      requiredKnowledgePointCount: result.requiredKnowledgePointCount,
+      passedKnowledgePointCount: result.passedKnowledgePointCount,
+      summary: result.summary,
     });
   } catch (e) {
     logError(`GET role-simulation entry traceId=${req.traceId}`, e);
@@ -293,10 +292,11 @@ router.post('/student/personal-classes/:classId/role-simulation/simulate/stream'
 
   try {
     const prerequisiteModuleKey = 'simulation';
-    const knowledgePointIds = await loadPrerequisiteKnowledgePointIds(ctx.pool, prerequisiteModuleKey);
-    const passed = await countPassedKnowledgePoints(ctx.pool, ctx.sid, knowledgePointIds);
-    if (knowledgePointIds.length > 0 && passed < knowledgePointIds.length) {
-      sseWrite(res, 'error', { message: '请先完成本环节实践课程的知识点检测后再开始仿真模拟。' });
+    const prereq = await evaluateModulePrerequisiteForStudent(ctx.pool, ctx.sid, prerequisiteModuleKey);
+    if (!prereq.allowed) {
+      sseWrite(res, 'error', {
+        message: prereq.summary || '请先完成本环节实践课程学习及知识点检测后再开始仿真模拟。',
+      });
       return res.end();
     }
 

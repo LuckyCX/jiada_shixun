@@ -86,6 +86,7 @@ const designTools: DesignTool[] = [
 type ProductDesignModuleProps = {
   classId?: string;
   isTeamLeader?: boolean;
+  trainingEnded?: boolean;
   onSuggestionGenerated?: () => void;
   onTeamPrototypeUploaded?: () => void;
   onProductTabProgress?: (doneCount: number) => void;
@@ -164,6 +165,7 @@ function SuggestionView({ payload }: { payload: ProductSuggestionPayload }) {
 export default function ProductDesignModule({
   classId = '',
   isTeamLeader = false,
+  trainingEnded = false,
   onSuggestionGenerated,
   onTeamPrototypeUploaded,
   onProductTabProgress,
@@ -547,6 +549,7 @@ export default function ProductDesignModule({
                   type="button"
                   onClick={() => void handleGenerateAISuggestions()}
                   disabled={
+                    trainingEnded ||
                     isGeneratingSuggestions ||
                     projectContext.trim().length < MIN_PROJECT_CONTEXT_CHARS ||
                     !classId
@@ -725,6 +728,7 @@ export default function ProductDesignModule({
                 type="file"
                 accept=".zip,application/zip"
                 className="hidden"
+                disabled={trainingEnded}
                 onChange={handleZipInputChange}
               />
 
@@ -748,7 +752,7 @@ export default function ProductDesignModule({
                   <button
                     type="button"
                     onClick={() => void handleLeaderPickZip()}
-                    disabled={uploadingZip || !classId}
+                    disabled={trainingEnded || uploadingZip || !classId}
                     className="inline-flex items-center px-6 py-3 bg-orange-500 text-white text-sm font-medium rounded-lg hover:bg-orange-600 disabled:opacity-50"
                   >
                     {uploadingZip ? (
@@ -878,7 +882,7 @@ export default function ProductDesignModule({
       </Modal>
 
       {/* 可获得能力点 */}
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+      {/* <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
         <h3 className="text-lg font-bold text-gray-900 mb-5 flex items-center gap-2">
           <i className="ri-medal-line text-teal-600"></i>可获得能力点
         </h3>
@@ -893,7 +897,7 @@ export default function ProductDesignModule({
             </div>
           ))}
         </div>
-      </div>
+      </div> */}
     </div>
   );
 }

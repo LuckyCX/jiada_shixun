@@ -947,7 +947,7 @@ export default function TeamFormationModule({ classId, className, initialSubTab,
                   </div>
 
                   {/* 协作空间 */}
-                  {myTeam.status === 'active' && (
+                  {/* {myTeam.status === 'active' && (
                     <div className="bg-white border-2 border-gray-100 rounded-xl p-4">
                       <h3 className="text-sm font-bold text-gray-900 mb-3 flex items-center gap-2">
                         <i className="ri-apps-line text-teal-600"></i>团队协作空间
@@ -967,7 +967,7 @@ export default function TeamFormationModule({ classId, className, initialSubTab,
                         ))}
                       </div>
                     </div>
-                  )}
+                  )} */}
                 </>
               )}
             </div>

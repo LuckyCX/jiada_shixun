@@ -17,6 +17,12 @@ import {
   TRAINING_MODULE_CATALOG_KEYS,
 } from '../../lib/studentCourseCatalog';
 import {
+  evaluateModulePrerequisite,
+  canStartKnowledgeQuiz,
+  isTrackableLearningResource,
+  COURSE_GATE_PERCENT,
+} from '../../lib/trainingModulePrerequisite';
+import {
   fetchStudentNotifications,
   markStudentNotificationRead,
   type StudentNotificationRow,
@@ -39,6 +45,8 @@ import ProductDesignModule from './components/ProductDesignModule';
 import BusinessModelModule from './components/BusinessModelModule';
 import RoleSimulationModule from './components/RoleSimulationModule';
 import BusinessPlanModule from './components/BusinessPlanModule';
+import { fetchBusinessPlanSubmissionStatus } from '../../lib/studentBusinessPlanApi';
+import { fetchStudentArchive, type ArchiveRecord, type ArchiveStats } from '../../lib/studentArchiveApi';
 import {
   fetchStudentPersonalEnrollments,
   getStudentProfile,
@@ -173,14 +181,11 @@ const mergeResourceProgress = (
   };
 };
 
-const isTrackableLearningResource = (resource: LearningDetailResource) =>
-  resource.type !== 'archive' && resource.previewType !== 'archive';
-
 const isRealLearningResource = (resource: LearningDetailResource) =>
   !resource.id.startsWith('node-');
 
 const calculateKnowledgeResourceProgress = (resources: LearningDetailResource[]) => {
-  const trackable = resources.filter(isTrackableLearningResource);
+  const trackable = resources.filter((r) => isTrackableLearningResource(r));
   if (trackable.length === 0) return 0;
   return Math.round(
     trackable.reduce((sum, resource) => sum + normalizeResourceProgress(resource.progress).progressPercent, 0) / trackable.length,
@@ -286,6 +291,16 @@ export default function StudentCenterPage() {
   const [studentMarketChallengeDone, setStudentMarketChallengeDone] = useState(false);
   const [teamMarketReportUploaded, setTeamMarketReportUploaded] = useState(false);
   const [teamProductPrototypeUploaded, setTeamProductPrototypeUploaded] = useState(false);
+  const [teamPlanApproved, setTeamPlanApproved] = useState(false);
+  const [trainingEnded, setTrainingEnded] = useState(false);
+  const [archiveLoading, setArchiveLoading] = useState(false);
+  const [archiveStats, setArchiveStats] = useState<ArchiveStats>({
+    knowledgeCount: 0,
+    caseCount: 0,
+    taskCount: 0,
+    evaluationCount: 0,
+  });
+  const [archiveRecords, setArchiveRecords] = useState<ArchiveRecord[]>([]);
   const [unlockStageModalModuleId, setUnlockStageModalModuleId] = useState<string | null>(null);
   const [catalogResourceNodesByModule, setCatalogResourceNodesByModule] = useState<
     Record<string, TaskResourceNode[]>
@@ -329,6 +344,8 @@ export default function StudentCenterPage() {
       setIdeationTopicApproved(false);
       setTeamMarketReportUploaded(false);
       setTeamProductPrototypeUploaded(false);
+      setTeamPlanApproved(false);
+      setTrainingEnded(false);
       return;
     }
     const token = getPortalToken('student');
@@ -349,10 +366,12 @@ export default function StudentCenterPage() {
           setIdeationTopicApproved(false);
           setTeamMarketReportUploaded(false);
           setTeamProductPrototypeUploaded(false);
+          setTeamPlanApproved(false);
+          setTrainingEnded(false);
           return;
         }
 
-        const [ideationRes, marketSt, productSt, businessWs, simRecords] = await Promise.all([
+        const [ideationRes, marketSt, productSt, businessWs, simRecords, planSt] = await Promise.all([
           fetchStudentIdeationProjectTopic(selectedClassId).catch(() => null),
           fetchTeamMarketReportUploadStatus(selectedClassId).catch(() => ({ uploaded: false })),
           fetchTeamProductPrototypeStatus(selectedClassId).catch(() => ({ uploaded: false })),
@@ -360,6 +379,10 @@ export default function StudentCenterPage() {
           import('../../lib/roleSimulationApi')
             .then((m) => m.fetchRoleSimulationRecords(selectedClassId))
             .catch(() => null),
+          fetchBusinessPlanSubmissionStatus(selectedClassId).catch(() => ({
+            submission: null,
+            trainingEnded: false,
+          })),
         ]);
 
         setIdeationTopicApproved(ideationRes?.topic?.status === 'approved');
@@ -372,24 +395,62 @@ export default function StudentCenterPage() {
           );
         }
 
-        if (simRecords && currentStudentId) {
+        if (simRecords && studentId) {
           const threshold = MODULE_COMPLETE_THRESHOLD.simulation ?? 4;
-          const my = (simRecords.progress || []).find((p: any) => p.studentId === currentStudentId);
+          const my = (simRecords.progress || []).find((p: any) => p.studentId === studentId);
           const myEffective = Math.max(0, Number(my?.effectiveRounds || 0));
           const done = simRecords.teamQualified ? threshold : Math.min(threshold - 1, myEffective);
           setModuleProgressState((s) => (s.simulation === done ? s : { ...s, simulation: done }));
         } else {
           setModuleProgressState((s) => (s.simulation === 0 ? s : { ...s, simulation: 0 }));
         }
+
+        setTeamPlanApproved(planSt?.submission?.status === 'approved');
+        setTrainingEnded(Boolean(planSt?.trainingEnded));
       } catch {
         setTeamFormationComplete(false);
         setOverviewMyTeam(null);
         setIdeationTopicApproved(false);
         setTeamMarketReportUploaded(false);
         setTeamProductPrototypeUploaded(false);
+        setTeamPlanApproved(false);
+        setTrainingEnded(false);
       }
     })();
   }, [selectedClassId]);
+
+  useEffect(() => {
+    if (activeTab !== 'archive' || !selectedClassId) {
+      setArchiveLoading(false);
+      setArchiveStats({ knowledgeCount: 0, caseCount: 0, taskCount: 0, evaluationCount: 0 });
+      setArchiveRecords([]);
+      return;
+    }
+    let cancelled = false;
+    setArchiveLoading(true);
+    void fetchStudentArchive(selectedClassId, { limit: 80 })
+      .then((data) => {
+        if (cancelled) return;
+        setArchiveStats({
+          knowledgeCount: Number(data?.stats?.knowledgeCount || 0),
+          caseCount: Number(data?.stats?.caseCount || 0),
+          taskCount: Number(data?.stats?.taskCount || 0),
+          evaluationCount: Number(data?.stats?.evaluationCount || 0),
+        });
+        setArchiveRecords(Array.isArray(data?.records) ? data.records : []);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setArchiveStats({ knowledgeCount: 0, caseCount: 0, taskCount: 0, evaluationCount: 0 });
+        setArchiveRecords([]);
+      })
+      .finally(() => {
+        if (!cancelled) setArchiveLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, selectedClassId]);
 
   const refreshTeamFormationComplete = refreshTrainingStageSnapshot;
 
@@ -584,6 +645,7 @@ export default function StudentCenterPage() {
     if (moduleId === 'ideation') return ideationTopicApproved || (moduleProgressState.ideation || 0) >= (MODULE_COMPLETE_THRESHOLD.ideation ?? 99);
     if (moduleId === 'market') return teamMarketReportUploaded;
     if (moduleId === 'product') return teamProductPrototypeUploaded;
+    if (moduleId === 'plan') return teamPlanApproved || (moduleProgressState.plan || 0) >= (MODULE_COMPLETE_THRESHOLD.plan ?? 99);
     const val = moduleProgressState[moduleId] || 0;
     return val >= (MODULE_COMPLETE_THRESHOLD[moduleId] ?? 99);
   };
@@ -799,14 +861,7 @@ export default function StudentCenterPage() {
     { id: 'plan', name: '商业计划', color: 'bg-gradient-to-r from-teal-600 to-cyan-600' },
   ];
 
-  const learningRecords = [
-    { id: 'r1', type: 'knowledge' as const, title: '创新思维方法学习', module: '创新思维与创意生成', date: '2024-12-15', duration: '45分钟', status: '已完成', score: undefined as number | undefined },
-    { id: 'r2', type: 'case' as const, title: '参考案例：共享单车创新', module: '创新思维与创意生成', date: '2024-12-16', duration: '30分钟', status: '已完成', score: undefined as number | undefined },
-    { id: 'r3', type: 'task' as const, title: '创意筛选报告提交', module: '创新思维与创意生成', date: '2024-12-18', duration: undefined as string | undefined, status: '优秀', score: undefined as number | undefined },
-    { id: 'r4', type: 'evaluation' as const, title: '创意筛选报告评价', module: '创新思维与创意生成', date: '2024-12-20', duration: undefined as string | undefined, status: '优秀', score: 95 },
-    { id: 'r5', type: 'knowledge' as const, title: '市场调研方法学习', module: '市场调研与用户画像', date: '2024-12-22', duration: '50分钟', status: '已完成', score: undefined as number | undefined },
-    { id: 'r6', type: 'task' as const, title: '调研问卷设计', module: '市场调研与用户画像', date: '2024-12-25', duration: undefined as string | undefined, status: '已通过', score: undefined as number | undefined },
-  ];
+  // 学习档案数据来自后端接口（archiveStats / archiveRecords）
 
   const handleQuizPass = (
     knowledgeId: string,
@@ -837,16 +892,11 @@ export default function StudentCenterPage() {
   };
 
   const handleKnowledgeQuizClick = (kp: KnowledgeCardData) => {
-    if (completedKnowledgeIds.has(kp.id)) {
-      void startKnowledgeQuiz(kp.id);
-      return;
-    }
-    const hasLearningResource = selectedChapterResources.some((resource) => isRealLearningResource(resource) && isTrackableLearningResource(resource));
-    const learningProgress = calculateKnowledgeResourceProgress(selectedChapterResources);
-    if (hasLearningResource && learningProgress <= 80) {
+    const catalogLeaves = getCatalogLeavesWithProgress(selectedModule);
+    if (!canStartKnowledgeQuiz(kp.id, catalogLeaves)) {
       notification.warning({
-        message: '学习进度不足',
-        description: '进度不够，请先去学习。',
+        message: '暂不可检测',
+        description: `请先完成对应小节课程学习至 ${COURSE_GATE_PERCENT}% 后再进行知识点检测。`,
       });
       return;
     }
@@ -938,7 +988,7 @@ export default function StudentCenterPage() {
   const learningMenuItems = [
     { key: 'overview' as TabType, label: '进度看板', icon: 'ri-dashboard-line' },
     { key: 'knowledge' as TabType, label: '实践课程', icon: 'ri-book-2-line' },
-    { key: 'ability' as TabType, label: '能力点管理', icon: 'ri-medal-line' },
+    // { key: 'ability' as TabType, label: '能力点管理', icon: 'ri-medal-line' },
     { key: 'archive' as TabType, label: '学习档案', icon: 'ri-folder-line' },
     // { key: 'notifications' as TabType, label: '消息通知', icon: 'ri-notification-line' },
   ];
@@ -1361,8 +1411,37 @@ export default function StudentCenterPage() {
   const getTaskKnowledgePointIds = (task: StudentTodoTask) => [
     ...new Set((task.resourceNodes || []).flatMap((node) => node.knowledgePoints.map((point) => point.id))),
   ];
-  const isTaskKnowledgeCompleted = (task: TodoListItem) =>
-    task.knowledgePointIds.length > 0 && task.knowledgePointIds.every((id) => completedKnowledgeIds.has(id));
+  const getCatalogLeavesWithProgress = useCallback((moduleId: string) => {
+    const leaves = catalogResourceNodesByModule[moduleId] || [];
+    if (!leaves.length) return leaves;
+    return leaves.map((leaf) => ({
+      ...leaf,
+      resources: (leaf.resources || []).map((resource) => {
+        const meta = resource as typeof resource & Partial<LearningDetailResource>;
+        return {
+          ...resource,
+          progress: mergeResourceProgress(meta.progress, resourceProgressOverrides[resource.id]),
+        };
+      }),
+    }));
+  }, [catalogResourceNodesByModule, resourceProgressOverrides]);
+
+  const isModuleTrainingPrerequisiteMet = (moduleId: string | undefined) => {
+    if (!moduleId) return true;
+    const leaves = getCatalogLeavesWithProgress(moduleId);
+    if (!leaves.length) return true;
+    return evaluateModulePrerequisite(leaves, completedKnowledgeIds).allowed;
+  };
+
+  const isTaskPrerequisiteMet = (task: TodoListItem) => {
+    if (task.trainingModuleId) {
+      return isModuleTrainingPrerequisiteMet(task.trainingModuleId);
+    }
+    if (task.knowledgePointIds.length > 0) {
+      return task.knowledgePointIds.every((id) => completedKnowledgeIds.has(id));
+    }
+    return true;
+  };
 
   const todoTasks: TodoListItem[] = studentTodoTasks.map((t) => ({
     id: t.id,
@@ -1392,34 +1471,19 @@ export default function StudentCenterPage() {
   const knowledgeCompletionPercent = knowledgePoints.length
     ? Math.round((completedKnowledgeCount / knowledgePoints.length) * 100)
     : 0;
-  const pendingLinkedTaskCount = linkedCourseTasks.filter((task) => !isTaskKnowledgeCompleted(task)).length;
-
-  const getModulePrerequisiteTask = (moduleId: string) =>
-    todoTasks.find(
-      (task) =>
-        task.trainingModuleId === moduleId &&
-        task.resourceNodes.length > 0 &&
-        task.knowledgePointIds.length > 0 &&
-        !isTaskKnowledgeCompleted(task)
-    );
-
-  /** 是否存在来自全局课程目录的未完成知识点（不依赖班级待办任务） */
-  const hasCatalogKnowledgePending = (moduleId: string): boolean => {
-    const nodes = catalogResourceNodesByModule[moduleId] || [];
-    if (!nodes.length) return false;
-    const kpIds = nodes.flatMap((n) => n.knowledgePoints.map((k) => k.id));
-    return kpIds.length > 0 && !kpIds.every((id) => completedKnowledgeIds.has(id));
-  };
+  const pendingLinkedTaskCount = linkedCourseTasks.filter((task) => !isTaskPrerequisiteMet(task)).length;
 
   const activeTrainingModuleId = activeTab.startsWith('module-') ? TAB_TO_MODULE_ID[activeTab] : undefined;
-  const activeModulePrerequisiteTask = activeTrainingModuleId
-    ? getModulePrerequisiteTask(activeTrainingModuleId)
-    : undefined;
-  /** 当班级待办无前置任务、但课程目录有未完成知识点时也应拦截 */
-  const activeModuleCatalogPending =
-    !activeModulePrerequisiteTask &&
-    Boolean(activeTrainingModuleId && hasCatalogKnowledgePending(activeTrainingModuleId));
-  const shouldBlockModule = Boolean(activeModulePrerequisiteTask) || activeModuleCatalogPending;
+  const activeModulePrereq = useMemo(() => {
+    if (!activeTrainingModuleId) return null;
+    const leaves = getCatalogLeavesWithProgress(activeTrainingModuleId);
+    if (!leaves.length) return null;
+    return evaluateModulePrerequisite(leaves, completedKnowledgeIds);
+  }, [activeTrainingModuleId, completedKnowledgeIds, getCatalogLeavesWithProgress]);
+
+  const shouldBlockModule = Boolean(
+    activeTab.startsWith('module-') && activeModulePrereq && !activeModulePrereq.allowed
+  );
 
   const completedStagesCount = useMemo(() => {
     let n = 0;
@@ -1431,7 +1495,7 @@ export default function StudentCenterPage() {
       }
     }
     return n;
-  }, [ideationTopicApproved, teamFormationComplete, moduleProgressState, teamMarketReportUploaded, teamProductPrototypeUploaded]);
+  }, [ideationTopicApproved, teamFormationComplete, moduleProgressState, teamMarketReportUploaded, teamProductPrototypeUploaded, teamPlanApproved]);
 
   const overallProgressPercent = Math.round((completedStagesCount / TRAINING_MODULE_ORDER.length) * 100);
 
@@ -1547,8 +1611,8 @@ export default function StudentCenterPage() {
       setUnlockStageModalModuleId(moduleId);
       return;
     }
-    const prerequisiteTask = getModulePrerequisiteTask(moduleId);
-    if (prerequisiteTask || hasCatalogKnowledgePending(moduleId)) {
+    const leaves = getCatalogLeavesWithProgress(moduleId);
+    if (leaves.length && !evaluateModulePrerequisite(leaves, completedKnowledgeIds).allowed) {
       setActiveTab(moduleKey);
       return;
     }
@@ -1587,8 +1651,19 @@ export default function StudentCenterPage() {
 
   const completeTodoDialogTask = async () => {
     if (!selectedClassId || !activeTodoDialogTask) return;
-    if (activeTodoDialogTask.resourceNodes.length > 0 && !isTaskKnowledgeCompleted(activeTodoDialogTask)) {
-      notification.warning({ message: '请先完成课程资源学习与知识点检测', placement: 'topRight' });
+    if (!isTaskPrerequisiteMet(activeTodoDialogTask)) {
+      notification.warning({
+        message: '请先完成实践课程',
+        description:
+          activeTodoDialogTask.trainingModuleId &&
+          !isModuleTrainingPrerequisiteMet(activeTodoDialogTask.trainingModuleId)
+            ? evaluateModulePrerequisite(
+                catalogResourceNodesByModule[activeTodoDialogTask.trainingModuleId] || [],
+                completedKnowledgeIds
+              ).summary || '请先完成课程学习及知识点检测'
+            : '请先完成课程资源学习与知识点检测',
+        placement: 'topRight',
+      });
       return;
     }
     if (activeTodoDialogTask.requiresStudentAttachment && taskSubmitFiles.length === 0) {
@@ -1658,6 +1733,7 @@ export default function StudentCenterPage() {
             key={selectedClassId}
             classId={selectedClassId}
             isTeamLeader={isCurrentStudentTeamLeader}
+            trainingEnded={trainingEnded}
             stagePeriod={
               getStageDateSetting('market')?.startDate && getStageDateSetting('market')?.deadlineDate
                 ? {
@@ -1689,6 +1765,7 @@ export default function StudentCenterPage() {
             key={selectedClassId}
             classId={selectedClassId}
             isTeamLeader={isCurrentStudentTeamLeader}
+            trainingEnded={trainingEnded}
             onProductTabProgress={handleProductTabProgress}
             onTeamPrototypeUploaded={() => {
               setTeamProductPrototypeUploaded(true);
@@ -1703,6 +1780,7 @@ export default function StudentCenterPage() {
             classId={selectedClassId}
             studentDisplayName={studentDisplayName}
             isTeamLeader={isCurrentStudentTeamLeader}
+            trainingEnded={trainingEnded}
             onBusinessTabProgress={handleBusinessTabProgress}
             onTaskComplete={() => completeActiveTrainingTask('business')}
           />
@@ -1712,11 +1790,22 @@ export default function StudentCenterPage() {
           <RoleSimulationModule
             key={selectedClassId}
             classId={selectedClassId}
+            trainingEnded={trainingEnded}
             onTaskComplete={() => completeActiveTrainingTask('simulation')}
           />
         );
       case 'module-plan':
-        return <BusinessPlanModule key={selectedClassId} onTaskComplete={() => completeActiveTrainingTask('plan')} />;
+        return (
+          <BusinessPlanModule
+            key={selectedClassId}
+            classId={selectedClassId}
+            isTeamLeader={isCurrentStudentTeamLeader}
+            studentDisplayName={studentDisplayName}
+            teamMemberCount={overviewMyTeam?.members.length ?? 0}
+            onTaskComplete={() => completeActiveTrainingTask('plan')}
+            onTrainingEnded={refreshTrainingStageSnapshot}
+          />
+        );
       default:
         return null;
     }
@@ -2168,10 +2257,10 @@ export default function StudentCenterPage() {
                                     ))}
                                   </div>
                                 )}
-                                {task.resourceNodes.length > 0 && !isTaskKnowledgeCompleted(task) && (
+                                {task.trainingModuleId && !isTaskPrerequisiteMet(task) && (
                                   <div className="mt-2 px-2.5 py-2 bg-teal-50 border border-teal-100 rounded-lg text-xs text-teal-700 leading-relaxed">
                                     <i className="ri-book-open-line mr-1"></i>
-                                    本任务已关联实践课程，您需要先学习相关课程并完成知识点检测后，才能进行实训任务。
+                                    请先完成该环节实践课程学习（小节进度达 {COURSE_GATE_PERCENT}%）及知识点检测后再进行实训任务。
                                   </div>
                                 )}
                               </div>
@@ -2424,11 +2513,11 @@ export default function StudentCenterPage() {
                           const noCourse = total === 0;
                           const isLocked = getSidebarModuleUi(mod.id).locked;
                           const isActive = !isLocked && !noCourse && completed < total;
-                          const pct = noCourse ? 100 : total > 0 ? Math.round((completed / total) * 100) : 0;
+                          const pct = noCourse ? 0 : total > 0 ? Math.round((completed / total) * 100) : 0;
                           const statusLabel = isLocked
                             ? '未解锁'
                             : noCourse
-                              ? '已完成'
+                              ? '无内容'
                               : completed === total
                                 ? '已完成'
                                 : isActive
@@ -2575,10 +2664,10 @@ export default function StudentCenterPage() {
               <div><h2 className="text-2xl font-bold text-gray-900 mb-1">学习档案</h2><p className="text-sm text-gray-500">全流程学习记录，支持筛选与导出</p></div>
               <div className="grid grid-cols-4 gap-5">
                 {[
-                  { label: '知识点学习', count: 15, icon: 'ri-book-2-line', color: 'from-teal-500 to-teal-600' },
-                  { label: '案例参考', count: 12, icon: 'ri-lightbulb-line', color: 'from-green-500 to-green-600' },
-                  { label: '实践任务', count: 10, icon: 'ri-edit-box-line', color: 'from-orange-500 to-orange-600' },
-                  { label: '教师评价', count: 8, icon: 'ri-star-line', color: 'from-purple-500 to-purple-600' },
+                  { label: '知识点学习', count: archiveStats.knowledgeCount, icon: 'ri-book-2-line', color: 'from-teal-500 to-teal-600' },
+                  { label: '案例参考', count: archiveStats.caseCount, icon: 'ri-lightbulb-line', color: 'from-green-500 to-green-600' },
+                  { label: '实践任务', count: archiveStats.taskCount, icon: 'ri-edit-box-line', color: 'from-orange-500 to-orange-600' },
+                  { label: '教师评价', count: archiveStats.evaluationCount, icon: 'ri-star-line', color: 'from-purple-500 to-purple-600' },
                 ].map((stat, index) => (
                   <div key={index} className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5 hover:shadow-md transition-all">
                     <div className="flex items-center justify-between mb-3">
@@ -2592,36 +2681,41 @@ export default function StudentCenterPage() {
               <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
                 <div className="flex items-center justify-between mb-5">
                   <h3 className="text-lg font-bold text-gray-900 flex items-center gap-2"><i className="ri-time-line text-teal-600"></i>学习记录时间线</h3>
-                  <div className="flex items-center gap-2">
+                  {/* <div className="flex items-center gap-2">
                     <button className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-sm font-medium transition-all whitespace-nowrap cursor-pointer"><i className="ri-filter-line mr-1.5"></i>筛选</button>
                     <button className="px-4 py-2 bg-gradient-to-r from-teal-500 to-cyan-600 text-white rounded-lg text-sm font-medium hover:shadow-md transition-all whitespace-nowrap cursor-pointer"><i className="ri-download-line mr-1.5"></i>导出档案</button>
-                  </div>
+                  </div> */}
                 </div>
                 <div className="relative">
                   <div className="absolute left-8 top-0 bottom-0 w-0.5 bg-gradient-to-b from-teal-500 to-cyan-600"></div>
-                  <div className="space-y-5">
-                    {learningRecords.map((record) => (
-                      <div key={record.id} className="relative pl-20">
-                        <div className={`absolute left-0 w-16 h-16 bg-gradient-to-br ${getRecordColor(record.type)} rounded-2xl flex items-center justify-center shadow-md`}><i className={`${getRecordIcon(record.type)} text-2xl text-white`}></i></div>
-                        <div className="bg-gray-50 rounded-xl p-5 hover:shadow-sm transition-all">
-                          <div className="flex items-start justify-between mb-2">
-                            <div className="flex-1">
-                              <div className="flex items-center gap-2 mb-1">
-                                <h4 className="text-base font-bold text-gray-900">{record.title}</h4>
-                                {record.score && <span className="px-2 py-0.5 bg-green-100 text-green-700 rounded-lg text-xs font-medium">{record.score}分</span>}
+                  {archiveLoading ? (
+                    <div className="py-10 text-center text-sm text-gray-500">加载中…</div>
+                  ) : archiveRecords.length === 0 ? (
+                    <div className="py-10 text-center text-sm text-gray-500">暂无学习记录</div>
+                  ) : (
+                    <div className="space-y-5">
+                      {archiveRecords.map((record) => (
+                        <div key={record.id} className="relative pl-20">
+                          <div className={`absolute left-0 w-16 h-16 bg-gradient-to-br ${getRecordColor(record.type)} rounded-2xl flex items-center justify-center shadow-md`}><i className={`${getRecordIcon(record.type)} text-2xl text-white`}></i></div>
+                          <div className="bg-gray-50 rounded-xl p-5 hover:shadow-sm transition-all">
+                            <div className="flex items-start justify-between mb-2">
+                              <div className="flex-1">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <h4 className="text-base font-bold text-gray-900">{record.title}</h4>
+                                  {record.score != null && <span className="px-2 py-0.5 bg-green-100 text-green-700 rounded-lg text-xs font-medium">{record.score}分</span>}
+                                </div>
+                                <div className="flex items-center gap-4 text-xs text-gray-500">
+                                  <span><i className="ri-folder-line mr-1"></i>{record.module}</span>
+                                  <span><i className="ri-calendar-line mr-1"></i>{record.date}</span>
+                                </div>
                               </div>
-                              <div className="flex items-center gap-4 text-xs text-gray-500">
-                                <span><i className="ri-folder-line mr-1"></i>{record.module}</span>
-                                <span><i className="ri-calendar-line mr-1"></i>{record.date}</span>
-                                {record.duration && <span><i className="ri-time-line mr-1"></i>{record.duration}</span>}
-                              </div>
+                              <span className="px-2 py-0.5 rounded-lg text-xs font-medium bg-gray-100 text-gray-600">{record.status}</span>
                             </div>
-                            <span className={`px-2 py-0.5 rounded-lg text-xs font-medium ${record.status === '优秀' ? 'bg-green-100 text-green-700' : record.status === '已通过' ? 'bg-teal-100 text-teal-700' : 'bg-gray-100 text-gray-600'}`}>{record.status}</span>
                           </div>
                         </div>
-                      </div>
-                    ))}
-                  </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -2806,10 +2900,10 @@ export default function StudentCenterPage() {
                 </div>
               </div>
             )}
-            {activeTodoDialogTask.resourceNodes.length > 0 && !isTaskKnowledgeCompleted(activeTodoDialogTask) && (
+            {activeTodoDialogTask.trainingModuleId && !isTaskPrerequisiteMet(activeTodoDialogTask) && (
               <div className="rounded-xl bg-teal-50 border border-teal-100 p-4">
                 <p className="text-sm text-teal-700 leading-relaxed">
-                  当前任务所属实训阶段已配置课程资源，请先完成课程资源学习与知识点检测后再标记完成。
+                  请先完成该环节实践课程学习及知识点检测后再标记完成。
                 </p>
                 <button
                   type="button"
@@ -2887,13 +2981,14 @@ export default function StudentCenterPage() {
       >
         <div className="space-y-5">
           <p className="text-sm text-gray-600 leading-relaxed">
-            当前实训阶段已关联实践课程，您需要先学习相关课程并完成知识点检测后才能进行实训任务。
+            {activeModulePrereq?.summary ||
+              `当前实训阶段已关联实践课程，请先完成课程学习（各小节达 ${COURSE_GATE_PERCENT}%）及知识点检测后再进行实训任务。`}
           </p>
           <button
             type="button"
             onClick={() => {
-              const moduleId = activeModulePrerequisiteTask?.trainingModuleId || activeTrainingModuleId || 'ideation';
-              const taskId = activeModulePrerequisiteTask?.id || null;
+              const moduleId = activeTrainingModuleId || 'ideation';
+              const taskId = null;
               setActiveCourseTaskId(taskId);
               setActiveTab('knowledge');
               setKnowledgeSubTab('knowledge');

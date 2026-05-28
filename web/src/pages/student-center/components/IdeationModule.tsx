@@ -1341,7 +1341,7 @@ export default function IdeationModule({
               ))}
             </div>
             <div
-              className="prose max-w-none overflow-x-hidden break-words [&_*]:max-w-full [&_img]:h-auto [&_table]:w-full"
+              className="prose max-w-none overflow-x-hidden break-words [&_*]:max-w-full [&_img]:h-auto [&_table]:w-full [&_table]:border-collapse [&_table]:border [&_th]:border [&_td]:border [&_th]:border-gray-200 [&_td]:border-gray-200"
               dangerouslySetInnerHTML={{ __html: sanitizeRichText(previewCase.detailHtml) }}
             />
             <div className="rounded-lg bg-green-50 border border-green-200 p-3">

@@ -16,9 +16,10 @@ type Props = {
   method: string;
   /** 卡片内嵌：隐藏格式说明、列表默认折叠 */
   compact?: boolean;
+  disabled?: boolean;
 };
 
-export default function MarketResearchMethodUpload({ classId, method, compact = false }: Props) {
+export default function MarketResearchMethodUpload({ classId, method, compact = false, disabled = false }: Props) {
   const [items, setItems] = useState<MethodUploadItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -73,6 +74,7 @@ export default function MarketResearchMethodUpload({ classId, method, compact = 
       })();
       return Upload.LIST_IGNORE;
     },
+    disabled: uploading || disabled,
   };
 
   const fileTable = (
@@ -155,7 +157,7 @@ export default function MarketResearchMethodUpload({ classId, method, compact = 
         />
       )}
 
-      <Upload.Dragger {...uploadProps} disabled={uploading} className={compact ? '!py-3' : undefined}>
+      <Upload.Dragger {...uploadProps} disabled={uploading || disabled} className={compact ? '!py-3' : undefined}>
         <p className="ant-upload-drag-icon">
           <i className={`ri-upload-cloud-2-line text-green-500 ${compact ? 'text-2xl' : 'text-3xl'}`}></i>
         </p>

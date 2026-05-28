@@ -1,7 +1,9 @@
 import { TeamProject } from './TeamCard';
 import { useState } from 'react';
+import { fetchTeacherMonitorTeamSubmissions, type TeacherMonitorSubmissionItem } from '../../../lib/teacherMonitorApi';
 
 interface TeamDetailModalProps {
+  classId: string;
   team: TeamProject;
   onClose: () => void;
   onIntervene: (team: TeamProject) => void;
@@ -13,7 +15,6 @@ const stages = [
   { id: 'marketResearch', name: '市场调研与用户画像', icon: 'ri-search-line', color: 'from-teal-500 to-cyan-500' },
   { id: 'productDesign', name: '产品设计与原型', icon: 'ri-pencil-ruler-2-line', color: 'from-green-500 to-emerald-500' },
   { id: 'businessModel', name: '商业模式设计', icon: 'ri-bar-chart-box-line', color: 'from-indigo-500 to-purple-500' },
-  { id: 'aiValidation', name: 'AI逻辑验证', icon: 'ri-robot-line', color: 'from-pink-500 to-rose-500' },
   { id: 'roleSimulation', name: '项目仿真与角色推荐', icon: 'ri-user-star-line', color: 'from-orange-500 to-red-500' },
   { id: 'businessPlan', name: '商业计划书与PPT', icon: 'ri-file-text-line', color: 'from-cyan-500 to-teal-500' },
 ];
@@ -31,65 +32,23 @@ const evalColor = {
   passed: 'bg-green-100 text-green-700',
 };
 
-// 模拟提交记录数据
-const mockSubmissions = [
-  {
-    id: 1,
-    stage: '商业模式设计',
-    submitTime: '2024-03-18 14:30',
-    version: 'v3.0',
-    content: '完成商业画布设计，明确价值主张、客户细分、渠道通路等9大模块。收入来源包括配送费、会员费、广告收入三部分，预计首年营收120万元。',
-    attachments: ['商业画布.pdf', '财务预测表.xlsx'],
-    status: 'passed' as const,
-    teacherComment: '商业模式清晰完整，财务预测合理。建议进一步细化成本结构，加强风险控制方案。',
-    score: 88,
-  },
-  {
-    id: 2,
-    stage: '产品设计与原型',
-    submitTime: '2024-03-12 16:45',
-    version: 'v2.1',
-    content: '完成产品原型设计，包含用户注册、下单、支付、配送追踪等核心功能。优化了UI界面，简化了下单流程从5步减少到3步。',
-    attachments: ['产品原型.fig', '交互说明文档.pdf'],
-    status: 'passed' as const,
-    teacherComment: '原型设计完整，交互流程合理。用户体验优化效果明显，建议补充异常场景处理方案。',
-    score: 92,
-  },
-  {
-    id: 3,
-    stage: '市场调研与用户画像',
-    submitTime: '2024-03-05 10:20',
-    version: 'v1.0',
-    content: '完成问卷调研300份，深度访谈15人。目标用户定位为18-25岁在校大学生，主要需求是快速便捷的校园配送服务。',
-    attachments: ['调研报告.pdf', '用户画像.png', '问卷数据.xlsx'],
-    status: 'reviewed' as const,
-    teacherComment: '调研方法科学，数据分析深入。用户画像精准，建议扩大样本量以提高数据可信度。',
-    score: 85,
-  },
-  {
-    id: 4,
-    stage: '创新思维与创意生成',
-    submitTime: '2024-02-28 09:15',
-    version: 'v1.0',
-    content: '运用SCAMPER、头脑风暴等方法生成20+创意方案，最终确定"15分钟校园极速配送"作为核心创意点。',
-    attachments: ['创意方案集.pdf'],
-    status: 'returned' as const,
-    teacherComment: '创意生成方法运用得当，但核心创意的可行性分析不足。请补充竞品分析和技术可行性论证后重新提交。',
-    score: null,
-  },
-];
-
-export default function TeamDetailModal({ team, onClose, onIntervene }: TeamDetailModalProps) {
+export default function TeamDetailModal({ classId, team, onClose, onIntervene }: TeamDetailModalProps) {
   const [activeTab, setActiveTab] = useState<'overview' | 'submissions'>('overview');
-  const [evaluationText, setEvaluationText] = useState('');
-  const [selectedSubmission, setSelectedSubmission] = useState<number | null>(null);
+  const [submissions, setSubmissions] = useState<TeacherMonitorSubmissionItem[]>([]);
+  const [submissionsLoading, setSubmissionsLoading] = useState(false);
+  const [preview, setPreview] = useState<TeacherMonitorSubmissionItem | null>(null);
 
-  const handleEvaluate = (submissionId: number, action: 'pass' | 'return') => {
-    console.log(`评价提交记录 ${submissionId}:`, action, evaluationText);
-    // 这里应该调用API提交评价
-    alert(`已${action === 'pass' ? '通过' : '退回修改'}该提交`);
-    setEvaluationText('');
-    setSelectedSubmission(null);
+  const loadSubmissions = async () => {
+    if (!classId) return;
+    setSubmissionsLoading(true);
+    try {
+      const list = await fetchTeacherMonitorTeamSubmissions(classId, team.id);
+      setSubmissions(list);
+    } catch {
+      setSubmissions([]);
+    } finally {
+      setSubmissionsLoading(false);
+    }
   };
 
   return (
@@ -145,12 +104,15 @@ export default function TeamDetailModal({ team, onClose, onIntervene }: TeamDeta
             </button>
             <button
               onClick={() => setActiveTab('submissions')}
+              onMouseEnter={() => {
+                if (!submissions.length && !submissionsLoading) void loadSubmissions();
+              }}
               className={`px-4 py-2 text-sm font-medium rounded-lg transition-all cursor-pointer whitespace-nowrap ${
                 activeTab === 'submissions' ? 'bg-white text-teal-600 shadow-sm' : 'text-gray-600 hover:text-gray-900'
               }`}
             >
               <i className="ri-file-list-3-line mr-1.5"></i>提交记录
-              <span className="ml-1.5 px-1.5 py-0.5 bg-teal-100 text-teal-700 text-xs rounded-full">{mockSubmissions.length}</span>
+              <span className="ml-1.5 px-1.5 py-0.5 bg-teal-100 text-teal-700 text-xs rounded-full">{submissions.length}</span>
             </button>
           </div>
         </div>
@@ -160,7 +122,7 @@ export default function TeamDetailModal({ team, onClose, onIntervene }: TeamDeta
           {activeTab === 'overview' && (
             <>
               {/* 核心指标 */}
-              <div className="grid grid-cols-4 gap-4">
+              {/* <div className="grid grid-cols-4 gap-4">
                 {[
                   { label: '整体进度', value: `${team.overallProgress}%`, icon: 'ri-line-chart-line', color: 'from-teal-500 to-cyan-500' },
                   { label: '知识进度', value: `${team.knowledgeProgress}%`, icon: 'ri-book-open-line', color: 'from-indigo-500 to-purple-500' },
@@ -175,7 +137,7 @@ export default function TeamDetailModal({ team, onClose, onIntervene }: TeamDeta
                     <div className="text-xs text-gray-500 mt-0.5">{item.label}</div>
                   </div>
                 ))}
-              </div>
+              </div> */}
 
               {/* 成员信息 */}
               <div>
@@ -239,7 +201,7 @@ export default function TeamDetailModal({ team, onClose, onIntervene }: TeamDeta
               </div>
 
               {/* 其他统计 */}
-              <div className="grid grid-cols-3 gap-4">
+              {/* <div className="grid grid-cols-3 gap-4">
                 <div className="bg-teal-50 rounded-xl p-4 text-center">
                   <div className="text-2xl font-bold text-teal-600">{team.abilityPoints}</div>
                   <div className="text-xs text-teal-500 mt-0.5">已获能力点</div>
@@ -252,7 +214,7 @@ export default function TeamDetailModal({ team, onClose, onIntervene }: TeamDeta
                   <div className="text-2xl font-bold text-amber-600">{team.submissionCount}</div>
                   <div className="text-xs text-amber-500 mt-0.5">成果提交数</div>
                 </div>
-              </div>
+              </div> */}
 
               {/* 预警信息 */}
               {team.warnings.length > 0 && (
@@ -277,7 +239,9 @@ export default function TeamDetailModal({ team, onClose, onIntervene }: TeamDeta
           {/* 提交记录Tab */}
           {activeTab === 'submissions' && (
             <div className="space-y-4">
-              {mockSubmissions.length === 0 ? (
+              {submissionsLoading ? (
+                <div className="text-center py-12 text-gray-500 text-sm">加载中…</div>
+              ) : submissions.length === 0 ? (
                 <div className="text-center py-12">
                   <div className="w-16 h-16 mx-auto mb-4 bg-gray-100 rounded-2xl flex items-center justify-center">
                     <i className="ri-file-list-3-line text-3xl text-gray-400"></i>
@@ -285,124 +249,92 @@ export default function TeamDetailModal({ team, onClose, onIntervene }: TeamDeta
                   <p className="text-gray-500 text-sm">暂无提交记录</p>
                 </div>
               ) : (
-                mockSubmissions.map((submission) => (
+                submissions.map((submission) => (
                   <div key={submission.id} className="border border-gray-200 rounded-xl p-5 hover:shadow-md transition-all">
                     {/* 提交头部 */}
                     <div className="flex items-start justify-between mb-3">
                       <div className="flex-1">
                         <div className="flex items-center gap-2 mb-1">
-                          <h4 className="text-base font-bold text-gray-900">{submission.stage}</h4>
-                          <span className="px-2 py-0.5 bg-gray-100 text-gray-600 text-xs rounded-full">{submission.version}</span>
-                          <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${
-                            submission.status === 'passed' ? 'bg-green-100 text-green-700' :
-                            submission.status === 'reviewed' ? 'bg-teal-100 text-teal-700' :
-                            'bg-red-100 text-red-700'
-                          }`}>
-                            {submission.status === 'passed' ? '✓ 已通过' : submission.status === 'reviewed' ? '已评阅' : '已退回'}
+                          <h4 className="text-base font-bold text-gray-900">{submission.title}</h4>
+                          <span className="px-2 py-0.5 bg-gray-100 text-gray-600 text-xs rounded-full">
+                            {submission.stageName}
                           </span>
-                          {submission.score !== null && (
-                            <span className="ml-auto text-lg font-bold text-teal-600">{submission.score} 分</span>
-                          )}
                         </div>
-                        <p className="text-xs text-gray-400">提交时间：{submission.submitTime}</p>
+                        <p className="text-xs text-gray-400">提交时间：{submission.submitTime || '-'}</p>
                       </div>
                     </div>
 
                     {/* 提交内容 */}
                     <div className="bg-gray-50 rounded-lg p-4 mb-3">
-                      <p className="text-sm text-gray-700 leading-relaxed">{submission.content}</p>
+                      {submission.kind === 'file' ? (
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="text-sm font-medium text-gray-800 truncate">{submission.file.name}</div>
+                            <div className="text-xs text-gray-500 mt-0.5">文件提交</div>
+                          </div>
+                          <a
+                            href={submission.file.downloadUrl}
+                            className="px-3 py-2 bg-white border border-gray-200 rounded-lg text-xs font-medium text-gray-700 hover:bg-gray-50 whitespace-nowrap"
+                          >
+                            <i className="ri-download-line mr-1.5"></i>下载
+                          </a>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setPreview(submission)}
+                          className="w-full text-left text-sm text-gray-700 leading-relaxed cursor-pointer"
+                        >
+                          点击预览内容
+                        </button>
+                      )}
                     </div>
 
-                    {/* 附件 */}
-                    {submission.attachments.length > 0 && (
+                    {/* 附件（仅 mixed） */}
+                    {submission.kind === 'mixed' && submission.files?.length > 0 && (
                       <div className="mb-3">
                         <h5 className="text-xs font-bold text-gray-700 mb-2">附件：</h5>
                         <div className="flex flex-wrap gap-2">
-                          {submission.attachments.map((file, idx) => (
-                            <div key={idx} className="flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-200 rounded-lg text-xs text-gray-700 hover:bg-gray-50 transition-colors cursor-pointer">
+                          {submission.files.map((file, idx) => (
+                            <a
+                              key={idx}
+                              href={file.downloadUrl}
+                              className="flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-200 rounded-lg text-xs text-gray-700 hover:bg-gray-50 transition-colors cursor-pointer"
+                            >
                               <i className="ri-file-line text-teal-500"></i>
-                              <span>{file}</span>
+                              <span>{file.name}</span>
                               <i className="ri-download-line text-gray-400"></i>
-                            </div>
+                            </a>
                           ))}
                         </div>
-                      </div>
-                    )}
-
-                    {/* 教师评价 */}
-                    {submission.teacherComment && (
-                      <div className={`rounded-lg p-4 border ${
-                        submission.status === 'passed' ? 'bg-green-50 border-green-200' :
-                        submission.status === 'reviewed' ? 'bg-teal-50 border-teal-200' :
-                        'bg-red-50 border-red-200'
-                      }`}>
-                        <div className="flex items-start gap-2">
-                          <i className={`text-base mt-0.5 ${
-                            submission.status === 'passed' ? 'ri-checkbox-circle-line text-green-600' :
-                            submission.status === 'reviewed' ? 'ri-chat-check-line text-teal-600' :
-                            'ri-error-warning-line text-red-600'
-                          }`}></i>
-                          <div className="flex-1">
-                            <h5 className={`text-xs font-bold mb-1 ${
-                              submission.status === 'passed' ? 'text-green-900' :
-                              submission.status === 'reviewed' ? 'text-teal-900' :
-                              'text-red-900'
-                            }`}>教师评价意见</h5>
-                            <p className={`text-sm leading-relaxed ${
-                              submission.status === 'passed' ? 'text-green-800' :
-                              submission.status === 'reviewed' ? 'text-teal-800' :
-                              'text-red-800'
-                            }`}>{submission.teacherComment}</p>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* 评价操作区（仅对未评价或需要重新评价的显示） */}
-                    {selectedSubmission === submission.id ? (
-                      <div className="mt-4 pt-4 border-t border-gray-200">
-                        <textarea
-                          value={evaluationText}
-                          onChange={(e) => setEvaluationText(e.target.value)}
-                          placeholder="请输入评价意见..."
-                          rows={3}
-                          className="w-full px-4 py-3 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 resize-none mb-3"
-                        />
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => handleEvaluate(submission.id, 'pass')}
-                            className="flex-1 px-4 py-2 bg-green-500 text-white text-sm font-medium rounded-xl hover:bg-green-600 transition-colors cursor-pointer"
-                          >
-                            <i className="ri-check-line mr-1.5"></i>通过
-                          </button>
-                          <button
-                            onClick={() => handleEvaluate(submission.id, 'return')}
-                            className="flex-1 px-4 py-2 bg-red-500 text-white text-sm font-medium rounded-xl hover:bg-red-600 transition-colors cursor-pointer"
-                          >
-                            <i className="ri-close-line mr-1.5"></i>退回修改
-                          </button>
-                          <button
-                            onClick={() => setSelectedSubmission(null)}
-                            className="px-4 py-2 bg-gray-100 text-gray-700 text-sm font-medium rounded-xl hover:bg-gray-200 transition-colors cursor-pointer"
-                          >
-                            取消
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="mt-3 pt-3 border-t border-gray-200 flex justify-end">
-                        <button
-                          onClick={() => setSelectedSubmission(submission.id)}
-                          className="px-4 py-2 bg-teal-50 text-teal-600 text-sm font-medium rounded-xl hover:bg-teal-100 transition-colors cursor-pointer"
-                        >
-                          <i className="ri-edit-line mr-1.5"></i>
-                          {submission.teacherComment ? '修改评价' : '添加评价'}
-                        </button>
                       </div>
                     )}
                   </div>
                 ))
               )}
+            </div>
+          )}
+
+          {/* 预览弹窗（数据上传） */}
+          {preview && preview.kind !== 'file' && (
+            <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4" onClick={() => setPreview(null)}>
+              <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+                <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+                  <div className="min-w-0">
+                    <div className="text-sm font-bold text-gray-900 truncate">{preview.title}</div>
+                    <div className="text-xs text-gray-500 mt-0.5">{preview.stageName}</div>
+                  </div>
+                  <button
+                    onClick={() => setPreview(null)}
+                    className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 transition-colors cursor-pointer"
+                  >
+                    <i className="ri-close-line text-lg text-gray-500"></i>
+                  </button>
+                </div>
+                <div className="p-6 max-h-[70vh] overflow-y-auto">
+                  <pre className="text-xs text-gray-700 whitespace-pre-wrap break-words">{JSON.stringify(preview.payload ?? null, null, 2)}</pre>
+                </div>
+              </div>
             </div>
           )}
 

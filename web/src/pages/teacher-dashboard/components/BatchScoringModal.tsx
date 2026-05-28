@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { submitTeacherMonitorBatchScoring } from '../../../lib/teacherMonitorApi';
 
 interface TeamProject {
   id: number;
@@ -10,9 +11,10 @@ interface TeamProject {
 }
 
 interface BatchScoringModalProps {
+  classId: string;
   teams: TeamProject[];
   onClose: () => void;
-  onSubmit: (results: { teamId: number; score: number; comment: string }[]) => void;
+  onSubmitted?: () => void;
 }
 
 const TASK_TYPES = [
@@ -26,7 +28,7 @@ const TASK_TYPES = [
   { value: 'financial-plan', label: '财务计划', icon: 'ri-money-dollar-circle-line' },
 ];
 
-export default function BatchScoringModal({ teams, onClose, onSubmit }: BatchScoringModalProps) {
+export default function BatchScoringModal({ classId, teams, onClose, onSubmitted }: BatchScoringModalProps) {
   const [selectedTask, setSelectedTask] = useState('market-research');
   const [selectedTeams, setSelectedTeams] = useState<Set<number>>(new Set());
   const [unifiedScore, setUnifiedScore] = useState('');
@@ -75,7 +77,7 @@ export default function BatchScoringModal({ teams, onClose, onSubmit }: BatchSco
     });
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     const results: { teamId: number; score: number; comment: string }[] = [];
     let hasError = false;
 
@@ -107,14 +109,21 @@ export default function BatchScoringModal({ teams, onClose, onSubmit }: BatchSco
       return;
     }
 
+    if (!classId) {
+      alert('请先选择班级');
+      return;
+    }
+
     setIsSubmitting(true);
-    setTimeout(() => {
-      setIsSubmitting(false);
+    try {
+      await submitTeacherMonitorBatchScoring(classId, { taskType: selectedTask, results });
       setSuccessMessage(`已完成 ${results.length} 个团队的评分`);
-      setTimeout(() => {
-        onSubmit(results);
-      }, 1500);
-    }, 1200);
+      if (onSubmitted) onSubmitted();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : '评分提交失败');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const currentTask = TASK_TYPES.find(t => t.value === selectedTask);

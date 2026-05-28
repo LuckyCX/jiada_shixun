@@ -207,9 +207,10 @@ type WarRoomProps = {
   classId?: string;
   studentDisplayName?: string;
   onRecordSaved?: () => void;
+  disabled?: boolean;
 };
 
-export default function WarRoom({ classId, studentDisplayName = '同学', onRecordSaved }: WarRoomProps) {
+export default function WarRoom({ classId, studentDisplayName = '同学', onRecordSaved, disabled = false }: WarRoomProps) {
   const [messages, setMessages] = useState<WarRoomDebateMessage[]>([]);
   const [canvas, setCanvas] = useState<WarRoomCanvas>(emptyCanvas);
   const [filledCount, setFilledCount] = useState(0);
@@ -749,7 +750,7 @@ export default function WarRoom({ classId, studentDisplayName = '同学', onReco
             <button
               type="button"
               onClick={handleSaveRecord}
-              disabled={!canSaveCanvas}
+              disabled={disabled || !canSaveCanvas}
               title={filledCount < WAR_ROOM_MODULE_DEFS.length ? '请先填齐九格' : undefined}
               className="px-3 py-1.5 text-xs font-medium rounded-lg bg-teal-500 text-white hover:bg-teal-600 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
             >

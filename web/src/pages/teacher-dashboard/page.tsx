@@ -7,7 +7,6 @@ import TeamCard, { TeamProject } from './components/TeamCard';
 import TeamDetailModal from './components/TeamDetailModal';
 import InterveneModal from './components/InterveneModal';
 import BatchScoringModal from './components/BatchScoringModal';
-import TeamScoringModal from './components/TeamScoringModal';
 import StatsPanel from './components/StatsPanel';
 import GuidanceToolPanel from './components/GuidanceToolPanel';
 import LearningAnalysisPanel from './components/LearningAnalysisPanel';
@@ -31,6 +30,7 @@ import {
   type TeacherPersonalClassRow,
   type TeacherProfile,
 } from './teacherPortalApi';
+import { fetchTeacherMonitorTeams } from '../../lib/teacherMonitorApi';
 
 type TabKey =
   | 'monitor'
@@ -139,211 +139,6 @@ function tabFromSearchParams(sp: URLSearchParams): TabKey {
   return 'monitor';
 }
 
-const mockTeams: TeamProject[] = [
-  {
-    id: 1,
-    teamName: '创新先锋队',
-    course: '创业基础',
-    members: [
-      { name: '张伟', avatar: '' },
-      { name: '李娜', avatar: '' },
-      { name: '王磊', avatar: '' },
-      { name: '赵敏', avatar: '' },
-    ],
-    leader: '张伟',
-    currentStage: '商业模式',
-    overallProgress: 72,
-    stageProgress: {
-      teamFormation: 100,
-      ideation: 100,
-      marketResearch: 100,
-      productDesign: 100,
-      businessModel: 60,
-      aiValidation: 0,
-      roleSimulation: 0,
-      businessPlan: 0,
-    },
-    knowledgeProgress: 78,
-    abilityPoints: 42,
-    collaborationScore: 88,
-    qualityScore: 85,
-    lastActive: '2小时前',
-    status: 'on-track',
-    warnings: [],
-    evaluationStatus: 'reviewed',
-    iterationCount: 5,
-    submissionCount: 3,
-  },
-  {
-    id: 2,
-    teamName: '未来科技组',
-    course: '创业基础',
-    members: [
-      { name: '陈浩', avatar: '' },
-      { name: '刘芳', avatar: '' },
-      { name: '孙强', avatar: '' },
-    ],
-    leader: '陈浩',
-    currentStage: 'AI验证',
-    overallProgress: 85,
-    stageProgress: {
-      teamFormation: 100,
-      ideation: 100,
-      marketResearch: 100,
-      productDesign: 100,
-      businessModel: 100,
-      aiValidation: 70,
-      roleSimulation: 0,
-      businessPlan: 0,
-    },
-    knowledgeProgress: 90,
-    abilityPoints: 48,
-    collaborationScore: 92,
-    qualityScore: 90,
-    lastActive: '30分钟前',
-    status: 'on-track',
-    warnings: [],
-    evaluationStatus: 'passed',
-    iterationCount: 7,
-    submissionCount: 5,
-  },
-  {
-    id: 3,
-    teamName: '绿色能源队',
-    course: '创业基础',
-    members: [
-      { name: '周杰', avatar: '' },
-      { name: '吴雪', avatar: '' },
-      { name: '郑阳', avatar: '' },
-      { name: '冯婷', avatar: '' },
-      { name: '蒋涛', avatar: '' },
-    ],
-    leader: '周杰',
-    currentStage: '市场调研',
-    overallProgress: 38,
-    stageProgress: {
-      teamFormation: 100,
-      ideation: 100,
-      marketResearch: 40,
-      productDesign: 0,
-      businessModel: 0,
-      aiValidation: 0,
-      roleSimulation: 0,
-      businessPlan: 0,
-    },
-    knowledgeProgress: 45,
-    abilityPoints: 22,
-    collaborationScore: 65,
-    qualityScore: 60,
-    lastActive: '3天前',
-    status: 'at-risk',
-    warnings: ['市场调研进度严重滞后', '团队协作评分偏低'],
-    evaluationStatus: 'pending',
-    iterationCount: 2,
-    submissionCount: 1,
-  },
-  {
-    id: 4,
-    teamName: '智慧医疗团',
-    course: '创业基础',
-    members: [
-      { name: '许明', avatar: '' },
-      { name: '何静', avatar: '' },
-      { name: '曹宇', avatar: '' },
-    ],
-    leader: '许明',
-    currentStage: '产品设计',
-    overallProgress: 55,
-    stageProgress: {
-      teamFormation: 100,
-      ideation: 100,
-      marketResearch: 100,
-      productDesign: 50,
-      businessModel: 0,
-      aiValidation: 0,
-      roleSimulation: 0,
-      businessPlan: 0,
-    },
-    knowledgeProgress: 62,
-    abilityPoints: 35,
-    collaborationScore: 80,
-    qualityScore: 75,
-    lastActive: '1天前',
-    status: 'on-track',
-    warnings: [],
-    evaluationStatus: 'pending',
-    iterationCount: 4,
-    submissionCount: 2,
-  },
-  {
-    id: 5,
-    teamName: '数字营销组',
-    course: '创业基础',
-    members: [
-      { name: '宋佳', avatar: '' },
-      { name: '谢鹏', avatar: '' },
-      { name: '韩雨', avatar: '' },
-      { name: '唐磊', avatar: '' },
-    ],
-    leader: '宋佳',
-    currentStage: '创新思维',
-    overallProgress: 18,
-    stageProgress: {
-      teamFormation: 100,
-      ideation: 20,
-      marketResearch: 0,
-      productDesign: 0,
-      businessModel: 0,
-      aiValidation: 0,
-      roleSimulation: 0,
-      businessPlan: 0,
-    },
-    knowledgeProgress: 25,
-    abilityPoints: 12,
-    collaborationScore: 55,
-    qualityScore: 50,
-    lastActive: '5天前',
-    status: 'delayed',
-    warnings: ['整体进度严重滞后', '长时间未提交作业', '团队活跃度极低'],
-    evaluationStatus: 'pending',
-    iterationCount: 1,
-    submissionCount: 0,
-  },
-  {
-    id: 6,
-    teamName: '区块链探索队',
-    course: '创业基础',
-    members: [
-      { name: '林峰', avatar: '' },
-      { name: '黄莉', avatar: '' },
-      { name: '徐博', avatar: '' },
-    ],
-    leader: '林峰',
-    currentStage: '商业计划',
-    overallProgress: 95,
-    stageProgress: {
-      teamFormation: 100,
-      ideation: 100,
-      marketResearch: 100,
-      productDesign: 100,
-      businessModel: 100,
-      aiValidation: 100,
-      roleSimulation: 100,
-      businessPlan: 90,
-    },
-    knowledgeProgress: 96,
-    abilityPoints: 50,
-    collaborationScore: 95,
-    qualityScore: 93,
-    lastActive: '1小时前',
-    status: 'on-track',
-    warnings: [],
-    evaluationStatus: 'passed',
-    iterationCount: 9,
-    submissionCount: 7,
-  },
-];
-
 export default function TeacherDashboard() {
   const { logoUrl, siteTitle } = useSiteBrand();
   const brandTitle = siteTitle.trim() || '教师工作台';
@@ -388,13 +183,14 @@ export default function TeacherDashboard() {
   const [selectedTeam, setSelectedTeam] = useState<TeamProject | null>(null);
   const [interveneTeam, setInterveneTeam] = useState<TeamProject | null>(null);
   const [showBatchScoring, setShowBatchScoring] = useState(false);
-  const [scoringTeam, setScoringTeam] = useState<TeamProject | null>(null);
   const [filterStatus, setFilterStatus] = useState<'all' | 'on-track' | 'at-risk' | 'delayed'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [teacherProfile, setTeacherProfile] = useState<TeacherProfile | null>(null);
   const [personalClasses, setPersonalClasses] = useState<TeacherPersonalClassRow[]>([]);
   const [selectedPersonalClass, setSelectedPersonalClass] = useState<TeacherPersonalClassRow | null>(null);
+  const [monitorTeams, setMonitorTeams] = useState<TeamProject[]>([]);
+  const [monitorTeamsLoading, setMonitorTeamsLoading] = useState(false);
   const [teamQuestionsSavedTick, setTeamQuestionsSavedTick] = useState(0);
   const [teamQuestionsDirty, setTeamQuestionsDirty] = useState(false);
 
@@ -497,7 +293,28 @@ export default function TeacherDashboard() {
     }
   }, [activeTab, selectedPersonalClass]);
 
-  const filteredTeams = mockTeams.filter((t) => {
+  const loadMonitorTeams = useCallback(async (classId: string) => {
+    setMonitorTeamsLoading(true);
+    try {
+      const teams = await fetchTeacherMonitorTeams(classId);
+      setMonitorTeams(teams as unknown as TeamProject[]);
+    } catch {
+      setMonitorTeams([]);
+    } finally {
+      setMonitorTeamsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab !== 'monitor') return;
+    if (!selectedPersonalClass?.id) {
+      setMonitorTeams([]);
+      return;
+    }
+    void loadMonitorTeams(selectedPersonalClass.id);
+  }, [activeTab, selectedPersonalClass?.id, loadMonitorTeams]);
+
+  const filteredTeams = monitorTeams.filter((t) => {
     const matchStatus = filterStatus === 'all' || t.status === filterStatus;
     const matchSearch = t.teamName.includes(searchQuery) || t.leader.includes(searchQuery);
     return matchStatus && matchSearch;
@@ -580,7 +397,7 @@ export default function TeacherDashboard() {
 
             {/* 右侧统计面板 */}
             <div className="w-72 flex-shrink-0 overflow-y-auto pb-4">
-              <StatsPanel teams={mockTeams} />
+              <StatsPanel classId={selectedPersonalClass?.id || ''} teams={monitorTeams} />
             </div>
           </div>
         );
@@ -594,7 +411,7 @@ export default function TeacherDashboard() {
         );
 
       case 'guidance':
-        return <GuidanceToolPanel />;
+        return <GuidanceToolPanel teams={monitorTeams} />;
 
       case 'classManagement':
         return (
@@ -668,7 +485,14 @@ export default function TeacherDashboard() {
         return <TopicReview personalClass={selectedPersonalClass} />;
 
       case 'businessPlanReview':
-        return <BusinessPlanReview />;
+        if (!selectedPersonalClass) {
+          return (
+            <div className="bg-white rounded-xl border border-dashed border-gray-200 py-16 text-center text-gray-500 text-sm">
+              请先在右上角选择班级
+            </div>
+          );
+        }
+        return <BusinessPlanReview personalClass={selectedPersonalClass} />;
 
       case 'classProjectOverview':
         return <ClassProjectOverview />;
@@ -814,7 +638,7 @@ export default function TeacherDashboard() {
                   : (activeItem?.label ?? '教师工作台')}
             </h1>
             <p className="text-xs text-gray-400 mt-0.5">
-              {activeTab === 'monitor' && `共 ${mockTeams.length} 个团队 · ${mockTeams.filter(t => t.status !== 'on-track').length} 个需关注`}
+              {activeTab === 'monitor' && `共 ${monitorTeams.length} 个团队 · ${monitorTeams.filter(t => t.status !== 'on-track').length} 个需关注`}
               {activeTab === 'analysis' && '智能分析学生学习数据'}
               {activeTab === 'guidance' && '动态生成教学引导策略'}
               {activeTab === 'classManagement' && '管理班级信息与学生导入'}
@@ -881,27 +705,28 @@ export default function TeacherDashboard() {
       {/* 弹窗 */}
       {selectedTeam && (
         <TeamDetailModal
+          classId={selectedPersonalClass?.id || ''}
           team={selectedTeam}
           onClose={() => setSelectedTeam(null)}
-          onScore={(team) => { setScoringTeam(team); setSelectedTeam(null); }}
+          onIntervene={(team) => { setInterveneTeam(team); setSelectedTeam(null); }}
         />
       )}
       {interveneTeam && (
         <InterveneModal
           team={interveneTeam}
+          teams={monitorTeams}
           onClose={() => setInterveneTeam(null)}
+          onSubmit={() => {}}
         />
       )}
       {showBatchScoring && (
         <BatchScoringModal
-          teams={mockTeams}
+          classId={selectedPersonalClass?.id || ''}
+          teams={monitorTeams}
           onClose={() => setShowBatchScoring(false)}
-        />
-      )}
-      {scoringTeam && (
-        <TeamScoringModal
-          team={scoringTeam}
-          onClose={() => setScoringTeam(null)}
+          onSubmitted={() => {
+            if (selectedPersonalClass?.id) void loadMonitorTeams(selectedPersonalClass.id);
+          }}
         />
       )}
 

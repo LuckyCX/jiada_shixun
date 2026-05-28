@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { BusinessPlan } from './types';
+import { getPortalToken } from '../../../../lib/authApi';
 
 interface DetailModalProps {
   plan: BusinessPlan;
@@ -9,17 +10,26 @@ interface DetailModalProps {
 
 export default function DetailModal({ plan, onClose, onReview }: DetailModalProps) {
   const [activeTab, setActiveTab] = useState<'content' | 'attachments'>('content');
+  const token = getPortalToken('teacher') || '';
+  const withToken = (url: string) => {
+    if (!url) return url;
+    if (!token) return url;
+    return `${url}${url.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`;
+  };
 
-  const sections = [
-    { key: 'executiveSummary', label: '执行摘要', content: plan.executiveSummary },
-    { key: 'marketAnalysis', label: '市场分析', content: plan.marketAnalysis },
-    { key: 'productService', label: '产品与服务', content: plan.productService },
-    { key: 'marketingStrategy', label: '营销策略', content: plan.marketingStrategy },
-    { key: 'operationPlan', label: '运营计划', content: plan.operationPlan },
-    { key: 'financialPlan', label: '财务计划', content: plan.financialPlan },
-    { key: 'teamIntroduction', label: '团队介绍', content: plan.teamIntroduction },
-    { key: 'riskAnalysis', label: '风险分析', content: plan.riskAnalysis }
-  ];
+  const sections =
+    plan.sections && plan.sections.length
+      ? plan.sections.map((s) => ({ key: s.key, label: s.title, content: s.content }))
+      : [
+          { key: 'executiveSummary', label: '执行摘要', content: plan.executiveSummary },
+          { key: 'marketAnalysis', label: '市场分析', content: plan.marketAnalysis },
+          { key: 'productService', label: '产品与服务', content: plan.productService },
+          { key: 'marketingStrategy', label: '营销策略', content: plan.marketingStrategy },
+          { key: 'operationPlan', label: '运营计划', content: plan.operationPlan },
+          { key: 'financialPlan', label: '财务计划', content: plan.financialPlan },
+          { key: 'teamIntroduction', label: '团队介绍', content: plan.teamIntroduction },
+          { key: 'riskAnalysis', label: '风险分析', content: plan.riskAnalysis },
+        ];
 
   const getStatusBadge = (status: string) => {
     const styles = {
@@ -170,7 +180,7 @@ export default function DetailModal({ plan, onClose, onReview }: DetailModalProp
                       <p className="text-sm text-gray-600">PPT格式</p>
                     </div>
                     <a
-                      href={plan.pptUrl}
+                      href={withToken(plan.pptUrl)}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="px-6 py-2 bg-gradient-to-r from-orange-500 to-amber-500 text-white rounded-lg font-medium hover:shadow-lg transition-all whitespace-nowrap"
@@ -202,7 +212,7 @@ export default function DetailModal({ plan, onClose, onReview }: DetailModalProp
                           <p className="text-sm text-gray-500">{file.size}</p>
                         </div>
                         <a
-                          href={file.url}
+                          href={withToken(file.url)}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors whitespace-nowrap"
