@@ -263,7 +263,12 @@ export default function CourseManagement({ selectedModule: selectedModuleProp, h
       return;
     }
     try {
-      await createCourseResourceNode({ moduleKey: selectedModule, parentId: addNodeState.parentId, title: newNodeTitle.trim() });
+      const { node } = await createCourseResourceNode({
+        moduleKey: selectedModule,
+        parentId: addNodeState.parentId,
+        title: newNodeTitle.trim(),
+      });
+      await updateCourseResourceNodeStatus(node.id, 'published');
       setAddNodeState(null);
       await loadData();
       showToast('已添加');
@@ -282,27 +287,6 @@ export default function CourseManagement({ selectedModule: selectedModuleProp, h
         await deleteCourseResourceNode(node.id);
         await loadData();
         showToast('已删除');
-      },
-    });
-  };
-
-  const askToggleStatus = (node: CourseResourceNode) => {
-    if (node.status !== 'published') {
-      updateCourseResourceNodeStatus(node.id, 'published')
-        .then(() => loadData())
-        .then(() => showToast('已发布'))
-        .catch((e) => showToast(e instanceof Error ? e.message : '发布失败'));
-      return;
-    }
-    setConfirmState({
-      title: '确认下架',
-      content: `确认下架「${node.title}」？下架后学生端将不可见。`,
-      confirmText: '确认下架',
-      danger: true,
-      onConfirm: async () => {
-        await updateCourseResourceNodeStatus(node.id, 'draft');
-        await loadData();
-        showToast('已下架');
       },
     });
   };
@@ -595,10 +579,6 @@ export default function CourseManagement({ selectedModule: selectedModuleProp, h
           </button>
           <button onClick={() => setUploadNode(leaf)} className="px-3 py-1.5 bg-indigo-50 text-indigo-600 text-xs font-medium rounded-lg hover:bg-indigo-100 transition-colors whitespace-nowrap cursor-pointer">
             <i className="ri-upload-2-line mr-1"></i>上传课件
-          </button>
-          <button onClick={() => askToggleStatus(leaf)} className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors whitespace-nowrap cursor-pointer ${leaf.status === 'published' ? 'bg-gray-50 text-gray-600 hover:bg-gray-100' : 'bg-green-50 text-green-600 hover:bg-green-100'}`}>
-            <i className={`${leaf.status === 'published' ? 'ri-eye-off-line' : 'ri-eye-line'} mr-1`}></i>
-            {leaf.status === 'published' ? '下架' : '发布'}
           </button>
         </div>
       </div>

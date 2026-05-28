@@ -69,7 +69,7 @@ function buildRules(
       title: '商业计划书要点',
       conditions: [
         { label: `开始时间：${start}`, met: !ctx.isBeforeStageStart('plan') },
-        { label: '完成实训环节6：AI 仿真模拟（至少 3 轮迭代优化）', met: ctx.isStageCompleted('simulation') },
+        { label: '完成实训环节6：AI 仿真模拟（所有小组成员均完成至少 3 轮以上迭代优化）', met: ctx.isStageCompleted('simulation') },
       ],
     },
   };

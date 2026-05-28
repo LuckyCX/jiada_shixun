@@ -20,6 +20,7 @@ import studentIdeationRoutes from './routes/studentIdeation.js';
 import studentMarketResearchRoutes from './routes/studentMarketResearch.js';
 import studentProductDesignRoutes from './routes/studentProductDesign.js';
 import studentBusinessModelRoutes from './routes/studentBusinessModel.js';
+import studentRoleSimulationRoutes from './routes/studentRoleSimulation.js';
 import publicMarketSurveyRoutes from './routes/publicMarketSurvey.js';
 import courseSettingsRoutes from './routes/courseSettings.js';
 import { startCourseSettingReminderJob } from './jobs/courseSettingReminderJob.js';
@@ -71,6 +72,7 @@ app.use('/api', studentIdeationRoutes);
 app.use('/api', studentMarketResearchRoutes);
 app.use('/api', studentProductDesignRoutes);
 app.use('/api', studentBusinessModelRoutes);
+app.use('/api', studentRoleSimulationRoutes);
 app.use('/api', publicMarketSurveyRoutes);
 app.use('/api', courseSettingsRoutes);
 

@@ -1,4 +1,4 @@
-import { portalAuthenticatedFetch } from './authApi';
+import { getPortalToken, portalAuthenticatedFetch } from './authApi';
 
 export type SwotPayload = {
   strengths: string;
@@ -31,12 +31,19 @@ export type WarRoomHat = 'white' | 'red' | 'black' | 'yellow' | 'green' | 'blue'
 
 export type WarRoomCanvasCell = { content: string; updatedBy: string };
 
+export type WarRoomCanvasFill = {
+  targetModule: string;
+  moduleContent: string;
+};
+
 export type WarRoomDebateMessage = {
   id: string;
   hat: WarRoomHat;
   content: string;
   targetModule: string | null;
   moduleContent: string;
+  fills?: WarRoomCanvasFill[];
+  adoptedModules?: string[];
   status?: 'adopted' | 'ignored';
   roundIndex: number;
   createdAt: string;
@@ -49,6 +56,30 @@ export type WarRoomTranscript = {
 
 export type WarRoomCanvas = Record<string, WarRoomCanvasCell>;
 
+export type WarRoomTeamRecordSummary = {
+  studentId: string;
+  studentName: string;
+  savedAt: string;
+  filledCount: number;
+};
+
+export type BmcPayload = {
+  keyPartnerships: string;
+  keyActivities: string;
+  valueProposition: string;
+  customerRelationships: string;
+  customerSegments: string;
+  keyResources: string;
+  channels: string;
+  costStructure: string;
+  revenueStreams: string;
+};
+
+export type BusinessModelTeamMember = {
+  id: string;
+  name: string;
+};
+
 export type BusinessModelWorkspacePayload = {
   swot: SwotPayload;
   marketing: Marketing4pPayload;
@@ -56,11 +87,18 @@ export type BusinessModelWorkspacePayload = {
   swotSavedAt: string;
   marketingSavedAt: string;
   financeSavedAt: string;
+  studentId?: string;
+  isTeamLeader?: boolean;
+  teamMembers?: BusinessModelTeamMember[];
+  bmc?: BmcPayload;
+  bmcCanvasSavedAt?: string;
+  bmcCanvasGeneratedAt?: string;
   warRoom?: {
     canvas: WarRoomCanvas;
     transcript: WarRoomTranscript;
     filledCount: number;
   };
+  warRoomTeamRecords?: WarRoomTeamRecordSummary[];
 };
 
 const base = (classId: string) =>
@@ -98,6 +136,46 @@ export async function generateBusinessModelFinanceItemsAi(classId: string): Prom
   return portalAuthenticatedFetch('student', `${base(classId)}/ai/finance-items`, {
     method: 'POST',
     body: JSON.stringify({}),
+  }) as Promise<BusinessModelWorkspacePayload>;
+}
+
+export type GenerateBusinessModelBmcAiError = Error & {
+  missingMembers?: { studentId: string; studentName: string }[];
+};
+
+export async function generateBusinessModelBmcAi(classId: string): Promise<BusinessModelWorkspacePayload> {
+  const token = getPortalToken('student');
+  const r = await fetch(`${base(classId)}/bmc/ai/generate`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({}),
+  });
+  const j = (await r.json().catch(() => ({ code: -1, message: '无效响应' }))) as {
+    code: number;
+    message?: string;
+    data?: BusinessModelWorkspacePayload & {
+      missingMembers?: { studentId: string; studentName: string }[];
+    };
+  };
+  if (!r.ok || j.code !== 0) {
+    const err = new Error(typeof j.message === 'string' ? j.message : '生成失败') as GenerateBusinessModelBmcAiError;
+    const data = j.data as { missingMembers?: { studentId: string; studentName: string }[] } | undefined;
+    if (data?.missingMembers?.length) err.missingMembers = data.missingMembers;
+    throw err;
+  }
+  return j.data as BusinessModelWorkspacePayload;
+}
+
+export async function saveBusinessModelBmc(
+  classId: string,
+  bmc: BmcPayload
+): Promise<BusinessModelWorkspacePayload> {
+  return portalAuthenticatedFetch('student', `${base(classId)}/bmc/save`, {
+    method: 'PUT',
+    body: JSON.stringify({ bmc }),
   }) as Promise<BusinessModelWorkspacePayload>;
 }
 
@@ -159,13 +237,42 @@ export async function saveWarRoomCanvasCell(
 
 export async function adoptWarRoomMessage(
   classId: string,
-  messageId: string
+  messageId: string,
+  moduleKey?: string
 ): Promise<BusinessModelWorkspacePayload> {
   return portalAuthenticatedFetch(
     'student',
     `${base(classId)}/war-room/messages/${encodeURIComponent(messageId)}/adopt`,
-    { method: 'POST', body: JSON.stringify({}) }
+    {
+      method: 'POST',
+      body: JSON.stringify(moduleKey ? { moduleKey } : {}),
+    }
   ) as Promise<BusinessModelWorkspacePayload>;
+}
+
+export async function saveWarRoomCanvasRecord(classId: string): Promise<BusinessModelWorkspacePayload> {
+  return portalAuthenticatedFetch('student', `${base(classId)}/war-room/save`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  }) as Promise<BusinessModelWorkspacePayload>;
+}
+
+export type WarRoomSavedRecordDetail = {
+  studentId: string;
+  studentName: string;
+  savedAt: string;
+  canvas: WarRoomCanvas;
+  filledCount: number;
+};
+
+export async function fetchWarRoomMemberRecord(
+  classId: string,
+  studentId: string
+): Promise<WarRoomSavedRecordDetail> {
+  return portalAuthenticatedFetch(
+    'student',
+    `${base(classId)}/war-room/records/${encodeURIComponent(studentId)}`
+  ) as Promise<WarRoomSavedRecordDetail>;
 }
 
 export function parseMentionedHat(text: string): WarRoomHat | null {

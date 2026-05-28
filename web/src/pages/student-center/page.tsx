@@ -31,6 +31,10 @@ import {
   fetchTeamMarketReportUploadStatus,
 } from '../../lib/studentMarketResearchApi';
 import { fetchTeamProductPrototypeStatus } from '../../lib/studentProductDesignApi';
+import {
+  fetchBusinessModelWorkspace,
+  type BusinessModelWorkspacePayload,
+} from '../../lib/studentBusinessModelApi';
 import ProductDesignModule from './components/ProductDesignModule';
 import BusinessModelModule from './components/BusinessModelModule';
 import RoleSimulationModule from './components/RoleSimulationModule';
@@ -64,7 +68,7 @@ const MODULE_COMPLETE_THRESHOLD: Record<string, number> = {
   ideation: 6,
   market: 6,
   product: 7,
-  business: 9,
+  business: 5,
   simulation: 4,
   plan: 4,
 };
@@ -79,6 +83,18 @@ const TAB_TO_MODULE_ID: Record<string, string> = {
   'module-plan': 'plan',
 };
 const OVERVIEW_PANEL_PAGE_SIZE = 5;
+
+function countBusinessModelProgressFromWorkspace(d: BusinessModelWorkspacePayload, studentId: string) {
+  let done = 0;
+  if (d.swotSavedAt) done += 1;
+  if (d.marketingSavedAt) done += 1;
+  if (d.financeSavedAt) done += 1;
+  const sid = studentId || d.studentId || '';
+  const myRecord = (d.warRoomTeamRecords || []).find((r) => r.studentId === sid);
+  if (myRecord && myRecord.filledCount >= 9) done += 1;
+  if (d.bmcCanvasSavedAt) done += 1;
+  return done;
+}
 
 type TabType =
   | 'overview'
@@ -246,6 +262,9 @@ export default function StudentCenterPage() {
   const handleProductTabProgress = useCallback((done: number) => {
     setModuleProgressState((s) => (s.product === done ? s : { ...s, product: done }));
   }, []);
+  const handleBusinessTabProgress = useCallback((done: number) => {
+    setModuleProgressState((s) => (s.business === done ? s : { ...s, business: done }));
+  }, []);
   const [teamFormationComplete, setTeamFormationComplete] = useState(false);
   const [notificationFilter, setNotificationFilter] = useState<'all' | 'guidance' | 'reminder' | 'evaluation'>('all');
   const [notificationReadFilter, setNotificationReadFilter] = useState<'all' | 'unread' | 'read'>('all');
@@ -303,48 +322,80 @@ export default function StudentCenterPage() {
       .catch(() => setEnrollments([]));
   }, []);
 
-  const refreshTeamFormationComplete = useCallback(() => {
+  const refreshTrainingStageSnapshot = useCallback(() => {
     if (!selectedClassId) {
       setTeamFormationComplete(false);
       setOverviewMyTeam(null);
+      setIdeationTopicApproved(false);
+      setTeamMarketReportUploaded(false);
+      setTeamProductPrototypeUploaded(false);
       return;
     }
-    void Promise.all([
-      fetchTeamSubmission(selectedClassId),
-      fetchStudentMyTeam(selectedClassId).catch(() => null),
-    ])
-      .then(([sub, team]) => {
+    const token = getPortalToken('student');
+    const studentId = token ? String(parseJwtPayload(token)?.sub || '') : '';
+
+    void (async () => {
+      try {
+        const [sub, team] = await Promise.all([
+          fetchTeamSubmission(selectedClassId),
+          fetchStudentMyTeam(selectedClassId).catch(() => null),
+        ]);
         const mine = team as GroupingTeam | null;
         setOverviewMyTeam(mine);
-        setTeamFormationComplete(sub.status === 'confirmed' || Boolean(mine));
-      })
-      .catch(() => {
+        const teamDone = sub.status === 'confirmed' || Boolean(mine);
+        setTeamFormationComplete(teamDone);
+
+        if (!teamDone) {
+          setIdeationTopicApproved(false);
+          setTeamMarketReportUploaded(false);
+          setTeamProductPrototypeUploaded(false);
+          return;
+        }
+
+        const [ideationRes, marketSt, productSt, businessWs, simRecords] = await Promise.all([
+          fetchStudentIdeationProjectTopic(selectedClassId).catch(() => null),
+          fetchTeamMarketReportUploadStatus(selectedClassId).catch(() => ({ uploaded: false })),
+          fetchTeamProductPrototypeStatus(selectedClassId).catch(() => ({ uploaded: false })),
+          fetchBusinessModelWorkspace(selectedClassId).catch(() => null),
+          import('../../lib/roleSimulationApi')
+            .then((m) => m.fetchRoleSimulationRecords(selectedClassId))
+            .catch(() => null),
+        ]);
+
+        setIdeationTopicApproved(ideationRes?.topic?.status === 'approved');
+        setTeamMarketReportUploaded(Boolean(marketSt.uploaded));
+        setTeamProductPrototypeUploaded(Boolean(productSt.uploaded));
+        if (businessWs) {
+          const businessDone = countBusinessModelProgressFromWorkspace(businessWs, studentId);
+          setModuleProgressState((s) =>
+            s.business === businessDone ? s : { ...s, business: businessDone }
+          );
+        }
+
+        if (simRecords && currentStudentId) {
+          const threshold = MODULE_COMPLETE_THRESHOLD.simulation ?? 4;
+          const my = (simRecords.progress || []).find((p: any) => p.studentId === currentStudentId);
+          const myEffective = Math.max(0, Number(my?.effectiveRounds || 0));
+          const done = simRecords.teamQualified ? threshold : Math.min(threshold - 1, myEffective);
+          setModuleProgressState((s) => (s.simulation === done ? s : { ...s, simulation: done }));
+        } else {
+          setModuleProgressState((s) => (s.simulation === 0 ? s : { ...s, simulation: 0 }));
+        }
+      } catch {
         setTeamFormationComplete(false);
         setOverviewMyTeam(null);
-      });
+        setIdeationTopicApproved(false);
+        setTeamMarketReportUploaded(false);
+        setTeamProductPrototypeUploaded(false);
+      }
+    })();
   }, [selectedClassId]);
 
-  useEffect(() => {
-    refreshTeamFormationComplete();
-  }, [refreshTeamFormationComplete]);
+  const refreshTeamFormationComplete = refreshTrainingStageSnapshot;
 
   useEffect(() => {
-    if (!selectedClassId) {
-      setIdeationTopicApproved(false);
-      return;
-    }
-    let cancelled = false;
-    fetchStudentIdeationProjectTopic(selectedClassId)
-      .then((res) => {
-        if (!cancelled) setIdeationTopicApproved(res.topic?.status === 'approved');
-      })
-      .catch(() => {
-        if (!cancelled) setIdeationTopicApproved(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedClassId]);
+    refreshTrainingStageSnapshot();
+  }, [refreshTrainingStageSnapshot]);
 
   useEffect(() => {
     if (!selectedClassId || !teamFormationComplete) {
@@ -368,32 +419,24 @@ export default function StudentCenterPage() {
   }, [selectedClassId, teamFormationComplete]);
 
   const refreshTeamMarketReportUploaded = useCallback(() => {
-    if (!selectedClassId || !teamFormationComplete) {
+    if (!selectedClassId) {
       setTeamMarketReportUploaded(false);
       return;
     }
     void fetchTeamMarketReportUploadStatus(selectedClassId)
       .then((st) => setTeamMarketReportUploaded(Boolean(st.uploaded)))
       .catch(() => setTeamMarketReportUploaded(false));
-  }, [selectedClassId, teamFormationComplete]);
-
-  useEffect(() => {
-    refreshTeamMarketReportUploaded();
-  }, [refreshTeamMarketReportUploaded]);
+  }, [selectedClassId]);
 
   const refreshTeamProductPrototypeUploaded = useCallback(() => {
-    if (!selectedClassId || !teamFormationComplete) {
+    if (!selectedClassId) {
       setTeamProductPrototypeUploaded(false);
       return;
     }
     void fetchTeamProductPrototypeStatus(selectedClassId)
       .then((st) => setTeamProductPrototypeUploaded(Boolean(st.uploaded)))
       .catch(() => setTeamProductPrototypeUploaded(false));
-  }, [selectedClassId, teamFormationComplete]);
-
-  useEffect(() => {
-    refreshTeamProductPrototypeUploaded();
-  }, [refreshTeamProductPrototypeUploaded]);
+  }, [selectedClassId]);
 
   useEffect(() => {
     if (!selectedClassId) {
@@ -631,7 +674,7 @@ export default function StudentCenterPage() {
     { moduleId: 'ideation', moduleName: '创新思维与创意生成', totalKnowledge: 6, completedKnowledge: moduleProgressState.ideation, totalTasks: 4, completedTasks: 3, status: getModuleUnlockStatus('ideation'), color: 'from-teal-500 to-teal-600' },
     { moduleId: 'market', moduleName: '市场调研与用户画像', totalKnowledge: 8, completedKnowledge: moduleProgressState.market, totalTasks: 5, completedTasks: 4, status: getModuleUnlockStatus('market'), color: 'from-green-500 to-green-600' },
     { moduleId: 'product', moduleName: '产品设计与迭代', totalKnowledge: 7, completedKnowledge: moduleProgressState.product, totalTasks: 4, completedTasks: 1, status: getModuleUnlockStatus('product'), color: 'from-orange-500 to-orange-600' },
-    { moduleId: 'business', moduleName: '商业模式设计', totalKnowledge: 9, completedKnowledge: moduleProgressState.business, totalTasks: 6, completedTasks: 0, status: getModuleUnlockStatus('business'), color: 'from-pink-500 to-pink-600' },
+    { moduleId: 'business', moduleName: '商业模式设计', totalKnowledge: 5, completedKnowledge: moduleProgressState.business, totalTasks: 6, completedTasks: 0, status: getModuleUnlockStatus('business'), color: 'from-pink-500 to-pink-600' },
     { moduleId: 'simulation', moduleName: 'AI仿真模拟', totalKnowledge: 4, completedKnowledge: moduleProgressState.simulation, totalTasks: 3, completedTasks: 0, status: getModuleUnlockStatus('simulation'), color: 'from-indigo-500 to-indigo-600' },
     { moduleId: 'plan', moduleName: '商业计划书要点', totalKnowledge: 4, completedKnowledge: moduleProgressState.plan, totalTasks: 2, completedTasks: 0, status: getModuleUnlockStatus('plan'), color: 'from-teal-500 to-teal-600' },
   ];
@@ -1510,9 +1553,7 @@ export default function StudentCenterPage() {
       return;
     }
     changeActiveTab(moduleKey);
-    if (moduleKey === 'module-team') {
-      refreshTeamFormationComplete();
-    }
+    refreshTrainingStageSnapshot();
   };
 
   const getStartDateLabelForUnlock = (moduleId: string) => {
@@ -1528,6 +1569,7 @@ export default function StudentCenterPage() {
         setStudentTodoTasks((prev) => prev.map((task) => (task.id === taskId ? { ...task, status: 'completed' } : task)));
         setActiveTrainingTask(null);
         notification.success({ message: '任务已完成', placement: 'topRight' });
+        refreshTrainingStageSnapshot();
       })
       .catch((e) => {
         notification.warning({
@@ -1660,11 +1702,19 @@ export default function StudentCenterPage() {
             key={selectedClassId}
             classId={selectedClassId}
             studentDisplayName={studentDisplayName}
+            isTeamLeader={isCurrentStudentTeamLeader}
+            onBusinessTabProgress={handleBusinessTabProgress}
             onTaskComplete={() => completeActiveTrainingTask('business')}
           />
         );
       case 'module-simulation':
-        return <RoleSimulationModule key={selectedClassId} onTaskComplete={() => completeActiveTrainingTask('simulation')} />;
+        return (
+          <RoleSimulationModule
+            key={selectedClassId}
+            classId={selectedClassId}
+            onTaskComplete={() => completeActiveTrainingTask('simulation')}
+          />
+        );
       case 'module-plan':
         return <BusinessPlanModule key={selectedClassId} onTaskComplete={() => completeActiveTrainingTask('plan')} />;
       default:

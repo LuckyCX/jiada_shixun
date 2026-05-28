@@ -1,15 +1,19 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { message, Spin } from 'antd';
+import { message, Modal, Spin } from 'antd';
 import VersionControl, { Version } from '../../../components/feature/VersionControl';
 import WarRoom from '../../business-model/components/WarRoom';
 import {
   fetchBusinessModelWorkspace,
+  generateBusinessModelBmcAi,
   generateBusinessModelFinanceItemsAi,
   generateBusinessModelMarketingAi,
   generateBusinessModelSwotAi,
+  saveBusinessModelBmc,
   saveBusinessModelWorkspacePartial,
+  type BmcPayload,
   type BusinessModelWorkspacePayload,
+  type GenerateBusinessModelBmcAiError,
 } from '../../../lib/studentBusinessModelApi';
 
 interface BMCData {
@@ -24,31 +28,29 @@ interface BMCData {
   revenueStreams: string;
 }
 
-// 初始简短数据（未AI生成前）
-const initialCanvasData: BMCData = {
-  keyPartnerships: '校园餐厅、便利店、物流公司',
-  keyActivities: '订单处理、配送管理、平台运营',
-  valueProposition: '15分钟快速配送，低配送费，智能路径优化',
-  customerRelationships: '会员体系、积分奖励、个性化推荐',
-  customerSegments: '大学生群体，18-25岁，注重效率和性价比',
-  keyResources: '配送团队、技术平台、商家资源',
-  channels: 'APP、微信小程序、校园推广',
-  costStructure: '人员成本、技术开发、市场推广',
-  revenueStreams: '配送费收入、商家佣金、广告收入',
-};
+function emptyBmcData(): BMCData {
+  return {
+    keyPartnerships: '',
+    keyActivities: '',
+    valueProposition: '',
+    customerRelationships: '',
+    customerSegments: '',
+    keyResources: '',
+    channels: '',
+    costStructure: '',
+    revenueStreams: '',
+  };
+}
 
-// AI生成后的详细数据
-const aiGeneratedCanvasData: BMCData = {
-  keyPartnerships: '• 校园餐厅（提供餐品）\n• 便利店（零食饮料供应）\n• 物流公司（配送支持）\n• 学校后勤部门（场地支持）\n• 支付平台（微信、支付宝）',
-  keyActivities: '• 订单智能分配与处理\n• 配送路径优化算法\n• 平台运营与维护\n• 商家对接与管理\n• 用户服务与反馈处理',
-  valueProposition: '• 15分钟极速配送承诺\n• 低至2元的配送费\n• AI智能路径规划\n• 实时订单追踪\n• 会员积分奖励体系\n• 校园专属优惠',
-  customerRelationships: '• 会员等级体系（普通/银卡/金卡）\n• 积分兑换优惠券\n• 个性化推荐算法\n• 7×24小时在线客服\n• 用户反馈快速响应机制',
-  customerSegments: '• 主要：在校大学生（18-25岁）\n• 特征：注重效率和性价比\n• 行为：高频外卖需求\n• 痛点：配送慢、费用高\n• 偏好：移动支付、线上下单',
-  keyResources: '• 专业配送团队（50人）\n• 自研智能调度系统\n• 校园商家资源网络\n• 用户数据与算法模型\n• 品牌与口碑',
-  channels: '• 自有APP（主渠道）\n• 微信小程序\n• 校园地推活动\n• 社交媒体营销\n• 宿舍楼宣传栏\n• 学生社团合作',
-  costStructure: '• 固定成本：技术开发、服务器、办公场地、基础工资（¥160,000/年）\n• 变动成本：配送提成、推广费用、包装材料、客服运营（¥140,000/年）\n• 总成本：¥300,000/年',
-  revenueStreams: '• 配送费收入（¥180,000/年）\n• 商家佣金15%（¥216,000/年）\n• 会员月卡收入（¥36,000/年）\n• 平台广告收入（¥18,000/年）\n• 预计总收入：¥450,000/年',
-};
+function bmcFromPayload(bmc?: BmcPayload): BMCData {
+  const base = emptyBmcData();
+  if (!bmc) return base;
+  return { ...base, ...bmc };
+}
+
+function hasBmcContent(data: BMCData) {
+  return Object.values(data).some((v) => String(v || '').trim());
+}
 
 interface CostItem {
   id: number;
@@ -94,13 +96,17 @@ function applyPayloadToState(d: BusinessModelWorkspacePayload, setters: {
 type BusinessModelModuleProps = {
   classId?: string;
   studentDisplayName?: string;
+  isTeamLeader?: boolean;
   onTaskComplete?: () => void;
+  onBusinessTabProgress?: (doneCount: number) => void;
 };
 
 export default function BusinessModelModule({
   classId,
   studentDisplayName = '同学',
+  isTeamLeader = false,
   onTaskComplete,
+  onBusinessTabProgress,
 }: BusinessModelModuleProps) {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<'canvas' | 'swot' | 'marketing' | 'finance' | 'warroom'>('swot');
@@ -118,11 +124,11 @@ export default function BusinessModelModule({
   const [newCostCategory, setNewCostCategory] = useState<'固定成本' | '变动成本'>('固定成本');
   const [toast, setToast] = useState('');
 
-  // 商业画布状态
-  const [canvasData, setCanvasData] = useState<BMCData>(initialCanvasData);
+  const [canvasData, setCanvasData] = useState<BMCData>(emptyBmcData);
   const [isGenerating, setIsGenerating] = useState(false);
-  // AI是否已生成（控制详情按钮显示）
+  const [isUploadingCanvas, setIsUploadingCanvas] = useState(false);
   const [aiGenerated, setAiGenerated] = useState(false);
+  const [workspaceIsTeamLeader, setWorkspaceIsTeamLeader] = useState(false);
 
   const [showShareModal, setShowShareModal] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
@@ -137,6 +143,10 @@ export default function BusinessModelModule({
   const [isSavingMarketing, setIsSavingMarketing] = useState(false);
   const [financeSaveTime, setFinanceSaveTime] = useState('');
   const [isSavingFinance, setIsSavingFinance] = useState(false);
+  const [warRoomRecordSaved, setWarRoomRecordSaved] = useState(false);
+  const [canvasTabUploaded, setCanvasTabUploaded] = useState(false);
+
+  const canCaptain = workspaceIsTeamLeader || isTeamLeader;
 
   const [versions, setVersions] = useState<Version[]>([]);
   const [currentVersion, setCurrentVersion] = useState(1);
@@ -159,7 +169,7 @@ export default function BusinessModelModule({
     const version = versions.find(v => v.id === versionId);
     if (!version) return;
     const data = version.data;
-    setCanvasData(data.canvasData || initialCanvasData);
+    setCanvasData(data.canvasData ? bmcFromPayload(data.canvasData as BmcPayload) : emptyBmcData());
     setSwotData(data.swotData || emptySwot);
     setMarketingData(data.marketingData || emptyMarketing);
     setCosts(data.costs || []);
@@ -190,6 +200,13 @@ export default function BusinessModelModule({
           setMarketingSaveTime,
           setFinanceSaveTime,
         });
+        const sid = d.studentId || '';
+        const myRecord = (d.warRoomTeamRecords || []).find((r) => r.studentId === sid);
+        setWarRoomRecordSaved(Boolean(myRecord && myRecord.filledCount >= 9));
+        setCanvasData(bmcFromPayload(d.bmc));
+        setCanvasTabUploaded(Boolean(d.bmcCanvasSavedAt));
+        setWorkspaceIsTeamLeader(Boolean(d.isTeamLeader));
+        setAiGenerated(Boolean(d.bmcCanvasGeneratedAt) || hasBmcContent(bmcFromPayload(d.bmc)));
       } catch (e) {
         if (!cancelled) message.error(e instanceof Error ? e.message : '加载失败');
       } finally {
@@ -201,21 +218,87 @@ export default function BusinessModelModule({
     };
   }, [classId]);
 
-  // AI生成画布内容
-  const handleAIGenerate = () => {
-    setIsGenerating(true);
-    setTimeout(() => {
-      setCanvasData(aiGeneratedCanvasData);
-      setAiGenerated(true);
-      setIsGenerating(false);
-      showToast('AI已生成完整商业画布内容 ✓');
-    }, 2000);
+  useEffect(() => {
+    if (!onBusinessTabProgress) return;
+    let done = 0;
+    if (swotSaveTime) done += 1;
+    if (marketingSaveTime) done += 1;
+    if (financeSaveTime) done += 1;
+    if (warRoomRecordSaved) done += 1;
+    if (canvasTabUploaded) done += 1;
+    onBusinessTabProgress(done);
+    if (done >= 5) onTaskComplete?.();
+  }, [
+    swotSaveTime,
+    marketingSaveTime,
+    financeSaveTime,
+    warRoomRecordSaved,
+    canvasTabUploaded,
+    onBusinessTabProgress,
+    onTaskComplete,
+  ]);
+
+  const applyWorkspaceBmc = (d: BusinessModelWorkspacePayload) => {
+    setCanvasData(bmcFromPayload(d.bmc));
+    setCanvasTabUploaded(Boolean(d.bmcCanvasSavedAt));
+    setWorkspaceIsTeamLeader(Boolean(d.isTeamLeader));
+    setAiGenerated(Boolean(d.bmcCanvasGeneratedAt) || hasBmcContent(bmcFromPayload(d.bmc)));
   };
 
-  const handleSaveCanvas = () => {
-    localStorage.setItem('bmc_canvas_data', JSON.stringify(canvasData));
-    showToast('商业画布已保存 ✓');
-    onTaskComplete?.();
+  const handleAIGenerate = async () => {
+    if (!classId?.trim()) {
+      message.warning('缺少班级信息');
+      return;
+    }
+    if (!canCaptain) {
+      message.info('仅队长可生成');
+      return;
+    }
+    setIsGenerating(true);
+    try {
+      const d = await generateBusinessModelBmcAi(classId.trim());
+      applyWorkspaceBmc(d);
+      showToast('已生成团队商业画布');
+    } catch (e) {
+      const err = e as GenerateBusinessModelBmcAiError;
+      if (err.missingMembers?.length) {
+        const names = err.missingMembers.map((m) => m.studentName).join('、');
+        Modal.warning({
+          title: '暂无法生成',
+          content: `${names} 还没参与虚拟董事会讨论，快去通知他完成画布填充吧`,
+        });
+      } else {
+        message.error(err instanceof Error ? err.message : '生成失败');
+      }
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  const handleUploadCanvas = async () => {
+    if (!classId?.trim()) {
+      message.warning('缺少班级信息');
+      return;
+    }
+    if (!canCaptain) {
+      message.info('仅队长可上传');
+      return;
+    }
+    if (!hasBmcContent(canvasData)) {
+      message.warning('请先生成或填写画布内容');
+      return;
+    }
+    setIsUploadingCanvas(true);
+    try {
+      const d = await saveBusinessModelBmc(classId.trim(), canvasData);
+      applyWorkspaceBmc(d);
+      setCanvasTabUploaded(true);
+      message.success('商业画布已上传');
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '上传失败');
+    } finally {
+      setIsUploadingCanvas(false);
+    }
   };
 
   const handleSaveSwot = async () => {
@@ -461,18 +544,11 @@ export default function BusinessModelModule({
       <textarea
         value={canvasData[cfg.key]}
         onChange={(e) => updateCanvasField(cfg.key, e.target.value)}
+        readOnly={!canCaptain}
         rows={rows}
-        className={`flex-1 w-full px-3 py-2 text-xs border ${cfg.ringBorder} rounded-lg focus:outline-none focus:ring-2 ${cfg.ring} focus:border-transparent resize-none bg-white`}
-        placeholder={`请输入${cfg.label}内容...`}
+        className={`flex-1 w-full px-3 py-2 text-xs border ${cfg.ringBorder} rounded-lg focus:outline-none focus:ring-2 ${cfg.ring} focus:border-transparent resize-none bg-white read-only:bg-gray-50 read-only:cursor-default`}
+        placeholder={canCaptain ? `请输入${cfg.label}` : '待队长生成'}
       />
-      {aiGenerated && (
-        <button
-          onClick={() => handleCardDetail(cfg.label)}
-          className={`mt-3 w-full py-2 border-2 ${cfg.detailBorder} ${cfg.detailText} text-xs font-bold rounded-lg ${cfg.detailHover} transition-all cursor-pointer whitespace-nowrap`}
-        >
-          详情
-        </button>
-      )}
     </div>
   );
 
@@ -498,9 +574,6 @@ export default function BusinessModelModule({
               <p className="text-white/80 text-sm">整合前期成果，构建完整商业模式</p>
             </div>
           </div>
-          <span className="px-3 py-1.5 rounded-full text-sm font-semibold bg-white/20 text-white whitespace-nowrap">
-            <i className="ri-loader-line mr-1.5"></i>进行中
-          </span>
         </div>
          
       </div>
@@ -535,10 +608,12 @@ export default function BusinessModelModule({
                 <div className="bg-pink-50 border border-pink-200 rounded-xl p-4 flex-1">
                   <h3 className="text-sm font-bold text-pink-900 mb-1">商业模式画布（BMC）</h3>
                   <p className="text-xs text-pink-700">
-                    标准九宫格布局，点击任意格子直接编辑内容，支持AI一键生成完整画布
+                    组员完成虚拟董事会并保存后，队长可综合生成团队最终画布
                   </p>
                 </div>
+                {canCaptain ? (
                 <button
+                  type="button"
                   onClick={handleAIGenerate}
                   disabled={isGenerating}
                   className="px-6 py-3 bg-gradient-to-r from-teal-500 to-emerald-500 text-white text-sm font-bold rounded-xl hover:shadow-lg transition-all whitespace-nowrap cursor-pointer disabled:opacity-50 flex items-center gap-2"
@@ -555,6 +630,7 @@ export default function BusinessModelModule({
                     </>
                   )}
                 </button>
+                ) : null}
               </div>
 
               {/* 九宫格画布 — 无空白布局 */}
@@ -586,22 +662,25 @@ export default function BusinessModelModule({
                 {renderCanvasCard(cardConfigs[8], 'col-span-3 shadow-lg', 4)}
               </div>
 
-              {/* 底部保存按钮 */}
               <div className="flex gap-4">
+                {canCaptain ? (
                 <button
-                  onClick={handleSaveCanvas}
-                  className="flex-1 px-6 py-3 bg-pink-500 text-white text-sm font-medium rounded-xl hover:bg-pink-600 transition-colors whitespace-nowrap cursor-pointer flex items-center justify-center gap-2"
+                  type="button"
+                  onClick={handleUploadCanvas}
+                  disabled={isUploadingCanvas}
+                  className="flex-1 px-6 py-3 bg-pink-500 text-white text-sm font-medium rounded-xl hover:bg-pink-600 transition-colors whitespace-nowrap cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
                 >
-                  <i className="ri-save-line"></i>
-                  保存画布
+                  <i className="ri-upload-line"></i>
+                  {isUploadingCanvas ? '上传中…' : '上传画布'}
                 </button>
-                <button
+                ) : null}
+                {/* <button
                   onClick={() => showToast('画布已导出为图片 ✓')}
                   className="px-6 py-3 bg-gray-100 text-gray-700 text-sm font-medium rounded-xl hover:bg-gray-200 transition-colors whitespace-nowrap cursor-pointer flex items-center gap-2"
                 >
                   <i className="ri-image-line"></i>
                   导出图片
-                </button>
+                </button> */}
               </div>
 
             </div>
@@ -868,7 +947,11 @@ export default function BusinessModelModule({
           )}
 
           {activeTab === 'warroom' && (
-            <WarRoom classId={classId} studentDisplayName={studentDisplayName} />
+            <WarRoom
+              classId={classId}
+              studentDisplayName={studentDisplayName}
+              onRecordSaved={() => setWarRoomRecordSaved(true)}
+            />
           )}
         </div>
       </div>

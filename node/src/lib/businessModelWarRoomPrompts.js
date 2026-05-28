@@ -34,10 +34,10 @@ export function buildRoundHatOrder(isFirstRound) {
 const HAT_ROLE_TEXT = {
   white: `白帽（数据分析师）：只基于客观事实和数据发言。补充市场规模、目标用户数量、竞品份额、成本利润测算、行业公开数据等。只说可验证事实，不主观评价。`,
   red: `红帽（用户代表）：只凭直觉和情绪，以目标用户身份说第一感受：会不会想用、舒服/别扭、在意什么体验。不解释理由。`,
-  black: `黑帽（风险预警员）：从市场、技术、资金、政策、竞争挑问题，说潜在风险、逻辑漏洞、执行致命点。`,
-  yellow: `黄帽（乐观倡导者）：挖掘优势、用户痛点、机会点、盈利模式亮点、增长可能。`,
-  green: `绿帽（创意设计师）：提出差异化创意：产品优化、新玩法/渠道/盈利模式、与竞品不同点。`,
-  blue: `蓝帽（项目经理）：控场与总结。引导讨论、追问关键信息，总结已解决与待解决问题，建议下一步。`,
+  black: `黑帽（风险预警员）：指出关键约束与风险前提，并给出可写入画布的调整建议（分阶段收入、试点客户、保守条目等）；禁止只做否定、不下结论、不给可采纳写法。`,
+  yellow: `黄帽（乐观倡导者）：挖掘优势、用户痛点、机会点、盈利模式亮点、增长可能，并推动某一格可落地的表述。`,
+  green: `绿帽（创意设计师）：提出差异化创意：产品优化、新玩法/渠道/盈利模式、与竞品不同点，尽量对应具体画布格。`,
+  blue: `蓝帽（项目经理）：控场与总结。引导讨论、追问关键信息，总结已解决与待解决问题，建议下一步并推动九格补全。`,
 };
 
 export const WAR_ROOM_ROUND_JSON_SCHEMA = `
@@ -55,29 +55,69 @@ export const WAR_ROOM_ROUND_JSON_SCHEMA = `
 messages 长度必须为 6。targetModule 只能是以下之一或 null：
 ${WAR_ROOM_MODULE_KEYS.join(', ')}`;
 
-export const WAR_ROOM_ROUND_SYSTEM_PROMPT = `你是创业实训「虚拟董事会」辩论编排助手。根据项目资料与 SWOT/4P/财务信息，生成一轮六顶思考帽董事会讨论。
+export const WAR_ROOM_ROUND_SYSTEM_PROMPT = `你是创业实训「虚拟董事会」协作填画布助手。根据项目资料与 SWOT/4P/财务信息，生成一轮六顶思考帽讨论，帮助学生形成完整、可落地的商业模式画布九格。
 
 规则：
 1. 每条消息对应一个帽子角色，严格按用户提示中的本轮发言顺序依次输出 6 条。
-2. 讨论围绕商业模式画布九要素，可互相回应、追问，语气像真实会议，避免模板腔。
-3. 白帽先摆事实；中间帽子可赞同或质疑前文；蓝帽最后总结并 @学生姓名 邀请其提问或补充。
+2. 讨论围绕九要素协作补格，语气像真实会议；目标是可采纳的画布内容，不是辩论赛或否定项目。
+3. 白帽先摆事实；中间帽子回应前文并推进某一格的表述；蓝帽最后总结并 @学生姓名 邀请其提问或补充。
 4. 当某条建议可写入画布某一格时，填 targetModule 与 moduleContent（moduleContent 为可直接替换该格的全文，条理清晰）。
-5. 黄帽与黑帽可搭配：先机会再风险，或针对前文风险再谈机会。
+5. 黑帽指出约束后须给出可落地的修正方向（或 moduleContent）；禁止空泛结论（如「可行性存疑」「完全没支撑」）而无后续建议。
+6. 单条 content 宜简洁（约 150–280 字），避免判决书式长段罗列。
 
 ${WAR_ROOM_ROUND_JSON_SCHEMA}`;
+
+const MODULE_HINT_ZH = {
+  customerSegments: '客户细分',
+  valueProposition: '价值主张',
+  channels: '渠道通路',
+  customerRelationships: '客户关系',
+  revenueStreams: '收入来源',
+  keyResources: '核心资源',
+  keyActivities: '关键业务',
+  keyPartnerships: '合作伙伴',
+  costStructure: '成本结构',
+};
 
 export const WAR_ROOM_SINGLE_REPLY_SCHEMA = `
 输出且仅输出一个 JSON 对象：
 {
   "hat": "white|red|black|yellow|green|blue",
-  "content": "回复正文",
-  "targetModule": "九格键名或 null",
-  "moduleContent": "替换用要点或空字符串"
-}`;
+  "content": "回复正文（对话语气，可概括要点）",
+  "targetModule": "九格键名或 null（仅一格时用，与 moduleContent 成对）",
+  "moduleContent": "单格替换用要点或空字符串",
+  "fills": [
+    { "targetModule": "九格键名", "moduleContent": "可直接写入该格的全文（\\n 分隔条目）" }
+  ]
+}
+规则：学生若询问、分析或要求填写画布某一格或多格，必须提供可采纳内容——涉及多格时 fills 数组每项对应一格（不要只写在 content 里）；仅闲聊时可 fills 为空。targetModule 只能是：
+${WAR_ROOM_MODULE_KEYS.join(', ')}`;
 
-export const WAR_ROOM_SINGLE_REPLY_SYSTEM_PROMPT = `你是虚拟董事会中的单一角色，根据对话历史与学生最新发言，以该角色身份回复一条消息。
+export const WAR_ROOM_SINGLE_REPLY_SYSTEM_PROMPT = `你是虚拟董事会中的单一角色，根据对话历史与学生最新发言，以该角色身份回复一条消息，协作填充商业模式画布九格（建设性、可落地，非反方辩论）。
+
+硬性要求：只要学生提到画布模块、九格、或请分析/填写某要素，必须在 fills（或 targetModule+moduleContent）中给出可一键写入画布的 moduleContent，否则视为无效回复。
 
 ${WAR_ROOM_SINGLE_REPLY_SCHEMA}`;
+
+export function detectModuleKeysFromUserText(text) {
+  const t = String(text || '');
+  const rules = [
+    { keys: ['keyPartnerships'], re: /合作伙伴|合作方|关键合作/i },
+    { keys: ['revenueStreams'], re: /收入来源|收入流|营收|盈利模式/i },
+    { keys: ['customerSegments'], re: /客户细分|目标客户|用户群/i },
+    { keys: ['valueProposition'], re: /价值主张/i },
+    { keys: ['channels'], re: /渠道通路|渠道/i },
+    { keys: ['customerRelationships'], re: /客户关系/i },
+    { keys: ['keyResources'], re: /核心资源/i },
+    { keys: ['keyActivities'], re: /关键业务|关键活动/i },
+    { keys: ['costStructure'], re: /成本结构|成本/i },
+  ];
+  const found = [];
+  for (const { keys, re } of rules) {
+    if (re.test(t)) found.push(...keys);
+  }
+  return [...new Set(found)];
+}
 
 function formatTranscriptForPrompt(messages, maxChars = 12000) {
   const list = Array.isArray(messages) ? messages : [];
@@ -148,7 +188,8 @@ ${formatTranscriptForPrompt(transcriptMessages)}
 - 本轮 6 条消息的发言顺序（必须严格按此顺序生成 messages 数组）：
 ${orderDesc}
 - 学生显示名：${studentDisplayName || '同学'}（蓝帽末条请 @${studentDisplayName || '同学'} 邀请提问）
-- 讨论须紧扣画布九要素，至少 3 条消息应带 targetModule 与可采纳的 moduleContent`;
+- 讨论须紧扣画布九要素，至少 3 条消息应带 targetModule 与可采纳的 moduleContent
+- 黑帽等角色禁止纯否定；须推动可写入九格的可行表述`;
 }
 
 export function buildWarRoomSingleReplyUserPrompt({
@@ -182,7 +223,32 @@ ${formatTranscriptForPrompt(transcriptMessages)}
 
 【你的角色】${HAT_ROLE_TEXT[mentionedHat] || mentionedHat}
 
-请以该角色身份回复一条消息，回应学生并推进画布讨论。`;
+${(() => {
+  const keys = detectModuleKeysFromUserText(userMessage);
+  if (!keys.length) return '';
+  const labels = keys.map((k) => MODULE_HINT_ZH[k] || k).join('、');
+  return `【学生本轮涉及的画布格】${labels}（键名：${keys.join(', ')}）。请在 fills 中为每一格分别填写 moduleContent，使学生可点击采纳写入。`;
+})()}
+
+请以该角色身份回复一条消息，回应学生并推进画布讨论。黑帽须带可采纳的修正建议，勿只做否定。`;
+}
+
+function collectFillsFromParsed(parsed) {
+  const fills = [];
+  const push = (targetModule, moduleContent) => {
+    const k = normalizeModuleKey(targetModule);
+    const c = String(moduleContent || '').trim();
+    if (!k || !c) return;
+    if (fills.some((x) => x.targetModule === k)) return;
+    fills.push({ targetModule: k, moduleContent: c });
+  };
+  if (Array.isArray(parsed.fills)) {
+    for (const f of parsed.fills) {
+      push(f?.targetModule, f?.moduleContent);
+    }
+  }
+  push(parsed.targetModule, parsed.moduleContent);
+  return fills;
 }
 
 function normalizeHat(h) {
@@ -257,15 +323,16 @@ export function parseWarRoomSingleReplyFromLlmText(text, mentionedHat) {
   }
   if (!parsed?.content) return { error: 'AI 返回格式无效' };
   const hat = normalizeHat(parsed.hat) || mentionedHat;
-  const targetModule = normalizeModuleKey(parsed.targetModule);
-  let moduleContent = String(parsed.moduleContent || '').trim();
-  if (!targetModule) moduleContent = '';
+  const fills = collectFillsFromParsed(parsed);
+  const targetModule = fills[0]?.targetModule || null;
+  const moduleContent = fills[0]?.moduleContent || '';
   return {
     message: {
       hat,
       content: String(parsed.content).trim(),
       targetModule,
       moduleContent,
+      fills: fills.length ? fills : undefined,
     },
   };
 }

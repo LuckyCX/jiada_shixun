@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { getPortalToken, parseJwtPayload } from '../../../lib/authApi';
 
 interface SimConfig {
   budget: number;
@@ -17,6 +18,40 @@ interface Metrics {
   revenueGrowth: number[];
 }
 
+function TrackingAutoSync({
+  classId,
+  onLoaded,
+}: {
+  classId: string;
+  onLoaded: (rec: any | null) => void;
+}) {
+  const onLoadedRef = useRef(onLoaded);
+  useEffect(() => {
+    onLoadedRef.current = onLoaded;
+  }, [onLoaded]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const token = getPortalToken('student');
+        const sid = token ? String(parseJwtPayload(token)?.sub || '') : '';
+        if (!sid) return;
+        const { fetchRoleSimulationMemberRecords } = await import('../../../lib/roleSimulationApi');
+        const data = await fetchRoleSimulationMemberRecords(classId, sid);
+        const rec = data?.records?.[0] || null;
+        if (!cancelled) onLoadedRef.current(rec);
+      } catch {
+        if (!cancelled) onLoadedRef.current(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [classId]);
+  return null;
+}
+
 const businessModels = [
   { id: 'b2c', label: 'B2C', icon: 'ri-user-line' },
   { id: 'b2b', label: 'B2B', icon: 'ri-building-line' },
@@ -26,52 +61,58 @@ const businessModels = [
   { id: 'platform', label: '平台抽佣', icon: 'ri-percent-line' },
 ];
 
-const aiSuggestions = [
-  { id: 1, title: '提高社交媒体投入', desc: '当前社交渠道ROI最高，建议将预算占比提升至50%以上', impact: '+18%用户增长' },
-  { id: 2, title: '优化定价策略', desc: '市场调研显示目标用户对当前定价敏感，建议降低10%以提升转化率', impact: '+12%转化率' },
-  { id: 3, title: '拓展B端合作', desc: '企业客户LTV是个人用户的5倍，建议开拓B端渠道', impact: '+25%收入' },
-];
-
 const LineChart = ({
   data,
   color,
   gradientId,
   currentDay,
+  yLabel,
+  yUnit,
+  yValueDivisor = 1,
 }: {
   data: number[];
   color: string;
   gradientId: string;
   currentDay: number;
+  yLabel: string;
+  yUnit: string;
+  yValueDivisor?: number;
 }) => {
   const W = 780;
   const H = 220;
   const PAD = 10;
+  const LPAD = 54; // 给竖轴预留空间
 
-  // 横坐标显示第1天到第30天
-  const xLabels = Array.from({ length: 30 }, (_, i) => i + 1);
-  
   // 只绘制已模拟的天数数据
   const validData = data.slice(0, currentDay);
   if (validData.length === 0) return null;
 
   const maxValue = Math.max(...validData) || 1;
+  const ticks = 4; // 0~max 分成4段，共5个刻度
+  const yTicks = Array.from({ length: ticks + 1 }, (_, i) => {
+    const ratio = i / ticks;
+    const v = maxValue * ratio;
+    const y = H - PAD - ratio * (H - PAD * 2);
+    const display = Math.round(v / yValueDivisor);
+    return { y, display };
+  });
 
   // 计算每个数据点的坐标
   const pts = validData.map((v, i) => ({
-    x: PAD + (i / 29) * (W - PAD * 2), // 按30天总长度计算位置
+    x: LPAD + (i / 29) * (W - LPAD - PAD), // 按30天总长度计算位置
     y: H - PAD - (v / maxValue) * (H - PAD * 2),
   }));
 
   const pathD = pts.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x},${p.y}`).join(' ');
   const last = pts[pts.length - 1];
-  const areaD = `${pathD} L ${last.x},${H - PAD} L ${PAD},${H - PAD} Z`;
+  const areaD = `${pathD} L ${last.x},${H - PAD} L ${LPAD},${H - PAD} Z`;
 
   // X轴标签：显示第1、8、15、22、30天
   const displayLabels = [
-    { day: 1, x: PAD },
-    { day: 8, x: PAD + (7 / 29) * (W - PAD * 2) },
-    { day: 15, x: PAD + (14 / 29) * (W - PAD * 2) },
-    { day: 22, x: PAD + (21 / 29) * (W - PAD * 2) },
+    { day: 1, x: LPAD },
+    { day: 8, x: LPAD + (7 / 29) * (W - LPAD - PAD) },
+    { day: 15, x: LPAD + (14 / 29) * (W - LPAD - PAD) },
+    { day: 22, x: LPAD + (21 / 29) * (W - LPAD - PAD) },
     { day: 30, x: W - PAD },
   ];
 
@@ -83,6 +124,19 @@ const LineChart = ({
           <stop offset="100%" stopColor={color} stopOpacity="0" />
         </linearGradient>
       </defs>
+      {/* 竖轴标题 */}
+      <text x={LPAD} y={12} textAnchor="start" fontSize="11" fill="#9ca3af">
+        {yLabel}（{yUnit}）
+      </text>
+      {/* 网格线与刻度 */}
+      {yTicks.map((t, idx) => (
+        <g key={idx}>
+          <line x1={LPAD} y1={t.y} x2={W - PAD} y2={t.y} stroke="#f3f4f6" strokeWidth="1" />
+          <text x={LPAD - 8} y={t.y + 4} textAnchor="end" fontSize="11" fill="#9ca3af">
+            {t.display}
+          </text>
+        </g>
+      ))}
       <path d={areaD} fill={`url(#${gradientId})`} />
       <path d={pathD} stroke={color} strokeWidth="3" fill="none" strokeLinejoin="round" />
       {pts.map((p, i) => (
@@ -98,19 +152,20 @@ const LineChart = ({
 };
 
 type RoleSimulationModuleProps = {
+  classId: string;
   onTaskComplete?: () => void;
 };
 
-const RoleSimulationModule = ({ onTaskComplete }: RoleSimulationModuleProps) => {
+const RoleSimulationModule = ({ classId, onTaskComplete }: RoleSimulationModuleProps) => {
   const [step, setStep] = useState<'config' | 'tracking' | 'optimize'>('config');
   const [isRunning, setIsRunning] = useState(false);
   const [simDay, setSimDay] = useState(0);
   const [config, setConfig] = useState<SimConfig>({
-    budget: 50000,
-    price: 99,
-    targetUsers: 10000,
+    budget: 0,
+    price: 0,
+    targetUsers: 0,
     businessModel: 'b2c',
-    channels: { social: 50, search: 30, offline: 20 },
+    channels: { social: 0, search: 0, offline: 0 },
   });
   const [metrics, setMetrics] = useState<Metrics>({
     users: 0,
@@ -120,17 +175,178 @@ const RoleSimulationModule = ({ onTaskComplete }: RoleSimulationModuleProps) => 
     userGrowth: Array(30).fill(0),
     revenueGrowth: Array(30).fill(0),
   });
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const [entryLoading, setEntryLoading] = useState(true);
+  const [entryAllowed, setEntryAllowed] = useState(true);
+  const [entryError, setEntryError] = useState<string>('');
+  const [prerequisiteModuleKey, setPrerequisiteModuleKey] = useState<string>('');
+
+  const [thinkingLines, setThinkingLines] = useState<string[]>([]);
+  const [thinkingText, setThinkingText] = useState<string>('');
+  const [showThinking, setShowThinking] = useState(true);
+  const thinkingScrollRef = useRef<HTMLDivElement | null>(null);
+  const [optimize, setOptimize] = useState<any>(null);
+  const [runId, setRunId] = useState<string>('');
+  const [lastConfig, setLastConfig] = useState<SimConfig | null>(null);
+  const [activeRunIndex, setActiveRunIndex] = useState<number>(0);
+  const [latestSnapshot, setLatestSnapshot] = useState<{
+    runId: string;
+    runIndex: number;
+    createdAt: string;
+    config: any;
+    tracking: any;
+    optimize: any;
+  } | null>(null);
+
+  const [recordsOpen, setRecordsOpen] = useState(false);
+  const [recordsLoading, setRecordsLoading] = useState(false);
+  const [recordsData, setRecordsData] = useState<any>(null);
+  const [activeMemberId, setActiveMemberId] = useState<string>('');
+  const [memberRecords, setMemberRecords] = useState<any>(null);
+  const [memberRecordsLoading, setMemberRecordsLoading] = useState(false);
 
   useEffect(() => {
     return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
+      abortRef.current?.abort();
     };
   }, []);
 
+  useEffect(() => {
+    if (!isRunning || !showThinking) return;
+    const el = thinkingScrollRef.current;
+    if (!el) return;
+    // 始终滚动到最新内容（底部）
+    el.scrollTop = el.scrollHeight;
+  }, [thinkingText, isRunning, showThinking]);
+
+  useEffect(() => {
+    if (!recordsOpen || !activeMemberId) return;
+    let cancelled = false;
+    setMemberRecords(null);
+    setMemberRecordsLoading(true);
+    (async () => {
+      try {
+        const { fetchRoleSimulationMemberRecords } = await import('../../../lib/roleSimulationApi');
+        const data = await fetchRoleSimulationMemberRecords(classId, activeMemberId);
+        if (!cancelled) setMemberRecords(data);
+      } finally {
+        if (!cancelled) setMemberRecordsLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [recordsOpen, activeMemberId, classId]);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        setEntryLoading(true);
+        setEntryError('');
+        const { fetchRoleSimulationEntry } = await import('../../../lib/roleSimulationApi');
+        const entry = await fetchRoleSimulationEntry(classId);
+        if (!mounted) return;
+        setEntryAllowed(Boolean(entry.allowed));
+        setPrerequisiteModuleKey(String(entry.prerequisiteModuleKey || ''));
+      } catch (e: any) {
+        if (!mounted) return;
+        setEntryAllowed(false);
+        setEntryError(String(e?.message || '加载失败'));
+      } finally {
+        if (mounted) setEntryLoading(false);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, [classId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const token = getPortalToken('student');
+        const sid = token ? String(parseJwtPayload(token)?.sub || '') : '';
+        if (!sid) return;
+        const { fetchRoleSimulationMemberRecords } = await import('../../../lib/roleSimulationApi');
+        const data = await fetchRoleSimulationMemberRecords(classId, sid);
+        const rec = data?.records?.[0];
+        if (!rec || cancelled) return;
+
+        setLatestSnapshot({
+          runId: String(rec.id),
+          runIndex: Number(rec.runIndex || 0),
+          createdAt: String(rec.createdAt || ''),
+          config: rec.config || {},
+          tracking: rec.tracking || {},
+          optimize: rec.optimize || {},
+        });
+
+        const cfg = rec.config || {};
+        const nextConfig: SimConfig = {
+          budget: Number(cfg.budget || 0),
+          price: Number(cfg.price || 0),
+          targetUsers: Number(cfg.targetUsers || 0),
+          businessModel: String(cfg.businessModel || 'b2c'),
+          channels: {
+            social: Number(cfg.channels?.social || 0),
+            search: Number(cfg.channels?.search || 0),
+            offline: Number(cfg.channels?.offline || 0),
+          },
+        };
+        setConfig(nextConfig);
+        setLastConfig(nextConfig);
+        setRunId(String(rec.id));
+        setOptimize(rec.optimize || null);
+
+        const daysArr = Array.isArray(rec.tracking?.days) ? rec.tracking.days : [];
+        const maxDay = Math.max(0, ...daysArr.map((d: any) => Number(d?.day || 0)));
+        if (maxDay > 0) {
+          const usersSeries = Array(30).fill(0);
+          const revenueSeries = Array(30).fill(0);
+          for (const d of daysArr) {
+            const day = Number(d?.day || 0);
+            if (day >= 1 && day <= 30) {
+              usersSeries[day - 1] = Number(d?.users || 0);
+              revenueSeries[day - 1] = Number(d?.revenue || 0);
+            }
+          }
+          setSimDay(maxDay);
+          setMetrics({
+            users: Number(rec.tracking?.users || usersSeries[Math.max(0, maxDay - 1)] || 0),
+            revenue: Number(rec.tracking?.revenue || revenueSeries[Math.max(0, maxDay - 1)] || 0),
+            cac: Number(rec.tracking?.cac || 0),
+            ltv: Number(rec.tracking?.ltv || 0),
+            userGrowth: usersSeries,
+            revenueGrowth: revenueSeries,
+          });
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [classId]);
+
   const startSimulation = () => {
+    if (entryLoading) return;
+    if (!entryAllowed) return;
+    abortRef.current?.abort();
+    abortRef.current = new AbortController();
+
     setIsRunning(true);
+    setRunId('');
+    setActiveRunIndex(0);
+    setOptimize(null);
+    setThinkingLines([]);
+    setThinkingText('');
+    setShowThinking(true);
     setSimDay(0);
+    setLastConfig(config);
+    setLatestSnapshot(null);
     setMetrics({
       users: 0,
       revenue: 0,
@@ -141,55 +357,207 @@ const RoleSimulationModule = ({ onTaskComplete }: RoleSimulationModuleProps) => 
     });
     setStep('tracking');
 
-    let day = 0;
-    const baseGrowth = config.budget / 1000;
-
-    timerRef.current = setInterval(() => {
-      day += 1;
-      if (day > 30) {
-        if (timerRef.current) clearInterval(timerRef.current);
+    (async () => {
+      try {
+        const { streamRoleSimulation } = await import('../../../lib/roleSimulationApi');
+        await streamRoleSimulation(
+          classId,
+          {
+            businessModel: config.businessModel,
+            config: {
+              budget: config.budget,
+              price: config.price,
+              targetUsers: config.targetUsers,
+              channels: config.channels,
+            },
+            prevRunId: runId || undefined,
+          },
+          (ev) => {
+            if (ev.event === 'start') {
+              const data = (ev as any).data || {};
+              if (data?.runId) setRunId(String(data.runId));
+              if (data?.runIndex != null) setActiveRunIndex(Number(data.runIndex || 0));
+              return;
+            }
+            if (ev.event === 'thinking_delta') {
+              const chunk = String((ev as any).data?.line || '');
+              if (chunk) {
+                setThinkingText((prev) => {
+                  const next = (prev + chunk).slice(-4000);
+                  return next;
+                });
+              }
+              return;
+            }
+            if (ev.event === 'day_result') {
+              const d = (ev as any).data;
+              const day = Number(d?.day || 0);
+              if (!day || day < 1 || day > 30) return;
+              setShowThinking(false);
+              setSimDay(day);
+              setMetrics((prev) => {
+                const userGrowth = [...prev.userGrowth];
+                const revenueGrowth = [...prev.revenueGrowth];
+                userGrowth[day - 1] = Number(d.users || 0);
+                revenueGrowth[day - 1] = Number(d.revenue || 0);
+                return {
+                  users: Number(d.users || 0),
+                  revenue: Number(d.revenue || 0),
+                  cac: Number(d.cac || 0),
+                  ltv: Number(d.ltv || 0),
+                  userGrowth,
+                  revenueGrowth,
+                };
+              });
+              return;
+            }
+            if (ev.event === 'final_snapshot') {
+              setOptimize((ev as any).data?.optimize || null);
+              return;
+            }
+            if (ev.event === 'done') {
+              const data = (ev as any).data;
+              setRunId(String(data?.runId || ''));
+              setOptimize(data?.optimize || null);
+              setIsRunning(false);
+              setSimDay(30);
+              setLatestSnapshot({
+                runId: String(data?.runId || ''),
+                runIndex: Number(data?.runIndex || activeRunIndex || 0),
+                createdAt: String(data?.createdAt || ''),
+                config: {
+                  businessModel: config.businessModel,
+                  budget: config.budget,
+                  price: config.price,
+                  targetUsers: config.targetUsers,
+                  channels: config.channels,
+                },
+                tracking: data?.tracking || {},
+                optimize: data?.optimize || {},
+              });
+              onTaskComplete?.();
+              return;
+            }
+            if (ev.event === 'error') {
+              setIsRunning(false);
+              setEntryError(String((ev as any).data?.message || '模拟失败'));
+              return;
+            }
+          },
+          abortRef.current.signal
+        );
+      } catch (e: any) {
         setIsRunning(false);
-        onTaskComplete?.();
-        return;
+        setEntryError(String(e?.message || '模拟失败'));
       }
+    })();
+  };
 
-      setSimDay(day);
-      setMetrics((prev) => {
-        const newUserGrowth = [...prev.userGrowth];
-        const newRevenueGrowth = [...prev.revenueGrowth];
+  const syncTrackingFromRecord = (rec: any) => {
+    if (!rec) return;
+    const daysArr = Array.isArray(rec.tracking?.days) ? rec.tracking.days : [];
+    const maxDay = Math.max(0, ...daysArr.map((d: any) => Number(d?.day || 0)));
+    const usersSeries = Array(30).fill(0);
+    const revenueSeries = Array(30).fill(0);
+    for (const d of daysArr) {
+      const day = Number(d?.day || 0);
+      if (day >= 1 && day <= 30) {
+        usersSeries[day - 1] = Number(d?.users || 0);
+        revenueSeries[day - 1] = Number(d?.revenue || 0);
+      }
+    }
+    setSimDay(maxDay);
+    setMetrics({
+      users: Number(rec.tracking?.users || usersSeries[Math.max(0, maxDay - 1)] || 0),
+      revenue: Number(rec.tracking?.revenue || revenueSeries[Math.max(0, maxDay - 1)] || 0),
+      cac: Number(rec.tracking?.cac || 0),
+      ltv: Number(rec.tracking?.ltv || 0),
+      userGrowth: usersSeries,
+      revenueGrowth: revenueSeries,
+    });
+  };
 
-        const prevUsers = day === 1 ? 0 : newUserGrowth[day - 2];
-        const growth = baseGrowth * (1 + day * 0.05) * (0.85 + Math.random() * 0.3);
-        const todayUsers = Math.round(prevUsers + growth);
-        newUserGrowth[day - 1] = todayUsers;
-
-        const prevRevenue = day === 1 ? 0 : newRevenueGrowth[day - 2];
-        const revenueGrowth = todayUsers * config.price * 0.08 * (0.9 + Math.random() * 0.2);
-        const todayRevenue = Math.round(prevRevenue + revenueGrowth);
-        newRevenueGrowth[day - 1] = todayRevenue;
-
-        const totalUsers = todayUsers;
-        const totalRevenue = todayRevenue;
-        const cac = totalUsers > 0 ? Math.round(config.budget / totalUsers) : 0;
-        const ltv = Math.round(config.price * 8.5);
-
-        return {
-          users: totalUsers,
-          revenue: totalRevenue,
-          cac,
-          ltv,
-          userGrowth: newUserGrowth,
-          revenueGrowth: newRevenueGrowth,
-        };
-      });
-    }, 800);
+  const resumeSimulation = async (rec: any) => {
+    if (entryLoading || !entryAllowed) return;
+    if (!rec?.id) return;
+    abortRef.current?.abort();
+    abortRef.current = new AbortController();
+    setIsRunning(true);
+    setThinkingText('');
+    setShowThinking(true);
+    try {
+      const { streamRoleSimulation } = await import('../../../lib/roleSimulationApi');
+      await streamRoleSimulation(
+        classId,
+        {
+          businessModel: String(rec.config?.businessModel || config.businessModel || ''),
+          config: rec.config || {},
+          runId: String(rec.id),
+        },
+        (ev) => {
+          if (ev.event === 'thinking_delta') {
+            const chunk = String((ev as any).data?.line || '');
+            if (chunk) {
+              setThinkingText((prev) => (prev + chunk).slice(-4000));
+            }
+            return;
+          }
+          if (ev.event === 'day_result') {
+            const d = (ev as any).data;
+            const day = Number(d?.day || 0);
+            if (!day || day < 1 || day > 30) return;
+            setShowThinking(false);
+            setSimDay(day);
+            setMetrics((prev) => {
+              const userGrowth = [...prev.userGrowth];
+              const revenueGrowth = [...prev.revenueGrowth];
+              userGrowth[day - 1] = Number(d.users || 0);
+              revenueGrowth[day - 1] = Number(d.revenue || 0);
+              return {
+                users: Number(d.users || 0),
+                revenue: Number(d.revenue || 0),
+                cac: Number(d.cac || 0),
+                ltv: Number(d.ltv || 0),
+                userGrowth,
+                revenueGrowth,
+              };
+            });
+            return;
+          }
+          if (ev.event === 'final_snapshot') {
+            setOptimize((ev as any).data?.optimize || null);
+            return;
+          }
+          if (ev.event === 'done') {
+            const data = (ev as any).data;
+            setRunId(String(data?.runId || ''));
+            setOptimize(data?.optimize || null);
+            setIsRunning(false);
+            setSimDay(30);
+            onTaskComplete?.();
+            return;
+          }
+          if (ev.event === 'error') {
+            setIsRunning(false);
+            setEntryError(String((ev as any).data?.message || '模拟失败'));
+            return;
+          }
+        },
+        abortRef.current.signal
+      );
+    } catch (e: any) {
+      setIsRunning(false);
+      setEntryError(String(e?.message || '模拟失败'));
+    }
   };
 
   const resetSimulation = () => {
-    if (timerRef.current) clearInterval(timerRef.current);
+    abortRef.current?.abort();
     setIsRunning(false);
     setSimDay(0);
     setStep('config');
+    // 重新配置：保留上一次配置，便于迭代优化
+    if (lastConfig) setConfig(lastConfig);
     setMetrics({
       users: 0,
       revenue: 0,
@@ -230,6 +598,40 @@ const RoleSimulationModule = ({ onTaskComplete }: RoleSimulationModuleProps) => 
       {/* 投入配置 */}
       {step === 'config' && (
         <div className="space-y-4">
+          {latestSnapshot && (
+            <div className="bg-white border border-gray-200 rounded-xl p-5">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex-1">
+                  <p className="text-sm font-semibold text-gray-900">上次模拟进度</p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    第 {latestSnapshot.runIndex} 次模拟 · {latestSnapshot.createdAt.replace('T', ' ').slice(0, 16)}
+                  </p>
+                </div>
+                <div className="text-right">
+                  <div className="text-sm font-bold text-emerald-600">第 {simDay} / 30 天</div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    用户 {Number(metrics.users || 0).toLocaleString()} · 收入 ¥{(Number(metrics.revenue || 0) / 10000).toFixed(1)} 万
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+          {!entryLoading && !entryAllowed && (
+            <div className="bg-white border border-gray-200 rounded-xl p-5">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex-1">
+                  <p className="text-sm font-semibold text-gray-900">暂不可开始仿真模拟</p>
+                  <p className="text-xs text-gray-500 mt-1 leading-relaxed">
+                    {entryError ? entryError : '请先完成关联课程的知识点检测后再开始。'}
+                  </p>
+                  {prerequisiteModuleKey && (
+                    <p className="text-xs text-gray-400 mt-1">关联课程：{prerequisiteModuleKey}</p>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* 商业模型选择 */}
           <div className="bg-white border border-gray-200 rounded-xl p-5">
             <h3 className="text-base font-bold text-gray-900 mb-4">选择商业模型</h3>
@@ -336,19 +738,89 @@ const RoleSimulationModule = ({ onTaskComplete }: RoleSimulationModuleProps) => 
             ))}
           </div>
 
-          <button
-            onClick={startSimulation}
-            className="w-full py-4 bg-emerald-500 text-white rounded-xl font-bold text-base hover:bg-emerald-600 transition-colors flex items-center justify-center gap-2"
-          >
-            <i className="ri-play-circle-line text-xl" />
-            开始模拟市场
-          </button>
+          <div className="flex gap-3">
+            <button
+              onClick={startSimulation}
+              disabled={entryLoading || !entryAllowed}
+              className={`flex-[3] py-3 rounded-xl font-bold text-sm transition-colors flex items-center justify-center gap-2 ${
+                entryLoading || !entryAllowed
+                  ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
+                  : 'bg-emerald-500 text-white hover:bg-emerald-600'
+              }`}
+            >
+              <i className="ri-play-circle-line text-lg" />
+              开始模拟市场
+            </button>
+
+            <button
+              onClick={() => {
+                setRecordsOpen(true);
+                setRecordsLoading(true);
+                setMemberRecords(null);
+                (async () => {
+                  try {
+                    const { fetchRoleSimulationRecords } = await import('../../../lib/roleSimulationApi');
+                    const data = await fetchRoleSimulationRecords(classId);
+                    setRecordsData(data);
+                    const firstMember = data?.members?.[0]?.studentId || '';
+                    setActiveMemberId(firstMember);
+                  } finally {
+                    setRecordsLoading(false);
+                  }
+                })();
+              }}
+              className="flex-[1] py-3 border border-gray-200 text-gray-700 rounded-xl font-medium hover:bg-gray-50 transition-colors flex items-center justify-center gap-2 text-sm"
+            >
+              <i className="ri-history-line" />
+              记录
+            </button>
+          </div>
         </div>
       )}
 
       {/* 实时追踪 */}
       {step === 'tracking' && (
         <div className="space-y-4">
+          {/* 进入追踪时先同步一次数据库最新进度；若未完成则接力继续输出 */}
+          {!isRunning && (
+            <TrackingAutoSync
+              classId={classId}
+              onLoaded={(rec) => {
+                if (!rec) return;
+                syncTrackingFromRecord(rec);
+                const daysArr = Array.isArray(rec.tracking?.days) ? rec.tracking.days : [];
+                const maxDay = Math.max(0, ...daysArr.map((d: any) => Number(d?.day || 0)));
+                if (!isRunning && maxDay > 0 && maxDay < 30) {
+                  void resumeSimulation(rec);
+                }
+              }}
+            />
+          )}
+          {/* 思考过程：开始出数后隐藏 */}
+          {showThinking && isRunning && (
+            <div className="bg-white border border-gray-200 rounded-xl p-4">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm font-semibold text-gray-700">AI 思考过程</span>
+              </div>
+              <div
+                ref={thinkingScrollRef}
+                className="h-20 bg-gray-50 rounded-lg border border-gray-100 px-3 py-2 overflow-y-auto"
+              >
+                <div className="space-y-1">
+                  {thinkingText ? (
+                    <div
+                      className="text-xs text-gray-600 leading-relaxed whitespace-pre-wrap break-words"
+                    >
+                      {thinkingText}
+                    </div>
+                  ) : (
+                    <div className="text-xs text-gray-400">暂无内容</div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* 进度 */}
           <div className="bg-white border border-gray-200 rounded-xl p-4">
             <div className="flex items-center justify-between mb-3">
@@ -398,7 +870,14 @@ const RoleSimulationModule = ({ onTaskComplete }: RoleSimulationModuleProps) => 
             <h3 className="text-base font-bold text-gray-900 mb-4">用户增长趋势</h3>
             <div className="h-56">
               {metrics.userGrowth.some((v) => v > 0) ? (
-                <LineChart data={metrics.userGrowth} color="rgb(16,185,129)" gradientId="userGrad" currentDay={simDay} />
+                <LineChart
+                  data={metrics.userGrowth}
+                  color="rgb(16,185,129)"
+                  gradientId="userGrad"
+                  currentDay={simDay}
+                  yLabel="用户数"
+                  yUnit="人"
+                />
               ) : (
                 <div className="h-full flex items-center justify-center text-gray-400 text-sm">
                   <i className="ri-bar-chart-2-line mr-2 text-xl" />暂无数据，请先开始模拟
@@ -412,7 +891,15 @@ const RoleSimulationModule = ({ onTaskComplete }: RoleSimulationModuleProps) => 
             <h3 className="text-base font-bold text-gray-900 mb-4">收入增长趋势</h3>
             <div className="h-56">
               {metrics.revenueGrowth.some((v) => v > 0) ? (
-                <LineChart data={metrics.revenueGrowth} color="rgb(59,130,246)" gradientId="revenueGrad" currentDay={simDay} />
+                <LineChart
+                  data={metrics.revenueGrowth}
+                  color="rgb(59,130,246)"
+                  gradientId="revenueGrad"
+                  currentDay={simDay}
+                  yLabel="收入"
+                  yUnit="万元"
+                  yValueDivisor={10000}
+                />
               ) : (
                 <div className="h-full flex items-center justify-center text-gray-400 text-sm">
                   <i className="ri-line-chart-line mr-2 text-xl" />暂无数据，请先开始模拟
@@ -449,19 +936,22 @@ const RoleSimulationModule = ({ onTaskComplete }: RoleSimulationModuleProps) => 
               <h3 className="text-base font-bold text-gray-900">AI 优化建议</h3>
             </div>
             <div className="space-y-3">
-              {aiSuggestions.map((s) => (
-                <div key={s.id} className="border border-gray-100 rounded-xl p-4 hover:border-emerald-200 transition-colors">
+              {(Array.isArray(optimize?.suggestions) ? optimize.suggestions : []).map((s: any, idx: number) => (
+                <div key={idx} className="border border-gray-100 rounded-xl p-4 hover:border-emerald-200 transition-colors">
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex-1">
-                      <p className="text-sm font-semibold text-gray-800">{s.title}</p>
-                      <p className="text-xs text-gray-500 mt-1 leading-relaxed">{s.desc}</p>
+                      <p className="text-sm font-semibold text-gray-800">{String(s.title || '').trim()}</p>
+                      <p className="text-xs text-gray-500 mt-1 leading-relaxed">{String(s.desc || '').trim()}</p>
                     </div>
                     <span className="text-xs bg-emerald-100 text-emerald-600 px-2 py-1 rounded-full whitespace-nowrap font-medium">
-                      {s.impact}
+                      {String(s.impact || '').trim()}
                     </span>
                   </div>
                 </div>
               ))}
+              {(!optimize || !Array.isArray(optimize?.suggestions) || optimize.suggestions.length === 0) && (
+                <div className="text-sm text-gray-400 py-8 text-center">暂无优化建议</div>
+              )}
             </div>
           </div>
 
@@ -475,6 +965,9 @@ const RoleSimulationModule = ({ onTaskComplete }: RoleSimulationModuleProps) => 
                 <p className="text-sm text-gray-600">定价 ¥{config.price}</p>
                 <p className="text-sm text-gray-600">用户 {metrics.users.toLocaleString()}人</p>
                 <p className="text-sm text-gray-600">收入 ¥{(metrics.revenue / 10000).toFixed(1)}万</p>
+                {optimize?.comparison?.current?.summary && (
+                  <p className="text-xs text-gray-500 mt-2 leading-relaxed">{String(optimize.comparison.current.summary)}</p>
+                )}
               </div>
               <div className="border border-emerald-200 bg-emerald-50 rounded-xl p-4">
                 <p className="text-xs text-emerald-600 mb-2">优化预测</p>
@@ -482,6 +975,9 @@ const RoleSimulationModule = ({ onTaskComplete }: RoleSimulationModuleProps) => 
                 <p className="text-sm text-gray-600">定价 ¥{Math.round(config.price * 0.9)}</p>
                 <p className="text-sm text-emerald-600 font-medium">用户 {Math.round(metrics.users * 1.18).toLocaleString()}人</p>
                 <p className="text-sm text-emerald-600 font-medium">收入 ¥{(metrics.revenue * 1.25 / 10000).toFixed(1)}万</p>
+                {optimize?.comparison?.optimized?.summary && (
+                  <p className="text-xs text-emerald-700 mt-2 leading-relaxed">{String(optimize.comparison.optimized.summary)}</p>
+                )}
               </div>
             </div>
           </div>
@@ -499,6 +995,172 @@ const RoleSimulationModule = ({ onTaskComplete }: RoleSimulationModuleProps) => 
             >
               <i className="ri-line-chart-line" />查看数据
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* 历史记录弹窗 */}
+      {recordsOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+          <div className="w-full max-w-5xl bg-white rounded-2xl overflow-hidden shadow-xl">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+              <div className="text-base font-bold text-gray-900">仿真记录</div>
+              <button
+                onClick={() => {
+                  setRecordsOpen(false);
+                  setRecordsData(null);
+                  setMemberRecords(null);
+                }}
+                className="w-8 h-8 rounded-lg hover:bg-gray-100 text-gray-500 flex items-center justify-center"
+              >
+                <i className="ri-close-line text-lg" />
+              </button>
+            </div>
+            <div className="flex h-[520px]">
+              <div className="w-56 border-r border-gray-100 overflow-y-auto">
+                {recordsLoading ? (
+                  <div className="p-4 text-sm text-gray-400">加载中...</div>
+                ) : (
+                  <div className="p-2 space-y-1">
+                    {(recordsData?.members || []).map((m: any) => (
+                      <button
+                        key={m.studentId}
+                        onClick={() => setActiveMemberId(String(m.studentId))}
+                        className={`w-full text-left px-3 py-2 rounded-xl text-sm font-medium transition-colors ${
+                          activeMemberId === String(m.studentId)
+                            ? 'bg-emerald-50 text-emerald-700'
+                            : 'text-gray-700 hover:bg-gray-50'
+                        }`}
+                      >
+                        {m.studentName}
+                      </button>
+                    ))}
+                    {(!recordsData?.members || recordsData.members.length === 0) && (
+                      <div className="p-4 text-sm text-gray-400">暂无成员</div>
+                    )}
+                  </div>
+                )}
+              </div>
+              <div className="flex-1 overflow-y-auto">
+                <div className="p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="text-sm font-semibold text-gray-900">历史记录</div>
+                  </div>
+                  {memberRecordsLoading ? (
+                    <div className="text-sm text-gray-400 py-8 text-center">加载中...</div>
+                  ) : (
+                    <div className="space-y-3">
+                      {(memberRecords?.records || []).map((r: any) => (
+                        <details key={r.id} className="border border-gray-200 rounded-xl p-4">
+                          <summary className="cursor-pointer list-none flex items-center justify-between">
+                            <div className="text-sm font-semibold text-gray-800">
+                              第 {Number(r.runIndex || 0)} 次模拟
+                              <span className="text-xs text-gray-400 font-normal ml-2">{String(r.createdAt || '').replace('T', ' ').slice(0, 16)}</span>
+                            </div>
+                            <i className="ri-arrow-down-s-line text-gray-400" />
+                          </summary>
+                          <div className="mt-3 space-y-3">
+                            <div className="grid grid-cols-2 gap-3">
+                              <div className="bg-gray-50 rounded-xl p-3">
+                                <div className="text-xs text-gray-500 mb-2">配置快照</div>
+                                <div className="text-sm text-gray-800">商业模型：{String(r.config?.businessModel || '') || '—'}</div>
+                                <div className="text-sm text-gray-800">预算：¥{Number(r.config?.budget || 0).toLocaleString()}</div>
+                                <div className="text-sm text-gray-800">定价：¥{Number(r.config?.price || 0)}</div>
+                                <div className="text-sm text-gray-800">目标用户：{Number(r.config?.targetUsers || 0).toLocaleString()} 人</div>
+                                <div className="text-sm text-gray-800">
+                                  渠道：社交 {Number(r.config?.channels?.social || 0)}% / 搜索 {Number(r.config?.channels?.search || 0)}% / 线下 {Number(r.config?.channels?.offline || 0)}%
+                                </div>
+                              </div>
+                              <div className="bg-gray-50 rounded-xl p-3">
+                                <div className="text-xs text-gray-500 mb-2">追踪快照（第30天）</div>
+                                <div className="text-sm text-gray-800">用户：{Number(r.tracking?.users || 0).toLocaleString()} 人</div>
+                                <div className="text-sm text-gray-800">收入：¥{(Number(r.tracking?.revenue || 0) / 10000).toFixed(1)} 万</div>
+                                <div className="text-sm text-gray-800">CAC：¥{Number(r.tracking?.cac || 0)}</div>
+                                <div className="text-sm text-gray-800">LTV：¥{Number(r.tracking?.ltv || 0)}</div>
+                              </div>
+                            </div>
+
+                            <div className="border border-gray-100 rounded-xl p-3">
+                              <div className="text-xs text-gray-500 mb-2">完整模拟数据（30天）</div>
+                              {Array.isArray(r.tracking?.days) && r.tracking.days.length > 0 ? (
+                                <div className="grid grid-cols-1 gap-4">
+                                  <div>
+                                    <div className="text-xs text-gray-500 mb-2">用户增长趋势</div>
+                                    <div className="h-44">
+                                      <LineChart
+                                        data={Array.from({ length: 30 }, (_, i) => {
+                                          const day = i + 1;
+                                          const row = (r.tracking.days as any[]).find((x) => Number(x?.day) === day);
+                                          return Number(row?.users || 0);
+                                        })}
+                                        color="rgb(16,185,129)"
+                                        gradientId={`recordUserGrad_${String(r.id)}`}
+                                        currentDay={Math.max(...(r.tracking.days as any[]).map((x) => Number(x?.day || 0))) || 0}
+                                        yLabel="用户数"
+                                        yUnit="人"
+                                      />
+                                    </div>
+                                  </div>
+                                  <div>
+                                    <div className="text-xs text-gray-500 mb-2">收入增长趋势</div>
+                                    <div className="h-44">
+                                      <LineChart
+                                        data={Array.from({ length: 30 }, (_, i) => {
+                                          const day = i + 1;
+                                          const row = (r.tracking.days as any[]).find((x) => Number(x?.day) === day);
+                                          return Number(row?.revenue || 0);
+                                        })}
+                                        color="rgb(59,130,246)"
+                                        gradientId={`recordRevenueGrad_${String(r.id)}`}
+                                        currentDay={Math.max(...(r.tracking.days as any[]).map((x) => Number(x?.day || 0))) || 0}
+                                        yLabel="收入"
+                                        yUnit="万元"
+                                        yValueDivisor={10000}
+                                      />
+                                    </div>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="text-sm text-gray-400 py-6 text-center">暂无数据</div>
+                              )}
+                            </div>
+
+                            <div className="bg-emerald-50 rounded-xl p-3 border border-emerald-100">
+                              <div className="text-xs text-emerald-700 mb-2">优化建议（完整版）</div>
+                              {(Array.isArray(r.optimize?.suggestions) ? r.optimize.suggestions : []).map((s: any, idx: number) => (
+                                <div key={idx} className="py-2 border-b border-emerald-100 last:border-b-0">
+                                  <div className="text-sm font-semibold text-emerald-900">{String(s.title || '').trim() || '—'}</div>
+                                  <div className="text-xs text-emerald-800 mt-1 leading-relaxed">{String(s.desc || '').trim()}</div>
+                                  <div className="text-xs text-emerald-700 mt-1">{String(s.impact || '').trim()}</div>
+                                </div>
+                              ))}
+                              {(!r.optimize?.suggestions || r.optimize.suggestions.length === 0) && (
+                                <div className="text-sm text-emerald-800">暂无</div>
+                              )}
+                              {(r.optimize?.comparison?.current?.summary || r.optimize?.comparison?.optimized?.summary) && (
+                                <div className="mt-3 grid grid-cols-2 gap-3">
+                                  <div className="bg-white/60 rounded-xl p-3">
+                                    <div className="text-xs text-emerald-700 mb-1">当前方案摘要</div>
+                                    <div className="text-xs text-gray-700 leading-relaxed">{String(r.optimize?.comparison?.current?.summary || '—')}</div>
+                                  </div>
+                                  <div className="bg-white/60 rounded-xl p-3">
+                                    <div className="text-xs text-emerald-700 mb-1">优化方案摘要</div>
+                                    <div className="text-xs text-gray-700 leading-relaxed">{String(r.optimize?.comparison?.optimized?.summary || '—')}</div>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </details>
+                      ))}
+                      {(!memberRecords?.records || memberRecords.records.length === 0) && (
+                        <div className="text-sm text-gray-400 py-10 text-center">暂无记录</div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       )}

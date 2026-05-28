@@ -44,7 +44,7 @@ function chatCompletionsUrl(baseUrl) {
 /**
  * OpenAI 兼容 Chat Completions
  */
-export async function chatCompletion({ provider, system, user, jsonMode = false }) {
+export async function chatCompletion({ provider, system, user, jsonMode = false, extraBody }) {
   if (!provider) throw new Error('未配置已启用的 LLM 服务，请在管理后台「系统配置」中配置并启用多模态模型');
   const url = chatCompletionsUrl(provider.baseUrl);
   const body = {
@@ -54,6 +54,7 @@ export async function chatCompletion({ provider, system, user, jsonMode = false 
       { role: 'user', content: user },
     ],
     temperature: 0.3,
+    ...(extraBody && typeof extraBody === 'object' ? extraBody : {}),
   };
   if (jsonMode) {
     body.response_format = { type: 'json_object' };

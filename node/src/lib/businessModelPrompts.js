@@ -183,3 +183,65 @@ export function normalizeFinanceItemsPayload(parsed, text) {
   }));
   return { payload: { costs: costsWithIds, revenues: revenuesWithIds } };
 }
+
+export const BMC_MODULE_KEYS = [
+  'keyPartnerships',
+  'keyActivities',
+  'valueProposition',
+  'customerRelationships',
+  'customerSegments',
+  'keyResources',
+  'channels',
+  'costStructure',
+  'revenueStreams',
+];
+
+export const BUSINESS_MODEL_BMC_JSON_SCHEMA = `
+最终必须输出且仅输出一个 JSON 对象（不要用 markdown 代码块包裹）。字段（均为非空字符串，可用 \\n 与 • 列表）：
+{
+  "keyPartnerships": "合作伙伴",
+  "keyActivities": "关键业务",
+  "valueProposition": "价值主张",
+  "customerRelationships": "客户关系",
+  "customerSegments": "客户细分",
+  "keyResources": "核心资源",
+  "channels": "渠道通路",
+  "costStructure": "成本结构",
+  "revenueStreams": "收入来源"
+}
+九格均需充实、可执行，综合组员虚拟董事会画布与项目资料，形成团队最终版。`;
+
+export const BUSINESS_MODEL_BMC_SYSTEM_PROMPT = `你是创业实训课程的商业模式画布（BMC）助教。根据项目资料与各组员在虚拟董事会环节已保存的九格画布，综合输出团队最终商业模式画布。
+
+${BUSINESS_MODEL_BMC_JSON_SCHEMA}`;
+
+export function buildBusinessModelBmcUserPrompt(contextBundle, warRoomMemberSections) {
+  return `请基于以下资料生成团队最终商业模式画布九格（严格按 system 中的 JSON schema 输出）。
+
+${String(contextBundle || '').trim()}
+
+【各组员虚拟董事会已保存画布】
+${String(warRoomMemberSections || '').trim() || '（无）'}`;
+}
+
+function pickBmcCandidate(parsed, text) {
+  if (parsed && typeof parsed === 'object' && typeof parsed.valueProposition === 'string') return parsed;
+  const all = findAllBalancedJsonObjects(String(text || ''));
+  for (let i = all.length - 1; i >= 0; i--) {
+    const o = all[i];
+    if (typeof o?.valueProposition === 'string' && typeof o?.customerSegments === 'string') return o;
+  }
+  return null;
+}
+
+export function normalizeBmcPayload(parsed, text) {
+  const raw = pickBmcCandidate(parsed, text) || pickBmcCandidate(extractJsonFromLlmText(text), text);
+  if (!raw || typeof raw !== 'object') return { error: 'AI 返回格式无效' };
+  const out = {};
+  for (const k of BMC_MODULE_KEYS) {
+    out[k] = String(raw[k] || '').trim();
+  }
+  const empty = BMC_MODULE_KEYS.filter((k) => !out[k]);
+  if (empty.length) return { error: `商业模式画布存在空内容：${empty.join('、')}` };
+  return { payload: out };
+}

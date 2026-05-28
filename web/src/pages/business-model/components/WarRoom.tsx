@@ -4,14 +4,17 @@ import {
   WAR_ROOM_MODULE_DEFS,
   adoptWarRoomMessage,
   fetchBusinessModelWorkspace,
+  fetchWarRoomMemberRecord,
   parseMentionedHat,
   saveWarRoomCanvasCell,
+  saveWarRoomCanvasRecord,
   warRoomDebateReply,
   warRoomDebateRound,
   warRoomDebateStart,
   type WarRoomCanvas,
   type WarRoomDebateMessage,
   type WarRoomHat,
+  type WarRoomTeamRecordSummary,
 } from '../../../lib/studentBusinessModelApi';
 import imgBai from '../../../assets/images/bai.jpg';
 import imgHong from '../../../assets/images/hong.jpg';
@@ -150,6 +153,13 @@ const HAT_MENTION_LABELS: { hat: HatKey; label: string }[] = [
   { hat: 'blue', label: '@蓝帽' },
 ];
 
+const MENTION_STRIP_RE =
+  /@\s*(白帽|红帽|黑帽|黄帽|绿帽|蓝帽|white|red|black|yellow|green|blue)\b/gi;
+
+function stripHatMentions(text: string) {
+  return text.replace(MENTION_STRIP_RE, '').replace(/\s+/g, ' ').trim();
+}
+
 function emptyCanvas(): WarRoomCanvas {
   const o: WarRoomCanvas = {};
   for (const m of WAR_ROOM_MODULE_DEFS) {
@@ -167,12 +177,39 @@ function messageDelay(content: string) {
   return Math.min(4000, Math.max(1200, 800 + len * 12));
 }
 
+function moduleTitle(key: string) {
+  return WAR_ROOM_MODULE_DEFS.find((m) => m.key === key)?.title || key;
+}
+
+function getAdoptableFills(msg: WarRoomDebateMessage) {
+  if (msg.hat === 'user' || msg.status === 'ignored') return [];
+  const adopted = new Set(msg.adoptedModules || []);
+  if (msg.status === 'adopted' && msg.targetModule) adopted.add(msg.targetModule);
+  const list: { targetModule: string; moduleContent: string }[] = [];
+  if (msg.fills?.length) {
+    for (const f of msg.fills) {
+      if (f.targetModule && f.moduleContent?.trim() && !adopted.has(f.targetModule)) {
+        list.push(f);
+      }
+    }
+  } else if (
+    msg.targetModule &&
+    msg.moduleContent?.trim() &&
+    !adopted.has(msg.targetModule) &&
+    msg.status !== 'adopted'
+  ) {
+    list.push({ targetModule: msg.targetModule, moduleContent: msg.moduleContent });
+  }
+  return list;
+}
+
 type WarRoomProps = {
   classId?: string;
   studentDisplayName?: string;
+  onRecordSaved?: () => void;
 };
 
-export default function WarRoom({ classId, studentDisplayName = '同学' }: WarRoomProps) {
+export default function WarRoom({ classId, studentDisplayName = '同学', onRecordSaved }: WarRoomProps) {
   const [messages, setMessages] = useState<WarRoomDebateMessage[]>([]);
   const [canvas, setCanvas] = useState<WarRoomCanvas>(emptyCanvas);
   const [filledCount, setFilledCount] = useState(0);
@@ -182,6 +219,16 @@ export default function WarRoom({ classId, studentDisplayName = '同学' }: WarR
   const [loading, setLoading] = useState(false);
   const [isDebating, setIsDebating] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [teamRecords, setTeamRecords] = useState<WarRoomTeamRecordSummary[]>([]);
+  const [currentStudentId, setCurrentStudentId] = useState('');
+  const [dialogRecord, setDialogRecord] = useState<{
+    studentId: string;
+    studentName: string;
+    canvas: WarRoomCanvas;
+  } | null>(null);
+  const [recordsDialogOpen, setRecordsDialogOpen] = useState(false);
+  const [savingRecord, setSavingRecord] = useState(false);
+  const [canvasFocus, setCanvasFocus] = useState(false);
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -193,7 +240,21 @@ export default function WarRoom({ classId, studentDisplayName = '同学' }: WarR
 
   useEffect(() => {
     scrollChatToBottom();
-  }, [messages, isPlaying, scrollChatToBottom]);
+  }, [messages.length, isPlaying, scrollChatToBottom]);
+
+  useEffect(() => {
+    if (!canvasFocus) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setCanvasFocus(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [canvasFocus]);
 
   const applyWorkspace = useCallback(
     (ws: Awaited<ReturnType<typeof fetchBusinessModelWorkspace>>, opts?: { syncMessages?: boolean }) => {
@@ -203,6 +264,8 @@ export default function WarRoom({ classId, studentDisplayName = '同学' }: WarR
         setMessages(wr.transcript.messages);
       }
       setFilledCount(wr?.filledCount ?? 0);
+      if (ws.warRoomTeamRecords) setTeamRecords(ws.warRoomTeamRecords);
+      if (ws.studentId) setCurrentStudentId(ws.studentId);
     },
     []
   );
@@ -279,7 +342,19 @@ export default function WarRoom({ classId, studentDisplayName = '同学' }: WarR
       return;
     }
     const text = userInput.trim();
+    const prevLen = messages.length;
+    const tempId = `temp-${crypto.randomUUID()}`;
+    const optimistic: WarRoomDebateMessage = {
+      id: tempId,
+      hat: 'user',
+      content: text,
+      targetModule: null,
+      moduleContent: '',
+      roundIndex: 0,
+      createdAt: new Date().toISOString(),
+    };
     setUserInput('');
+    setMessages((prev) => [...prev, optimistic]);
     setIsDebating(true);
     try {
       const mentioned = parseMentionedHat(text);
@@ -290,11 +365,16 @@ export default function WarRoom({ classId, studentDisplayName = '同学' }: WarR
           text,
           mentioned
         );
-        const prevLen = messages.length;
         applyWorkspace(workspace, { syncMessages: false });
-        const userMsg = workspace.warRoom?.transcript?.messages?.[prevLen];
-        const toPlay = userMsg ? [userMsg, reply] : [reply];
-        await playMessagesSequential(toPlay);
+        const serverUser = workspace.warRoom?.transcript?.messages?.[prevLen];
+        setMessages((prev) => {
+          const base = prev.filter((m) => m.id !== tempId);
+          if (serverUser?.hat === 'user' && !base.some((m) => m.id === serverUser.id)) {
+            base.push(serverUser);
+          }
+          return base;
+        });
+        await playMessagesSequential([reply]);
         applyWorkspace(workspace);
       } else {
         const { roundMessages, workspace } = await warRoomDebateRound(
@@ -303,25 +383,45 @@ export default function WarRoom({ classId, studentDisplayName = '同学' }: WarR
           text
         );
         applyWorkspace(workspace, { syncMessages: false });
-        await playMessagesSequential(roundMessages);
+        const serverUser = workspace.warRoom?.transcript?.messages?.[prevLen];
+        setMessages((prev) => {
+          const base = prev.filter((m) => m.id !== tempId);
+          if (serverUser?.hat === 'user' && !base.some((m) => m.id === serverUser.id)) {
+            base.push(serverUser);
+          }
+          return base;
+        });
+        const aiOnly = roundMessages.filter((m) => m.hat !== 'user');
+        await playMessagesSequential(aiOnly);
         applyWorkspace(workspace);
       }
     } catch (e) {
+      setMessages((prev) => prev.filter((m) => m.id !== tempId));
+      setUserInput(text);
       message.error(e instanceof Error ? e.message : '发送失败');
     } finally {
       setIsDebating(false);
     }
   };
 
-  const handleAdopt = async (msg: WarRoomDebateMessage) => {
-    if (!classId?.trim() || !msg.targetModule || !msg.moduleContent?.trim()) return;
+  const handleAdopt = async (msg: WarRoomDebateMessage, moduleKey: string) => {
+    if (!classId?.trim() || !moduleKey) return;
     try {
-      const ws = await adoptWarRoomMessage(classId.trim(), msg.id);
-      applyWorkspace(ws);
+      const ws = await adoptWarRoomMessage(classId.trim(), msg.id, moduleKey);
+      applyWorkspace(ws, { syncMessages: false });
+      const updated = ws.warRoom?.transcript?.messages?.find((m) => m.id === msg.id);
       setMessages((prev) =>
-        prev.map((m) => (m.id === msg.id ? { ...m, status: 'adopted' as const } : m))
+        prev.map((m) => {
+          if (m.id !== msg.id) return m;
+          if (updated) return updated;
+          const adoptedModules = [...new Set([...(m.adoptedModules || []), moduleKey])];
+          const required =
+            m.fills?.map((f) => f.targetModule) || (m.targetModule ? [m.targetModule] : []);
+          const allAdopted = required.length > 0 && required.every((k) => adoptedModules.includes(k));
+          return { ...m, adoptedModules, status: allAdopted ? ('adopted' as const) : m.status };
+        })
       );
-      highlightModule(msg.targetModule);
+      highlightModule(moduleKey);
       message.success('已采纳并更新画布');
     } catch (e) {
       message.error(e instanceof Error ? e.message : '采纳失败');
@@ -345,9 +445,60 @@ export default function WarRoom({ classId, studentDisplayName = '同学' }: WarR
   };
 
   const insertMention = (label: string) => {
-    setUserInput((prev) => (prev ? `${prev} ${label} ` : `${label} `));
+    setUserInput((prev) => {
+      const hadLabel = prev.includes(label);
+      const base = stripHatMentions(prev);
+      if (hadLabel) return base ? `${base} ` : '';
+      return base ? `${base} ${label} ` : `${label} `;
+    });
     inputRef.current?.focus();
   };
+
+  const handleSaveRecord = async () => {
+    if (!classId?.trim()) return;
+    if (filledCount < WAR_ROOM_MODULE_DEFS.length) {
+      message.warning('请先填齐九格后再保存');
+      return;
+    }
+    setSavingRecord(true);
+    try {
+      const ws = await saveWarRoomCanvasRecord(classId.trim());
+      applyWorkspace(ws);
+      onRecordSaved?.();
+      message.success('已保存至讨论记录');
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '保存失败');
+    } finally {
+      setSavingRecord(false);
+    }
+  };
+
+  const handleViewRecord = async (rec: WarRoomTeamRecordSummary) => {
+    if (!classId?.trim()) return;
+    if (dialogRecord?.studentId === rec.studentId) {
+      setDialogRecord(null);
+      return;
+    }
+    try {
+      const detail = await fetchWarRoomMemberRecord(classId.trim(), rec.studentId);
+      setDialogRecord({
+        studentId: detail.studentId,
+        studentName: detail.studentName,
+        canvas: detail.canvas,
+      });
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '加载记录失败');
+    }
+  };
+
+  const recordStudentLabel = (rec: WarRoomTeamRecordSummary) => {
+    if (rec.studentId === currentStudentId) return '我';
+    const name = rec.studentName?.trim() || '同学';
+    return name.length > 4 ? `${name.slice(0, 4)}…` : name;
+  };
+  const debateStarted = messages.length > 0;
+  const waitingAi = isDebating && !isPlaying && debateStarted;
+  const canSaveCanvas = filledCount >= WAR_ROOM_MODULE_DEFS.length && !savingRecord;
 
   const renderMessageMeta = (msg: WarRoomDebateMessage) => {
     if (msg.hat === 'user') {
@@ -357,11 +508,38 @@ export default function WarRoom({ classId, studentDisplayName = '同学' }: WarR
     return { ...cfg, displayName: cfg?.name || msg.hat };
   };
 
-  const debateStarted = messages.length > 0;
+  const renderRecordCanvasGrid = (recordCanvas: WarRoomCanvas) => (
+    <div className="grid grid-cols-3 gap-2">
+      {WAR_ROOM_MODULE_DEFS.map((mod) => {
+        const cell = recordCanvas[mod.key] || { content: '', updatedBy: '' };
+        return (
+          <div key={mod.key} className="bg-white rounded-lg border border-gray-200 p-2 flex flex-col min-h-[100px]">
+            <h4 className="text-xs font-bold text-gray-900 mb-1">{mod.title}</h4>
+            <p className="flex-1 text-xs text-gray-700 whitespace-pre-wrap break-words">
+              {cell.content?.trim() || '—'}
+            </p>
+            {cell.updatedBy ? (
+              <p className="mt-1 text-[10px] text-teal-600 truncate">{cell.updatedBy}</p>
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
+  );
 
   return (
-    <div className="h-[min(72vh,680px)] min-h-[480px] flex bg-gray-50 rounded-xl border border-gray-100 overflow-hidden">
-      <div className="w-[42%] min-w-[320px] bg-white border-r border-gray-200 flex flex-col min-h-0">
+    <div
+      className={
+        canvasFocus
+          ? 'fixed inset-0 z-[200] flex bg-gray-100'
+          : 'h-[min(72vh,680px)] min-h-[480px] flex bg-gray-50 rounded-xl border border-gray-100 overflow-hidden'
+      }
+    >
+      <div
+        className={`bg-white border-r border-gray-200 flex flex-col min-h-0 shrink-0 ${
+          canvasFocus ? 'w-[min(400px,36vw)] max-w-[440px]' : 'w-[42%] min-w-[320px]'
+        }`}
+      >
         <div className="p-4 border-b border-gray-200 bg-gradient-to-r from-gray-50 to-white shrink-0">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-lg font-bold text-gray-900">虚拟董事会</h3>
@@ -432,11 +610,9 @@ export default function WarRoom({ classId, studentDisplayName = '同学' }: WarR
           ) : (
             messages.map((msg) => {
               const meta = renderMessageMeta(msg);
-              const canAdopt =
-                msg.targetModule &&
-                msg.moduleContent?.trim() &&
-                !msg.status &&
-                msg.hat !== 'user';
+              const adoptableFills = getAdoptableFills(msg);
+              const partialAdopted =
+                (msg.adoptedModules?.length ?? 0) > 0 && msg.status !== 'adopted' && msg.status !== 'ignored';
               return (
                 <div key={msg.id} className="flex items-start gap-2">
                   {msg.hat === 'user' ? (
@@ -464,16 +640,19 @@ export default function WarRoom({ classId, studentDisplayName = '同学' }: WarR
                     >
                       {msg.content}
                     </div>
-                    {canAdopt && (
-                      <div className="flex items-center gap-2 mt-1.5">
-                        <button
-                          type="button"
-                          onClick={() => handleAdopt(msg)}
-                          className="px-2.5 py-1 bg-green-100 text-green-700 text-xs font-medium rounded-lg hover:bg-green-200 cursor-pointer"
-                        >
-                          <i className="ri-check-line mr-1"></i>
-                          采纳
-                        </button>
+                    {adoptableFills.length > 0 && (
+                      <div className="flex flex-wrap items-center gap-2 mt-1.5">
+                        {adoptableFills.map((fill) => (
+                          <button
+                            key={fill.targetModule}
+                            type="button"
+                            onClick={() => handleAdopt(msg, fill.targetModule)}
+                            className="px-2.5 py-1 bg-green-100 text-green-700 text-xs font-medium rounded-lg hover:bg-green-200 cursor-pointer"
+                          >
+                            <i className="ri-check-line mr-1"></i>
+                            采纳·{moduleTitle(fill.targetModule)}
+                          </button>
+                        ))}
                         <button
                           type="button"
                           onClick={() => handleIgnore(msg.id)}
@@ -482,6 +661,9 @@ export default function WarRoom({ classId, studentDisplayName = '同学' }: WarR
                           忽略
                         </button>
                       </div>
+                    )}
+                    {partialAdopted && (
+                      <p className="mt-1 text-xs text-teal-600">部分格子已采纳，可继续采纳其余建议</p>
                     )}
                     {msg.status === 'adopted' && (
                       <p className="mt-1 text-xs text-green-600">
@@ -497,6 +679,12 @@ export default function WarRoom({ classId, studentDisplayName = '同学' }: WarR
               );
             })
           )}
+          {waitingAi ? (
+            <div className="flex items-center gap-2 text-sm text-gray-500 py-1">
+              <i className="ri-loader-4-line animate-spin"></i>
+              思考中…
+            </div>
+          ) : null}
         </div>
 
         <div className="p-3 border-t border-gray-200 bg-white shrink-0">
@@ -536,21 +724,73 @@ export default function WarRoom({ classId, studentDisplayName = '同学' }: WarR
       </div>
 
       <div className="flex-1 min-w-0 flex flex-col min-h-0 bg-gray-50">
-        <div className="px-4 py-3 border-b border-gray-200 bg-white shrink-0 flex items-center justify-between">
-          <h3 className="text-sm font-bold text-gray-900">商业模式画布</h3>
-          <span className="text-xs text-gray-500">
-            已填写 {filledCount}/{WAR_ROOM_MODULE_DEFS.length}
-          </span>
+        <div className="px-4 py-3 border-b border-gray-200 bg-white shrink-0 flex items-center justify-between gap-2">
+          <div className="min-w-0">
+            <h3 className="text-sm font-bold text-gray-900">商业模式画布</h3>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <span className="text-xs text-gray-500">
+              已填写 {filledCount}/{WAR_ROOM_MODULE_DEFS.length}
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                setRecordsDialogOpen(true);
+                setDialogRecord(null);
+              }}
+              className="px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-200 text-gray-700 hover:border-teal-300 hover:text-teal-700 cursor-pointer whitespace-nowrap"
+            >
+              <i className="ri-file-list-3-line mr-1"></i>
+              讨论记录
+              {teamRecords.length > 0 ? (
+                <span className="ml-1 text-teal-600">({teamRecords.length})</span>
+              ) : null}
+            </button>
+            <button
+              type="button"
+              onClick={handleSaveRecord}
+              disabled={!canSaveCanvas}
+              title={filledCount < WAR_ROOM_MODULE_DEFS.length ? '请先填齐九格' : undefined}
+              className="px-3 py-1.5 text-xs font-medium rounded-lg bg-teal-500 text-white hover:bg-teal-600 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+            >
+              {savingRecord ? '保存中…' : '保存'}
+            </button>
+            {canvasFocus ? (
+              <button
+                type="button"
+                title="退出放大"
+                onClick={() => setCanvasFocus(false)}
+                className="w-8 h-8 flex items-center justify-center rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 cursor-pointer"
+              >
+                <i className="ri-fullscreen-exit-line text-lg"></i>
+              </button>
+            ) : (
+              <button
+                type="button"
+                title="放大画布"
+                onClick={() => setCanvasFocus(true)}
+                className="w-8 h-8 flex items-center justify-center rounded-lg border border-gray-200 text-gray-600 hover:bg-teal-50 hover:text-teal-700 cursor-pointer"
+              >
+                <i className="ri-fullscreen-line text-lg"></i>
+              </button>
+            )}
+          </div>
         </div>
         <div className="flex-1 min-h-0 overflow-y-auto p-4">
-          <div className="grid grid-cols-3 gap-3 max-w-6xl mx-auto">
+          <div
+            className={`grid gap-3 mx-auto w-full ${
+              canvasFocus ? 'grid-cols-3 gap-4 max-w-[1400px]' : 'grid-cols-3 max-w-6xl'
+            }`}
+          >
             {WAR_ROOM_MODULE_DEFS.map((mod) => {
               const cell = canvas[mod.key] || { content: '', updatedBy: '' };
               const highlighted = highlightKey === mod.key;
               return (
                 <div
                   key={mod.key}
-                  className={`bg-white rounded-xl p-4 transition-all duration-300 flex flex-col min-h-[140px] ${
+                  className={`bg-white rounded-xl p-4 transition-all duration-300 flex flex-col ${
+                    canvasFocus ? 'min-h-[200px]' : 'min-h-[140px]'
+                  } ${
                     highlighted
                       ? 'ring-2 ring-teal-500 shadow-lg scale-[1.02]'
                       : 'border border-gray-200 shadow-sm'
@@ -566,9 +806,9 @@ export default function WarRoom({ classId, studentDisplayName = '同学' }: WarR
                       }))
                     }
                     onBlur={(e) => handleCanvasBlur(mod.key, e.target.value)}
-                    rows={5}
+                    rows={canvasFocus ? 8 : 5}
                     placeholder="待填写…"
-                    className="flex-1 w-full text-xs text-gray-700 border border-gray-100 rounded-lg p-2 resize-none focus:outline-none focus:ring-1 focus:ring-teal-400"
+                    className="flex-1 w-full text-xs text-gray-700 border border-gray-100 rounded-lg p-2 resize-none focus:outline-none focus:ring-1 focus:ring-teal-400 read-only:bg-gray-50 read-only:cursor-default"
                   />
                   {cell.updatedBy ? (
                     <p className="mt-2 text-xs text-teal-600 truncate">{cell.updatedBy}</p>
@@ -577,13 +817,83 @@ export default function WarRoom({ classId, studentDisplayName = '同学' }: WarR
               );
             })}
           </div>
-          <div className="mt-6 max-w-6xl mx-auto bg-teal-50 border border-teal-200 rounded-xl p-4 text-sm text-teal-800 space-y-1">
-            <p>• 点击「开始辩论」后，将按白帽 → 四帽随机 → 蓝帽顺序讨论</p>
-            <p>• 提及某模块时右侧格子会高亮；可采纳建议替换该格内容</p>
-            <p>• @ 某一顶帽子单独回复；未 @ 时发送将开启新一轮六帽讨论</p>
-          </div>
+          {!canvasFocus ? (
+            <div className="mt-4 max-w-6xl mx-auto bg-teal-50 border border-teal-200 rounded-xl p-4 text-sm text-teal-800 space-y-1">
+              <p>• 点击「开始辩论」后，将按白帽 → 四帽随机 → 蓝帽顺序讨论</p>
+              <p>• 提及某模块时右侧格子会高亮；可采纳建议替换该格内容</p>
+              <p>• @ 某一顶帽子单独回复；未 @ 时发送将开启新一轮六帽讨论</p>
+            </div>
+          ) : null}
         </div>
       </div>
+
+      {recordsDialogOpen ? (
+        <div
+          className="fixed inset-0 z-[300] flex items-center justify-center p-4 bg-black/40"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setRecordsDialogOpen(false)}
+        >
+          <div
+            className="bg-white rounded-xl shadow-xl w-full max-w-5xl max-h-[min(88vh,720px)] flex flex-col overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-4 py-3 border-b border-gray-200 flex items-center justify-between shrink-0">
+              <h3 className="text-sm font-bold text-gray-900">讨论记录</h3>
+              <button
+                type="button"
+                onClick={() => setRecordsDialogOpen(false)}
+                className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-500 hover:bg-gray-100 cursor-pointer"
+                aria-label="关闭"
+              >
+                <i className="ri-close-line text-lg"></i>
+              </button>
+            </div>
+            <div className="flex flex-col flex-1 min-h-0">
+              <div className="shrink-0 px-4 py-3 border-b border-gray-200 bg-white">
+                {teamRecords.length === 0 ? (
+                  <p className="text-xs text-gray-500">暂无记录</p>
+                ) : (
+                  <div className="flex flex-wrap gap-2 w-full">
+                    {teamRecords.map((rec) => (
+                      <button
+                        key={rec.studentId}
+                        type="button"
+                        title={
+                          rec.savedAt
+                            ? `${rec.studentName} ${new Date(rec.savedAt).toLocaleString('zh-CN')}`
+                            : rec.studentName
+                        }
+                        onClick={() => handleViewRecord(rec)}
+                        className={`px-2.5 py-1 text-xs rounded-md border cursor-pointer transition-colors whitespace-nowrap ${
+                          dialogRecord?.studentId === rec.studentId
+                            ? 'border-teal-500 bg-teal-50 text-teal-800'
+                            : 'border-gray-200 bg-white text-gray-700 hover:border-teal-300'
+                        }`}
+                      >
+                        {recordStudentLabel(rec)}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div className="flex-1 min-h-0 overflow-y-auto p-4 bg-gray-50">
+                {dialogRecord ? (
+                  <>
+                    <p className="text-xs text-gray-600 mb-3">
+                      {dialogRecord.studentName}
+                      {dialogRecord.studentId === currentStudentId ? '（我）' : ''}
+                    </p>
+                    {renderRecordCanvasGrid(dialogRecord.canvas)}
+                  </>
+                ) : (
+                  <p className="text-sm text-gray-500 text-center py-16">请选择组员查看已保存画布</p>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
