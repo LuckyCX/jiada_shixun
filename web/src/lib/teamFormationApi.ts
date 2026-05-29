@@ -504,6 +504,7 @@ export type StudentNotificationRow = {
   isRead: boolean;
   timestamp: string;
   sender: { name: string };
+  attachments?: { id: string; fileName: string; fileSize: number }[];
 };
 
 export async function fetchStudentNotifications(): Promise<StudentNotificationRow[]> {

@@ -5,7 +5,6 @@ import { clearPortalToken, getPortalToken, parseJwtPayload } from '../../lib/aut
 import { useSiteBrand } from '../../lib/publicSite';
 import TeamCard, { TeamProject } from './components/TeamCard';
 import TeamDetailModal from './components/TeamDetailModal';
-import InterveneModal from './components/InterveneModal';
 import BatchScoringModal from './components/BatchScoringModal';
 import StatsPanel from './components/StatsPanel';
 import GuidanceToolPanel from './components/GuidanceToolPanel';
@@ -13,7 +12,6 @@ import LearningAnalysisPanel from './components/LearningAnalysisPanel';
 import StudentAnalysisBoard from './components/StudentAnalysisBoard';
 import ClassManagement from './components/classManagement';
 import StudentManagement from './components/studentManagement';
-import TaskManagement from './components/taskManagement';
 import TeamReview from './components/teamReview';
 import TeamQuestionsPresetPage, {
   confirmLeaveTeamQuestionsUnsaved,
@@ -43,7 +41,6 @@ type TabKey =
   | 'evaluation'
   | 'classManagement'
   | 'studentManagement'
-  | 'taskManagement'
   | 'teamReview'
   | 'topicReview'
   | 'businessPlanReview'
@@ -88,7 +85,6 @@ const sidebarGroups: SidebarGroup[] = [
     groupLabel: '任务与审核',
     items: [
       { key: 'teamReview', label: '组队管理', icon: 'ri-team-line', type: 'tab' },
-      { key: 'taskManagement', label: '任务发布', icon: 'ri-task-line', type: 'tab' },
       { key: 'topicReview', label: '选题审核', icon: 'ri-file-search-line', type: 'tab' },
       { key: 'businessPlanReview', label: '商业计划书审核', icon: 'ri-file-chart-line', type: 'tab' },
     ],
@@ -110,7 +106,7 @@ const TEACHER_TAB_PARAM = 'tab';
 const TEACHER_CLASS_PARAM = 'classId';
 const TEACHER_SUB_PARAM = 'sub';
 
-const CLASS_CONTEXT_TABS: TabKey[] = ['taskManagement', 'teamReview', 'studentManagement'];
+const CLASS_CONTEXT_TABS: TabKey[] = ['guidance', 'teamReview', 'studentManagement'];
 
 function earliestClass(list: TeacherPersonalClassRow[]): TeacherPersonalClassRow | null {
   if (!list.length) return null;
@@ -124,7 +120,6 @@ const ALL_TAB_KEYS: TabKey[] = [
   'evaluation',
   'classManagement',
   'studentManagement',
-  'taskManagement',
   'teamReview',
   'topicReview',
   'businessPlanReview',
@@ -185,7 +180,7 @@ export default function TeacherDashboard() {
     );
   };
   const [selectedTeam, setSelectedTeam] = useState<TeamProject | null>(null);
-  const [interveneTeam, setInterveneTeam] = useState<TeamProject | null>(null);
+  const [guidancePresetTeamId, setGuidancePresetTeamId] = useState<number | null>(null);
   const [showBatchScoring, setShowBatchScoring] = useState(false);
   const [filterStatus, setFilterStatus] = useState<'all' | 'on-track' | 'at-risk' | 'delayed'>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -242,6 +237,12 @@ export default function TeacherDashboard() {
     if (!cls) return;
     setSelectedPersonalClass(cls);
     syncClassToUrl(cls);
+  };
+
+  const openGuidanceForTeam = (team: TeamProject) => {
+    setSelectedTeam(null);
+    setGuidancePresetTeamId(team.id);
+    setTeacherTab('guidance', { classId: selectedPersonalClass?.id ?? null });
   };
 
   const refreshPersonalClasses = useCallback(
@@ -320,7 +321,7 @@ export default function TeacherDashboard() {
   }, []);
 
   useEffect(() => {
-    if (activeTab !== 'monitor') return;
+    if (activeTab !== 'monitor' && activeTab !== 'guidance') return;
     if (!selectedPersonalClass?.id) {
       setMonitorTeams([]);
       return;
@@ -397,7 +398,7 @@ export default function TeacherDashboard() {
                       key={team.id}
                       team={team}
                       onViewDetail={setSelectedTeam}
-                      onIntervene={setInterveneTeam}
+                      onIntervene={openGuidanceForTeam}
                     />
                   ))
                 ) : (
@@ -425,7 +426,21 @@ export default function TeacherDashboard() {
         );
 
       case 'guidance':
-        return <GuidanceToolPanel teams={monitorTeams} />;
+        if (!selectedPersonalClass) {
+          return (
+            <div className="bg-white rounded-xl border border-dashed border-gray-200 py-16 text-center text-gray-500 text-sm">
+              请先在右上角选择班级
+            </div>
+          );
+        }
+        return (
+          <GuidanceToolPanel
+            personalClass={selectedPersonalClass}
+            teams={monitorTeams}
+            presetTeamId={guidancePresetTeamId}
+            onPresetTeamApplied={() => setGuidancePresetTeamId(null)}
+          />
+        );
 
       case 'classManagement':
         return (
@@ -451,15 +466,6 @@ export default function TeacherDashboard() {
           />
         );
 
-      case 'taskManagement':
-        if (!selectedPersonalClass) {
-          return (
-            <div className="bg-white rounded-xl border border-dashed border-gray-200 py-16 text-center text-gray-500 text-sm">
-              请先在右上角选择班级
-            </div>
-          );
-        }
-        return <TaskManagement personalClass={selectedPersonalClass} />;
 
       case 'teamReview':
         if (!selectedPersonalClass) {
@@ -654,10 +660,11 @@ export default function TeacherDashboard() {
             <p className="text-xs text-gray-400 mt-0.5">
               {activeTab === 'monitor' && `共 ${monitorTeams.length} 个团队 · ${monitorTeams.filter(t => t.status !== 'on-track').length} 个需关注`}
               {activeTab === 'analysis' && '智能分析学生学习数据'}
-              {activeTab === 'guidance' && '动态生成教学引导策略'}
+              {activeTab === 'guidance' && selectedPersonalClass && '发送引导与管理实训任务'}
+              {activeTab === 'guidance' && !selectedPersonalClass && '动态引导工具'}
               {activeTab === 'classManagement' && '管理班级信息与学生导入'}
               {activeTab === 'studentManagement' && selectedPersonalClass && `班级「${selectedPersonalClass.name}」学生名册`}
-              {activeTab === 'taskManagement' && '发布与管理课程任务'}
+
               {activeTab === 'teamReview' &&
                 (selectedPersonalClass
                   ? teamReviewSubPage === 'questions'
@@ -700,10 +707,10 @@ export default function TeacherDashboard() {
                 </button>
               </Dropdown>
             )}
-            <button className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors cursor-pointer relative">
+            {/* <button className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors cursor-pointer relative">
               <i className="ri-notification-3-line text-base"></i>
               <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>
-            </button>
+            </button> */}
             <button
               type="button"
               onClick={() => setProfileModalOpen(true)}
@@ -851,15 +858,7 @@ export default function TeacherDashboard() {
           classId={selectedPersonalClass?.id || ''}
           team={selectedTeam}
           onClose={() => setSelectedTeam(null)}
-          onIntervene={(team) => { setInterveneTeam(team); setSelectedTeam(null); }}
-        />
-      )}
-      {interveneTeam && (
-        <InterveneModal
-          team={interveneTeam}
-          teams={monitorTeams}
-          onClose={() => setInterveneTeam(null)}
-          onSubmit={() => {}}
+          onIntervene={openGuidanceForTeam}
         />
       )}
       {showBatchScoring && (

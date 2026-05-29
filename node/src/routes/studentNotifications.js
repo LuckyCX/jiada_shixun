@@ -18,6 +18,12 @@ function studentIdFromReq(req) {
   return Number.isFinite(id) && id > 0 ? id : null;
 }
 
+function parseGuidanceBatchFromLink(link) {
+  if (!link) return null;
+  const m = String(link).match(/[?&]guidanceBatch=([^&]+)/);
+  return m ? m[1] : null;
+}
+
 router.get('/student/notifications', requireAuth(), requireStudent(), async (req, res) => {
   try {
     const sid = studentIdFromReq(req);
@@ -34,20 +40,52 @@ router.get('/student/notifications', requireAuth(), requireStudent(), async (req
        LIMIT $2`,
       [sid, limit]
     );
+    const batchIds = [
+      ...new Set(
+        rows.map((r) => parseGuidanceBatchFromLink(r.relatedLink)).filter(Boolean)
+      ),
+    ];
+    const attachmentsByBatch = new Map();
+    if (batchIds.length) {
+      try {
+        const { rows: attRows } = await getPool().query(
+          `SELECT batch_id::text AS "batchId", id, file_name AS "fileName", file_size AS "fileSize"
+           FROM teacher_guidance_attachments
+           WHERE batch_id = ANY($1::uuid[])
+           ORDER BY sort_order ASC, id ASC`,
+          [batchIds]
+        );
+        for (const a of attRows) {
+          if (!attachmentsByBatch.has(a.batchId)) attachmentsByBatch.set(a.batchId, []);
+          attachmentsByBatch.get(a.batchId).push({
+            id: String(a.id),
+            fileName: a.fileName,
+            fileSize: Number(a.fileSize),
+          });
+        }
+      } catch {
+        /* 表未迁移时忽略附件 */
+      }
+    }
+
     return ok(
       req,
       res,
-      rows.map((r) => ({
-        id: String(r.id),
-        type: r.type,
-        title: r.title || '',
-        content: r.content || '',
-        relatedModule: r.relatedModule || '',
-        relatedLink: r.relatedLink || '',
-        isRead: r.isRead === true,
-        timestamp: r.sentAt ? new Date(r.sentAt).toLocaleString('zh-CN') : '',
-        sender: { name: r.senderName || '系统' },
-      }))
+      rows.map((r) => {
+        const batchId = parseGuidanceBatchFromLink(r.relatedLink);
+        return {
+          id: String(r.id),
+          type: r.type,
+          title: r.title || '',
+          content: r.content || '',
+          relatedModule: r.relatedModule || '',
+          relatedLink: r.relatedLink || '',
+          isRead: r.isRead === true,
+          timestamp: r.sentAt ? new Date(r.sentAt).toLocaleString('zh-CN') : '',
+          sender: { name: r.senderName || '系统' },
+          attachments: batchId ? attachmentsByBatch.get(batchId) || [] : [],
+        };
+      })
     );
   } catch (e) {
     logError(`GET student notifications traceId=${req.traceId}`, e);

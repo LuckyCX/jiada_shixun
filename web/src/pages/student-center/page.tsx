@@ -27,6 +27,7 @@ import {
   markStudentNotificationRead,
   type StudentNotificationRow,
 } from '../../lib/teamFormationApi';
+import { downloadStudentGuidanceAttachment } from '../../lib/teacherGuidanceApi';
 import StudentClassSwitcher from './components/StudentClassSwitcher';
 import { UserGuideContent } from '../user-guide/UserGuideContent';
 import TeamFormationModule from './components/TeamFormationModule';
@@ -213,6 +214,62 @@ type AntdTreeNode = {
   children?: AntdTreeNode[];
 };
 
+type NotificationCategory = 'task' | 'guidance' | 'other';
+
+function getNotificationCategory(notice: StudentNotificationRow): NotificationCategory {
+  if (notice.relatedModule === 'personal_class_task') return 'task';
+  if (notice.relatedModule === 'teacher_guidance') return 'guidance';
+  return 'other';
+}
+
+function getNotificationCategoryLabel(notice: StudentNotificationRow): string {
+  const cat = getNotificationCategory(notice);
+  if (cat === 'task') return '实训任务';
+  if (cat === 'guidance') return notice.type === 'reminder' ? '学习督促' : '教师引导';
+  switch (notice.type) {
+    case 'guidance':
+      return '引导意见';
+    case 'reminder':
+      return '督促通知';
+    case 'evaluation':
+      return '评价反馈';
+    case 'team_join':
+      return '加入团队';
+    case 'system':
+      return '系统通知';
+    default:
+      return '消息';
+  }
+}
+
+function getNotificationCategoryStyle(notice: StudentNotificationRow): string {
+  const cat = getNotificationCategory(notice);
+  if (cat === 'task') return 'bg-blue-100 text-blue-700';
+  if (cat === 'guidance') {
+    return notice.type === 'reminder' ? 'bg-orange-100 text-orange-700' : 'bg-teal-100 text-teal-700';
+  }
+  switch (notice.type) {
+    case 'guidance':
+      return 'bg-teal-100 text-teal-700';
+    case 'reminder':
+      return 'bg-orange-100 text-orange-700';
+    case 'evaluation':
+      return 'bg-purple-100 text-purple-700';
+    case 'team_join':
+      return 'bg-cyan-100 text-cyan-800';
+    case 'system':
+      return 'bg-blue-100 text-blue-700';
+    default:
+      return 'bg-gray-100 text-gray-700';
+  }
+}
+
+function parseStudentCenterQuery(rawLink: string): URLSearchParams {
+  const path = rawLink.startsWith('/') ? rawLink : `/student-center?${rawLink}`;
+  const qIdx = path.indexOf('?');
+  return new URLSearchParams(qIdx >= 0 ? path.slice(qIdx + 1) : '');
+}
+
 export default function StudentCenterPage() {
   const { logoUrl, siteTitle } = useSiteBrand();
   const brandTitle = siteTitle.trim() || '学生工作台';
@@ -280,6 +337,9 @@ export default function StudentCenterPage() {
   const [notificationFilter, setNotificationFilter] = useState<'all' | 'guidance' | 'reminder' | 'evaluation'>('all');
   const [notificationReadFilter, setNotificationReadFilter] = useState<'all' | 'unread' | 'read'>('all');
   const [notificationList, setNotificationList] = useState<StudentNotificationRow[]>([]);
+  const [notificationDetail, setNotificationDetail] = useState<StudentNotificationRow | null>(null);
+  const [pendingTaskOpen, setPendingTaskOpen] = useState<{ classId: string | null; taskId: string } | null>(null);
+  const openedNoticeFromUrlRef = useRef<string | null>(null);
   const [expandedNotificationId, setExpandedNotificationId] = useState<string | null>(null);
   const [logoutModalOpen, setLogoutModalOpen] = useState(false);
   const [studentProfile, setStudentProfile] = useState<StudentProfile | null>(null);
@@ -950,7 +1010,30 @@ export default function StudentCenterPage() {
     const params = new URLSearchParams(qIdx >= 0 ? path.slice(qIdx + 1) : '');
     const tab = params.get('tab');
     if (tab) setActiveTab(tab as TabType);
+    if (!tab || tab === 'overview') {
+      const panel = params.get('panel');
+      if (panel === 'tasks' || panel === 'notifications') setOverviewPanelTab(panel);
+      const taskId = params.get('taskId');
+      if (taskId && panel === 'tasks') {
+        setPendingTaskOpen({ classId: params.get('classId'), taskId });
+      }
+    }
     navigate({ pathname: pathname || '/student-center', search: params.toString() ? `?${params.toString()}` : '' });
+  };
+
+  const openNotificationDetail = (notice: StudentNotificationRow) => {
+    markAsRead(notice.id);
+    setNotificationDetail(notice);
+  };
+
+  const handleOverviewNotificationView = (notice: StudentNotificationRow) => {
+    const cat = getNotificationCategory(notice);
+    if (cat === 'task' || cat === 'guidance') {
+      openNotificationDetail(notice);
+      return;
+    }
+    markAsRead(notice.id);
+    goFromNotificationLink(notice.relatedLink || '/student-center?tab=overview');
   };
 
   const changeActiveTab = (tab: TabType) => {
@@ -970,6 +1053,29 @@ export default function StudentCenterPage() {
   useEffect(() => {
     void loadNotifications();
   }, [loadNotifications]);
+
+  useEffect(() => {
+    const panel = searchParams.get('panel');
+    const tab = searchParams.get('tab');
+    if ((!tab || tab === 'overview') && (panel === 'tasks' || panel === 'notifications')) {
+      setOverviewPanelTab(panel);
+    }
+    const taskId = searchParams.get('taskId');
+    if (taskId && panel === 'tasks') {
+      setPendingTaskOpen({ classId: searchParams.get('classId'), taskId });
+    }
+  }, [searchParams]);
+
+  useEffect(() => {
+    const noticeId = searchParams.get('noticeId');
+    if (!noticeId || openedNoticeFromUrlRef.current === noticeId) return;
+    const notice = notificationList.find((n) => n.id === noticeId);
+    if (!notice) return;
+    openedNoticeFromUrlRef.current = noticeId;
+    setActiveTab('overview');
+    setOverviewPanelTab('notifications');
+    openNotificationDetail(notice);
+  }, [searchParams, notificationList]);
 
   useEffect(() => {
     if (activeTab === 'notifications') void loadNotifications();
@@ -1661,9 +1767,46 @@ export default function StudentCenterPage() {
       });
   };
 
+  const canOpenTodoDialog = (task: TodoListItem) => {
+    if (task.trainingModuleId && getPrerequisiteStageHint(task.trainingModuleId)) return false;
+    return isTaskPrerequisiteMet(task);
+  };
+
   const openTodoDialog = (task: TodoListItem) => {
+    if (!canOpenTodoDialog(task)) return;
     setActiveTodoDialogTask(task);
     setTaskSubmitFiles([]);
+  };
+
+  useEffect(() => {
+    if (!pendingTaskOpen) return;
+    const { classId, taskId } = pendingTaskOpen;
+    if (classId && selectedClassId && classId !== selectedClassId) {
+      notification.warning({
+        message: '请切换到对应教学班级',
+        description: '该任务属于其他班级，请先在右上角切换班级。',
+        placement: 'topRight',
+      });
+      setPendingTaskOpen(null);
+      return;
+    }
+    const task = overviewTaskList.find((t) => t.id === taskId);
+    if (task && !task.completed && canOpenTodoDialog(task)) {
+      openTodoDialog(task);
+    }
+    setPendingTaskOpen(null);
+  }, [pendingTaskOpen, overviewTaskList, selectedClassId]);
+
+  const goToTaskFromNotificationDetail = () => {
+    if (!notificationDetail) return;
+    const params = parseStudentCenterQuery(notificationDetail.relatedLink || '');
+    setNotificationDetail(null);
+    setActiveTab('overview');
+    setOverviewPanelTab('tasks');
+    const taskId = params.get('taskId');
+    if (taskId) {
+      setPendingTaskOpen({ classId: params.get('classId'), taskId });
+    }
   };
 
   const completeTodoDialogTask = async () => {
@@ -2309,8 +2452,8 @@ export default function StudentCenterPage() {
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center gap-2 mb-0.5 flex-wrap">
                                 <span className="font-semibold text-gray-900 text-sm truncate">{notice.title}</span>
-                                <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${getNotificationTypeStyle(notice.type)}`}>
-                                  {getNotificationTypeText(notice.type)}
+                                <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${getNotificationCategoryStyle(notice)}`}>
+                                  {getNotificationCategoryLabel(notice)}
                                 </span>
                                 {!notice.isRead && (
                                   <span className="px-1.5 py-0.5 bg-red-100 text-red-600 rounded text-xs font-bold">未读</span>
@@ -2331,13 +2474,7 @@ export default function StudentCenterPage() {
                               )}
                               <button
                                 type="button"
-                                onClick={() => {
-                                  if (notice.relatedModule === 'personal_class_task') {
-                                    setOverviewPanelTab('tasks');
-                                    return;
-                                  }
-                                  goFromNotificationLink(notice.relatedLink || '/student-center?tab=overview');
-                                }}
+                                onClick={() => handleOverviewNotificationView(notice)}
                                 className="px-2.5 py-1.5 bg-teal-500 text-white text-xs rounded-lg hover:bg-teal-600 cursor-pointer whitespace-nowrap"
                               >
                                 查看
@@ -2388,7 +2525,8 @@ export default function StudentCenterPage() {
                           const lockHint = task.trainingModuleId
                             ? getPrerequisiteStageHint(task.trainingModuleId)
                             : null;
-                          const actionDisabled = Boolean(lockHint);
+                          const courseBlocked = !isTaskPrerequisiteMet(task);
+                          const actionDisabled = Boolean(lockHint) || courseBlocked;
                           const goTodo = () => {
                             if (actionDisabled) return;
                             openTodoDialog(task);
@@ -2396,8 +2534,7 @@ export default function StudentCenterPage() {
                           return (
                             <div
                               key={task.id}
-                              className={`flex items-center gap-3 p-3.5 rounded-xl border transition-all ${actionDisabled ? 'opacity-80 cursor-default' : 'hover:shadow-sm cursor-pointer'} ${isUrgent ? 'border-red-200 bg-red-50/40' : 'border-gray-100 bg-gray-50/50 hover:border-teal-200'}`}
-                              onClick={goTodo}
+                              className={`flex items-center gap-3 p-3.5 rounded-xl border transition-all ${actionDisabled ? 'opacity-80' : 'hover:shadow-sm'} ${isUrgent ? 'border-red-200 bg-red-50/40' : 'border-gray-100 bg-gray-50/50 hover:border-teal-200'}`}
                             >
                               <div
                                 className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${isUrgent ? 'bg-gradient-to-br from-red-500 to-orange-500' : 'bg-gradient-to-br from-orange-400 to-orange-500'}`}
@@ -2447,11 +2584,13 @@ export default function StudentCenterPage() {
                               <button
                                 type="button"
                                 disabled={actionDisabled}
-                                title={lockHint ?? undefined}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  goTodo();
-                                }}
+                                title={
+                                  lockHint ??
+                                  (courseBlocked
+                                    ? `请先完成该环节实践课程学习（小节进度达 ${COURSE_GATE_PERCENT}%）及知识点检测`
+                                    : undefined)
+                                }
+                                onClick={() => goTodo()}
                                 className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all whitespace-nowrap flex-shrink-0 ${
                                   actionDisabled
                                     ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
@@ -3048,6 +3187,82 @@ export default function StudentCenterPage() {
           onPass={(knowledgeId, moduleId, score, answers) => { handleQuizPass(knowledgeId, moduleId, score, answers); setActiveQuizId(null); setActiveQuizConfig(null); }}
         />
       )}
+
+      <Modal
+        open={!!notificationDetail}
+        title="通知详情"
+        onCancel={() => setNotificationDetail(null)}
+        footer={
+          notificationDetail ? (
+            <div className="flex justify-end gap-2">
+              {getNotificationCategory(notificationDetail) === 'task' ? (
+                <Button type="primary" onClick={goToTaskFromNotificationDetail}>
+                  前往待办
+                </Button>
+              ) : getNotificationCategory(notificationDetail) === 'other' && notificationDetail.relatedLink ? (
+                <Button
+                  type="primary"
+                  onClick={() => {
+                    const link = notificationDetail.relatedLink;
+                    setNotificationDetail(null);
+                    goFromNotificationLink(link);
+                  }}
+                >
+                  查看详情
+                </Button>
+              ) : (
+                <Button type="primary" onClick={() => setNotificationDetail(null)}>
+                  知道了
+                </Button>
+              )}
+              <Button onClick={() => setNotificationDetail(null)}>关闭</Button>
+            </div>
+          ) : null
+        }
+        width={560}
+      >
+        {notificationDetail && (
+          <div className="space-y-3">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className={`px-2 py-0.5 rounded-lg text-xs font-medium ${getNotificationCategoryStyle(notificationDetail)}`}>
+                {getNotificationCategoryLabel(notificationDetail)}
+              </span>
+              <span className="text-xs text-gray-400">{notificationDetail.timestamp}</span>
+            </div>
+            <p className="text-sm text-gray-500">
+              发送人：{notificationDetail.sender?.name || '系统'}
+            </p>
+            <h4 className="text-base font-semibold text-gray-900">{notificationDetail.title}</h4>
+            <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{notificationDetail.content}</p>
+            {notificationDetail.attachments && notificationDetail.attachments.length > 0 && (
+              <div className="pt-2 border-t border-gray-100">
+                <p className="text-xs font-semibold text-gray-500 mb-2">附件</p>
+                <div className="flex flex-wrap gap-2">
+                  {notificationDetail.attachments.map((file) => (
+                    <button
+                      key={file.id}
+                      type="button"
+                      onClick={() =>
+                        void downloadStudentGuidanceAttachment(file.id, file.fileName).catch((e) => {
+                          notification.warning({
+                            message: '下载失败',
+                            description: e instanceof Error ? e.message : '请稍后重试',
+                            placement: 'topRight',
+                          });
+                        })
+                      }
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-teal-50 border border-teal-100 text-xs text-teal-700 hover:bg-teal-100 cursor-pointer"
+                    >
+                      <i className="ri-download-2-line" />
+                      <span className="max-w-[200px] truncate">{file.fileName}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </Modal>
 
       <Modal
         open={!!activeTodoDialogTask}

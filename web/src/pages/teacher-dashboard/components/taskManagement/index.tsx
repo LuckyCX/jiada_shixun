@@ -24,12 +24,24 @@ function formatDeadlineZh(deadline: string) {
 
 type Props = {
   personalClass: TeacherPersonalClassRow;
+  hideTopStats?: boolean;
+  /** 仅页内发布表单，列表与弹窗发布入口隐藏 */
+  embedded?: boolean;
+  onTasksChanged?: () => void;
+  /** 嵌入模式下编辑已有任务 */
+  embeddedEditTaskId?: string;
 };
 
 const priorityLabel = (p: string) =>
   TASK_PRIORITY_OPTIONS.find((o) => o.value === p)?.label ?? p;
 
-export default function TaskManagement({ personalClass }: Props) {
+export default function TaskManagement({
+  personalClass,
+  hideTopStats = false,
+  embedded = false,
+  onTasksChanged,
+  embeddedEditTaskId,
+}: Props) {
   const classId = personalClass.id;
   const [tasks, setTasks] = useState<PersonalClassTask[]>([]);
   const [loading, setLoading] = useState(true);
@@ -43,6 +55,7 @@ export default function TaskManagement({ personalClass }: Props) {
   const [submissionView, setSubmissionView] = useState<'class' | 'team'>('class');
 
   const loadTasks = useCallback(async () => {
+    if (embedded) return;
     setLoading(true);
     try {
       const { tasks: list } = await listPersonalClassTasks(classId);
@@ -52,11 +65,24 @@ export default function TaskManagement({ personalClass }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [classId]);
+  }, [classId, embedded]);
 
   useEffect(() => {
-    void loadTasks();
-  }, [loadTasks]);
+    if (!embedded) void loadTasks();
+  }, [loadTasks, embedded]);
+
+  if (embedded) {
+    return (
+      <CreateTaskModal
+        variant="inline"
+        open
+        classId={classId}
+        taskId={embeddedEditTaskId}
+        onClose={() => {}}
+        onSuccess={() => onTasksChanged?.()}
+      />
+    );
+  }
 
   const handleDelete = (task: PersonalClassTask) => {
     Modal.confirm({
@@ -169,24 +195,26 @@ export default function TaskManagement({ personalClass }: Props) {
 
   return (
     <div>
-      <div className="grid grid-cols-4 gap-4 mb-6">
-        {[
-          { label: '任务总数', value: stats.total, icon: 'ri-file-list-3-line', color: 'from-teal-500 to-cyan-500' },
-          { label: '已发布', value: stats.published, icon: 'ri-send-plane-line', color: 'from-green-500 to-emerald-500' },
-          { label: '草稿箱', value: stats.draft, icon: 'ri-draft-line', color: 'from-amber-500 to-orange-500' },
-          { label: '已过期', value: stats.expired, icon: 'ri-time-line', color: 'from-gray-400 to-gray-500' },
-        ].map((card, i) => (
-          <div key={i} className="bg-white rounded-2xl border border-gray-100 p-5 shadow-sm">
-            <div className="flex items-center justify-between mb-3">
-              <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${card.color} flex items-center justify-center`}>
-                <i className={`${card.icon} text-white text-base`}></i>
+      {!hideTopStats && (
+        <div className="grid grid-cols-4 gap-4 mb-6">
+          {[
+            { label: '任务总数', value: stats.total, icon: 'ri-file-list-3-line', color: 'from-teal-500 to-cyan-500' },
+            { label: '已发布', value: stats.published, icon: 'ri-send-plane-line', color: 'from-green-500 to-emerald-500' },
+            { label: '草稿箱', value: stats.draft, icon: 'ri-draft-line', color: 'from-amber-500 to-orange-500' },
+            { label: '已过期', value: stats.expired, icon: 'ri-time-line', color: 'from-gray-400 to-gray-500' },
+          ].map((card, i) => (
+            <div key={i} className="bg-white rounded-2xl border border-gray-100 p-5 shadow-sm">
+              <div className="flex items-center justify-between mb-3">
+                <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${card.color} flex items-center justify-center`}>
+                  <i className={`${card.icon} text-white text-base`}></i>
+                </div>
+                <span className="text-3xl font-bold text-gray-900">{card.value}</span>
               </div>
-              <span className="text-3xl font-bold text-gray-900">{card.value}</span>
+              <div className="text-sm font-medium text-gray-700">{card.label}</div>
             </div>
-            <div className="text-sm font-medium text-gray-700">{card.label}</div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
 
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 mb-5">
         <div className="flex items-center justify-between gap-4 flex-wrap">

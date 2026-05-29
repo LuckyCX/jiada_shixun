@@ -17,6 +17,9 @@ type DraftQuestion = {
   required: boolean;
 };
 
+const MIN_QUESTIONS = 5;
+const MAX_QUESTIONS = 10;
+
 const TYPE_OPTIONS = [
   { value: 'single', label: '单选' },
   { value: 'multi', label: '多选' },
@@ -82,11 +85,14 @@ export default function TeamQuestionsPresetPage({ classId, className, onBack, on
             }))
           );
         } else {
-          applyLoadedQuestions([
-            { title: '', questionType: 'single', options: [{ label: '', value: '1' }], required: true },
-            { title: '', questionType: 'single', options: [{ label: '', value: '1' }], required: true },
-            { title: '', questionType: 'short', options: [], required: true },
-          ]);
+          applyLoadedQuestions(
+            Array.from({ length: MIN_QUESTIONS }, (_, i) => ({
+              title: '',
+              questionType: i === MIN_QUESTIONS - 1 ? ('short' as const) : ('single' as const),
+              options: i === MIN_QUESTIONS - 1 ? [] : [{ label: '', value: '1' }],
+              required: true,
+            }))
+          );
         }
       })
       .catch((e) => message.error(e instanceof Error ? e.message : '加载失败'))
@@ -112,8 +118,8 @@ export default function TeamQuestionsPresetPage({ classId, className, onBack, on
   };
 
   const addQuestion = () => {
-    if (questions.length >= 10) {
-      message.warning('最多 10 道题');
+    if (questions.length >= MAX_QUESTIONS) {
+      message.warning(`最多 ${MAX_QUESTIONS} 道题`);
       return;
     }
     setQuestions([
@@ -123,8 +129,8 @@ export default function TeamQuestionsPresetPage({ classId, className, onBack, on
   };
 
   const removeQuestion = (index: number) => {
-    if (questions.length <= 3) {
-      message.warning('至少保留 3 道题');
+    if (questions.length <= MIN_QUESTIONS) {
+      message.warning(`至少保留 ${MIN_QUESTIONS} 道题`);
       return;
     }
     setQuestions(questions.filter((_, i) => i !== index));
@@ -156,8 +162,8 @@ export default function TeamQuestionsPresetPage({ classId, className, onBack, on
   };
 
   const handleSave = async () => {
-    if (questions.length < 3 || questions.length > 10) {
-      message.error('题目数量须在 3～10 道之间');
+    if (questions.length < MIN_QUESTIONS || questions.length > MAX_QUESTIONS) {
+      message.error(`题目数量须在 ${MIN_QUESTIONS}～${MAX_QUESTIONS} 道之间`);
       return;
     }
     const payload = questions.map((q, i) => ({
@@ -205,7 +211,7 @@ export default function TeamQuestionsPresetPage({ classId, className, onBack, on
             {isDirty && <span className="ml-2 text-xs text-amber-600">（有未保存修改）</span>}
           </p>
           <p className="text-xs text-gray-400 mt-1">
-            3～10 道题；简答最多 100 字；单选/多选每题最多 6 个选项。保存后学生端将加载本题库。
+            5～10 道题；简答最多 100 字；单选/多选每题最多 6 个选项。保存后学生端将加载本题库。
           </p>
         </div>
         {isDirty && (
@@ -248,6 +254,8 @@ export default function TeamQuestionsPresetPage({ classId, className, onBack, on
                     danger
                     size="small"
                     icon={<i className="ri-delete-bin-line" />}
+                    disabled={questions.length <= MIN_QUESTIONS}
+                    title={questions.length <= MIN_QUESTIONS ? `至少保留 ${MIN_QUESTIONS} 道题` : '删除本题'}
                     onClick={() => removeQuestion(qi)}
                   />
                 </div>
@@ -330,7 +338,7 @@ export default function TeamQuestionsPresetPage({ classId, className, onBack, on
             icon={<i className="ri-add-line" />}
             className="lg:col-span-2"
             onClick={addQuestion}
-            disabled={questions.length >= 10}
+            disabled={questions.length >= MAX_QUESTIONS}
           >
             添加题目
           </Button>

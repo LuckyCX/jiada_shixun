@@ -1,25 +1,32 @@
 # 数据库脚本说明
 
-## 文件与顺序
+## 空库初始化
 
-在**空库**中一键初始化（在 `docs/sql` 目录执行，或指定完整路径）：
+在 **`docs/sql` 目录**执行（`\ir` 相对当前目录）：
 
 ```bash
 cd docs/sql && psql -v ON_ERROR_STOP=1 -U postgres -d your_db -f init_all.sql
 ```
 
-也可按编号逐文件执行；学院与专业数据见 `037_colleges_majors_seed.sql`（已由 `003_seed.sql` 引用）。
+执行顺序：`000_extensions.sql` → `001_schema.sql` → `002_business.sql` → `003_seed.sql`（含 `\ir 037_colleges_majors_seed.sql`）→ `003_student_teacher_personal_enrollments_view.sql`。
 
-**已有库**若缺少专业表，请先执行：
+## Docker / 宝塔全新部署
 
-```bash
-psql -v ON_ERROR_STOP=1 -U postgres -d your_db -f docs/sql/036_majors.sql
-psql -v ON_ERROR_STOP=1 -U postgres -d your_db -f docs/sql/037_colleges_majors_seed.sql
-```
+`docker-compose.yml` 仅挂载 [`init/`](init/) 到 Postgres `docker-entrypoint-initdb.d`（**仅数据卷为空时**执行一次）：
 
-Docker 首次初始化可将本目录挂载到 Postgres 容器的 `/docker-entrypoint-initdb.d/`（仅**第一次**建数据目录时执行）。
+| 文件 | 说明 |
+|------|------|
+| `10_extensions.sql` | 扩展 |
+| `20_schema.sql` | 平台核心表 |
+| `30_business.sql` | 教师班与实训业务表 |
+| `40_seed.sql` | 种子数据（`\ir 37_colleges_majors_seed.sql`） |
+| `45_view.sql` | 学生选课视图 |
 
-**已有库上的结构变更**请使用 [`migrations/`](migrations/) 下的增量脚本，执行方式见 [`Docker部署与数据迁移说明.md`](../docker/Docker部署与数据迁移说明.md)。
+已有数据卷需重建时：`docker compose down -v` 后再 `up`（会清空库数据）。
+
+## 历史增量
+
+[`archive/incremental/`](archive/incremental/) 存放已合并进 `001` / `002` 的旧编号脚本，不参与初始化。
 
 ## 默认管理员
 
@@ -32,9 +39,9 @@ Docker 首次初始化可将本目录挂载到 Postgres 容器的 `/docker-entry
 
 ## 与「无 .env」约定
 
-- 业务参数（站点、邮件、短信、AI 限流、模型密钥等）以 **`system_config` 与 `ai_*` 表**为准，通过 HTTP 管理端维护。
-- 容器之间连通仍依赖 Compose 文件内 **`environment:`** 中的数据库主机名、Redis 地址等（**不使用仓库内 `.env` 文件**）。
+- 业务参数以 **`system_config` 与 `ai_*` 表**为准，通过 HTTP 管理端维护。
+- 容器连通依赖 Compose 内 **`environment:`**（不使用仓库 `.env`）。
 
 ## 安全
 
-- 勿将生产 `ai_models.api_key_encrypted` 等密钥提交至公开仓库；导入 seed 后仅限内网调试。
+- 勿将生产 `ai_models.api_key_encrypted` 等密钥提交至公开仓库。

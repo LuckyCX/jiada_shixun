@@ -87,7 +87,7 @@ export default function TopicReview({ personalClass }: TopicReviewProps) {
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-50 via-white to-pink-50">
       {/* Header */}
-      <div className="bg-gradient-to-r from-purple-600 to-pink-600 text-white px-8 py-6">
+      <div className="bg-gradient-to-r from-purple-600 to-pink-600 text-white px-8 py-6  rounded-xl">
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold mb-2">选题审核</h1>

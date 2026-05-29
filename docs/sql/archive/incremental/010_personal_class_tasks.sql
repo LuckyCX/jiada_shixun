@@ -12,7 +12,7 @@ CREATE TABLE teacher_personal_class_tasks (
   module               varchar(64) NOT NULL,
   priority             varchar(16) NOT NULL DEFAULT 'normal'
     CHECK (priority IN ('urgent', 'high', 'normal', 'low')),
-  deadline             date NOT NULL,
+  deadline             timestamptz NOT NULL,
   scope                varchar(16) NOT NULL DEFAULT 'all'
     CHECK (scope IN ('all', 'specific')),
   status               varchar(16) NOT NULL DEFAULT 'draft'

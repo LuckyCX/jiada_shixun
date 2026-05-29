@@ -39,6 +39,7 @@ CREATE TABLE users (
   student_no      varchar(64),
   employee_no     varchar(64),
   department      varchar(128),
+  avatar_url      varchar(500),
   last_login_at   timestamptz,
   created_at      timestamptz NOT NULL DEFAULT now(),
   updated_at      timestamptz NOT NULL DEFAULT now()
@@ -187,11 +188,15 @@ CREATE TABLE knowledge_points (
   status              varchar(32) NOT NULL DEFAULT 'draft',
   uploader_id         bigint REFERENCES users (id) ON DELETE SET NULL,
   is_public           boolean NOT NULL DEFAULT true,
+  module_key          varchar(64),
+  module_name         varchar(128),
+  sort_order          int NOT NULL DEFAULT 0,
   created_at          timestamptz NOT NULL DEFAULT now(),
   updated_at          timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE INDEX idx_knowledge_points_course ON knowledge_points (course_id);
+CREATE INDEX idx_knowledge_points_module_key ON knowledge_points (module_key, sort_order, id);
 CREATE TRIGGER trg_knowledge_points_updated_at BEFORE UPDATE ON knowledge_points
   FOR EACH ROW EXECUTE PROCEDURE trg_set_updated_at();
 
@@ -640,7 +645,10 @@ CREATE TABLE quiz_questions (
   question_type varchar(32) NOT NULL,
   options       jsonb,
   sort_order    int NOT NULL DEFAULT 0,
-  score         int NOT NULL DEFAULT 10
+  score         int NOT NULL DEFAULT 10,
+  correct_answer jsonb,
+  explanation   text NOT NULL DEFAULT '',
+  keywords      jsonb NOT NULL DEFAULT '[]'::jsonb
 );
 
 CREATE TABLE quiz_attempts (

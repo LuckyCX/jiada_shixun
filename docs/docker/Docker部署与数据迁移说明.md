@@ -120,12 +120,12 @@ LIBREOFFICE_BIN: /usr/bin/soffice
 ```yaml
 volumes:
   - jiada_shixun:/var/lib/postgresql/data
-  - ./docs/sql:/docker-entrypoint-initdb.d:ro
+  - ./docs/sql/init:/docker-entrypoint-initdb.d:ro
 ```
 
 因此：
 
-- **第一次** `docker compose up` 且 `jiada_shixun` 为新卷时：会按**文件名排序**依次执行 `docs/sql` 下的 `000_*.sql`、`001_*.sql`、…（具体顺序与文件命名见 [`docs/sql/README.md`](../sql/README.md)）。
+- **第一次** `docker compose up` 且 `jiada_shixun` 为新卷时：会按**文件名排序**依次执行 [`docs/sql/init/`](../sql/init/) 下的 `10_extensions.sql`、`20_schema.sql`、`30_business.sql`、`40_seed.sql`、`45_view.sql`（见 [`docs/sql/README.md`](../sql/README.md)）。
 - **之后**再次 `up`、或只重建 `node` / `gateway`：**不会**再次跑 `initdb.d`（数据目录已非空），**这是预期行为**，避免覆盖生产数据。
 
 若你希望「像新环境一样」重新跑一遍全量脚本，只能**在新卷上**做（见下文「重建开发库」），而不要指望改挂载目录里的 SQL 会自动在旧卷上再执行一遍。
@@ -154,7 +154,7 @@ Node 进程级环境变量（如 `DATABASE_URL`、`REDIS_URL`）写在 `docker-c
 
 ## 4. 后期库结构演进：增量 SQL（不影响未提及的表与数据）
 
-全量脚本 `000`～`003` 适用于**空库**或**首次 initdb**。已有环境上的变更应使用**增量迁移脚本**，原则如下：
+空库全量见 `docs/sql/init/`（Docker）或 `docs/sql/init_all.sql`（手动 psql）。已有环境上的变更应使用**增量迁移脚本**，原则如下：
 
 1. **幂等与可重复审阅**：每条迁移尽量可安全执行一次；复杂场景用 `IF NOT EXISTS`、或先查系统表再 `ALTER`，避免二次执行直接报错（团队可约定是否配合迁移记录表）。
 2. **禁止**在增量脚本里随意 `DROP DATABASE`、大范围无备份 `TRUNCATE`、或对生产库不做说明的破坏性 `DROP COLUMN`。
@@ -163,9 +163,9 @@ Node 进程级环境变量（如 `DATABASE_URL`、`REDIS_URL`）写在 `docker-c
    ```bash
    # 将新文件复制进容器可读路径，或使用 stdin / bind mount
    docker compose cp docs/sql/migrations/00xx_描述.sql postgres:/tmp/00xx.sql
-   docker compose exec postgres psql -v ON_ERROR_STOP=1 -U jiada -d jiada -f /tmp/00xx.sql
+   docker compose exec postgres psql -v ON_ERROR_STOP=1 -U jiada_shixun -d jiada_shixun -f /tmp/00xx.sql
    ```
-   若 `postgres` 服务已挂载整个 `docs/sql`，也可在容器内直接 `-f /docker-entrypoint-initdb.d/migrations/00xx_xxx.sql`（路径以实际挂载为准）。**执行前请备份**。
+   **执行前请备份**。
 
 5. **Redis**：结构变更一般**不**通过 SQL 维护；更新应用后如需刷新缓存，可依赖 TTL、或在发版说明中约定短时间内的缓存不一致可接受；必要时运维对特定 key 前缀做清理（需评估业务影响）。
 

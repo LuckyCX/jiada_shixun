@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Modal,
   Form,
@@ -7,7 +7,6 @@ import {
   DatePicker,
   Switch,
   Radio,
-  Checkbox,
   Upload,
   message,
   Spin,
@@ -34,25 +33,40 @@ type Props = {
   taskId?: string;
   onClose: () => void;
   onSuccess: () => void;
+  /** 页内嵌表单，不使用 Modal */
+  variant?: 'modal' | 'inline';
 };
 
 const MAX_ATTACH = 5;
 const MAX_BYTES = 100 * 1024 * 1024;
 
-export default function CreateTaskModal({ open, classId, taskId, onClose, onSuccess }: Props) {
+export default function CreateTaskModal({
+  open,
+  classId,
+  taskId,
+  onClose,
+  onSuccess,
+  variant = 'modal',
+}: Props) {
+  const inline = variant === 'inline';
   const [form] = Form.useForm<TaskFormValues>();
   const [teams, setTeams] = useState<TeamForTask[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [existingAttachments, setExistingAttachments] = useState<PersonalClassTask['attachments']>([]);
-  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [pendingFiles, setPendingFiles] = useState<{ id: string; file: File }[]>([]);
+  const attachSlotRef = useRef(0);
   const editMode = Boolean(taskId);
+
+  useEffect(() => {
+    attachSlotRef.current = existingAttachments.length + pendingFiles.length;
+  }, [existingAttachments.length, pendingFiles.length]);
 
   const attachmentsEnabled = Form.useWatch('attachmentsEnabled', form);
   const scope = Form.useWatch('scope', form);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open && !inline) return;
     let cancelled = false;
     setLoading(true);
     setPendingFiles([]);
@@ -70,7 +84,9 @@ export default function CreateTaskModal({ open, classId, taskId, onClose, onSucc
             description: task.description,
             module: task.module,
             priority: task.priority,
-            deadline: task.deadline ? dayjs(task.deadline) : undefined,
+            deadline: task.deadline
+              ? dayjs(task.deadline, ['YYYY-MM-DD HH:mm', 'YYYY-MM-DD'])
+              : undefined,
             attachmentsEnabled: task.attachmentsEnabled,
             requiresStudentAttachment: task.requiresStudentAttachment,
             scope: task.scope,
@@ -98,9 +114,9 @@ export default function CreateTaskModal({ open, classId, taskId, onClose, onSucc
     return () => {
       cancelled = true;
     };
-  }, [open, classId, taskId, editMode, form]);
+  }, [open, inline, classId, taskId, editMode, form]);
 
-  const buildBody = (values: TaskFormValues, status: 'draft' | 'published') => ({
+  const buildBody = (values: TaskFormValues) => ({
     title: values.title.trim(),
     description: values.description.trim(),
     module: values.module,
@@ -112,18 +128,18 @@ export default function CreateTaskModal({ open, classId, taskId, onClose, onSucc
     requiresStudentAttachment: values.requiresStudentAttachment,
     resourceLinkEnabled: false,
     resourceNodeIds: [],
-    status,
+    status: 'published' as const,
   });
 
   const uploadPending = async (resolvedTaskId: string, enabled: boolean) => {
     if (!enabled || !pendingFiles.length) return;
-    for (const file of pendingFiles) {
+    for (const { file } of pendingFiles) {
       await uploadTaskAttachment(classId, resolvedTaskId, file);
     }
     setPendingFiles([]);
   };
 
-  const submit = async (asDraft: boolean) => {
+  const submit = async () => {
     try {
       const values = await form.validateFields();
       if (values.scope === 'specific' && !values.teamIds?.length) {
@@ -132,12 +148,16 @@ export default function CreateTaskModal({ open, classId, taskId, onClose, onSucc
       }
       const dl = values.deadline;
       const deadline =
-        typeof dl === 'string' ? dl : dayjs.isDayjs(dl) ? dl.format('YYYY-MM-DD') : '';
+        typeof dl === 'string'
+          ? dl
+          : dayjs.isDayjs(dl)
+            ? dl.format('YYYY-MM-DD HH:mm')
+            : '';
       if (!deadline) {
         message.warning('请选择截止时间');
         return;
       }
-      const payload = buildBody({ ...values, deadline }, asDraft ? 'draft' : 'published');
+      const payload = buildBody({ ...values, deadline });
       setSaving(true);
       let saved: PersonalClassTask;
       if (editMode && taskId) {
@@ -146,9 +166,24 @@ export default function CreateTaskModal({ open, classId, taskId, onClose, onSucc
         saved = await createPersonalClassTask(classId, payload);
       }
       await uploadPending(saved.id, values.attachmentsEnabled);
-      message.success(asDraft ? '草稿已保存' : '任务已发布');
+      message.success('任务已发布');
       onSuccess();
-      onClose();
+      if (!inline) onClose();
+      else if (!editMode) {
+        setExistingAttachments([]);
+        setPendingFiles([]);
+        form.setFieldsValue({
+          title: '',
+          description: '',
+          module: TASK_MODULES[0],
+          priority: 'normal',
+          deadline: '',
+          attachmentsEnabled: false,
+          requiresStudentAttachment: false,
+          scope: 'all',
+          teamIds: [],
+        });
+      }
     } catch (e) {
       if (e && typeof e === 'object' && 'errorFields' in e) return;
       message.error(e instanceof Error ? e.message : '保存失败');
@@ -162,12 +197,13 @@ export default function CreateTaskModal({ open, classId, taskId, onClose, onSucc
       message.error('单文件不能超过 100MB');
       return Upload.LIST_IGNORE;
     }
-    const total = existingAttachments.length + pendingFiles.length;
-    if (total >= MAX_ATTACH) {
+    if (attachSlotRef.current >= MAX_ATTACH) {
       message.error(`最多 ${MAX_ATTACH} 个附件`);
       return Upload.LIST_IGNORE;
     }
-    setPendingFiles((prev) => [...prev, file]);
+    attachSlotRef.current += 1;
+    const id = crypto.randomUUID();
+    setPendingFiles((prev) => [...prev, { id, file }]);
     return false;
   };
 
@@ -177,64 +213,74 @@ export default function CreateTaskModal({ open, classId, taskId, onClose, onSucc
       name: a.fileName,
       status: 'done' as const,
     })),
-    ...pendingFiles.map((f, i) => ({
-      uid: `pending-${i}`,
-      name: f.name,
+    ...pendingFiles.map((p) => ({
+      uid: `pending-${p.id}`,
+      name: p.file.name,
       status: 'done' as const,
     })),
   ];
 
-  return (
-    <Modal
-      open={open}
-      title={editMode ? '编辑任务' : '发布新任务'}
-      onCancel={onClose}
-      width={720}
-      destroyOnClose
-      footer={
-        <div className="flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer"
-          >
-            取消
-          </button>
-          <button
-            type="button"
-            disabled={saving}
-            onClick={() => void submit(true)}
-            className="px-4 py-2 text-sm text-teal-700 border border-teal-200 rounded-lg hover:bg-teal-50 cursor-pointer disabled:opacity-50"
-          >
-            保存草稿
-          </button>
-          <button
-            type="button"
-            disabled={saving}
-            onClick={() => void submit(false)}
-            className="px-4 py-2 text-sm text-white bg-teal-600 rounded-lg hover:bg-teal-700 cursor-pointer disabled:opacity-50"
-          >
-            立即发布
-          </button>
-        </div>
-      }
-    >
+  const footerButtons = (
+    <div className={`flex gap-2 ${inline ? 'pt-2' : 'justify-end'}`}>
+      {!inline && (
+        <button
+          type="button"
+          onClick={onClose}
+          className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer"
+        >
+          取消
+        </button>
+      )}
+      <button
+        type="button"
+        disabled={saving}
+        onClick={() => void submit()}
+        className={`px-4 py-2 text-sm text-white bg-teal-600 rounded-lg hover:bg-teal-700 cursor-pointer disabled:opacity-50 ${inline ? 'flex-1' : ''}`}
+      >
+        {saving ? '提交中…' : '立即发布'}
+      </button>
+    </div>
+  );
+
+  const formBody = (
       <Spin spinning={loading}>
-        <Form form={form} layout="vertical" className="mt-2">
-          <Form.Item name="title" label="任务标题" rules={[{ required: true, message: '请输入标题' }]}>
-            <Input placeholder="例如：完成市场调研报告" maxLength={256} />
-          </Form.Item>
-          <Form.Item name="module" label="实训模块" rules={[{ required: true }]}>
+        <Form form={form} layout="vertical" className={inline ? '' : 'mt-2'}>
+        <Form.Item name="module" label="实训模块" rules={[{ required: true }]}>
             <Select
               options={TASK_MODULES.map((m) => ({ value: m, label: m }))}
             />
+          </Form.Item>
+          <Form.Item name="scope" label="发布对象" rules={[{ required: true }]}>
+            <Radio.Group>
+              <Radio value="all">全班</Radio>
+              <Radio value="specific">指定团队</Radio>
+            </Radio.Group>
+          </Form.Item>
+          {scope === 'specific' && (
+            <Form.Item name="teamIds" label="目标团队">
+              <Select
+                mode="multiple"
+                placeholder="请选择目标团队"
+                options={teams.map((t) => ({
+                  value: t.id,
+                  label: `${t.name}（${t.memberCount} 人）`,
+                }))}
+              />
+            </Form.Item>
+          )}
+          <Form.Item name="title" label="任务标题" rules={[{ required: true, message: '请输入标题' }]}>
+            <Input placeholder="例如：完成市场调研报告" maxLength={256} />
           </Form.Item>
           <Form.Item name="description" label="任务描述" rules={[{ required: true, message: '请输入描述' }]}>
             <Input.TextArea rows={4} placeholder="说明任务要求与交付物" />
           </Form.Item>
           <div className="grid grid-cols-2 gap-4">
-            <Form.Item name="deadline" label="截止时间" rules={[{ required: true, message: '请选择日期' }]}>
-              <DatePicker className="w-full" format="YYYY-MM-DD" />
+            <Form.Item name="deadline" label="截止时间" rules={[{ required: true, message: '请选择时间' }]}>
+              <DatePicker
+                className="w-full"
+                showTime={{ format: 'HH:mm' }}
+                format="YYYY-MM-DD HH:mm"
+              />
             </Form.Item>
             <Form.Item name="priority" label="紧急程度" rules={[{ required: true }]}>
               <Select
@@ -271,6 +317,7 @@ export default function CreateTaskModal({ open, classId, taskId, onClose, onSucc
           {attachmentsEnabled && (
             <Form.Item label="附件（最多 5 个，单文件 ≤100MB）">
               <Upload
+                multiple
                 beforeUpload={beforeUpload}
                 fileList={fileList}
                 onRemove={async (file) => {
@@ -279,19 +326,21 @@ export default function CreateTaskModal({ open, classId, taskId, onClose, onSucc
                     try {
                       await deleteTaskAttachment(classId, taskId, id);
                       setExistingAttachments((prev) => prev.filter((a) => a.id !== id));
+                      attachSlotRef.current = Math.max(0, attachSlotRef.current - 1);
                     } catch (e) {
                       message.error(e instanceof Error ? e.message : '删除失败');
                       return false;
                     }
                   } else if (file.uid.startsWith('pending-')) {
-                    const idx = Number(file.uid.replace('pending-', ''));
-                    setPendingFiles((prev) => prev.filter((_, i) => i !== idx));
+                    const id = file.uid.replace('pending-', '');
+                    setPendingFiles((prev) => prev.filter((p) => p.id !== id));
+                    attachSlotRef.current = Math.max(0, attachSlotRef.current - 1);
                   }
                   return true;
                 }}
               >
                 <button type="button" className="text-sm text-teal-600 cursor-pointer">
-                  选择文件
+                  选择文件（可多选）
                 </button>
               </Upload>
               {!editMode && pendingFiles.length > 0 && (
@@ -299,25 +348,29 @@ export default function CreateTaskModal({ open, classId, taskId, onClose, onSucc
               )}
             </Form.Item>
           )}
-          <Form.Item name="scope" label="发布范围" rules={[{ required: true }]}>
-            <Radio.Group>
-              <Radio value="all">全班</Radio>
-              <Radio value="specific">指定团队</Radio>
-            </Radio.Group>
-          </Form.Item>
-          {scope === 'specific' && (
-            <Form.Item name="teamIds" label="目标团队">
-              <Checkbox.Group className="flex flex-col gap-2">
-                {teams.map((t) => (
-                  <Checkbox key={t.id} value={t.id}>
-                    {t.name}（{t.memberCount} 人）
-                  </Checkbox>
-                ))}
-              </Checkbox.Group>
-            </Form.Item>
-          )}
         </Form>
       </Spin>
+  );
+
+  if (inline) {
+    return (
+      <div className="space-y-4">
+        {formBody}
+        {footerButtons}
+      </div>
+    );
+  }
+
+  return (
+    <Modal
+      open={open}
+      title={editMode ? '编辑任务' : '发布新任务'}
+      onCancel={onClose}
+      width={720}
+      destroyOnClose
+      footer={footerButtons}
+    >
+      {formBody}
     </Modal>
   );
 }

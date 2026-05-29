@@ -18,6 +18,9 @@ import {
 const router = Router();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UPLOAD_ROOT = path.join(__dirname, '../../uploads/personal-class-tasks');
+const GUIDANCE_UPLOAD_ROOT = path.join(__dirname, '../../uploads/teacher-guidance');
+const MAX_GUIDANCE_ATTACHMENT_BYTES = 100 * 1024 * 1024;
+const MAX_GUIDANCE_FILES = 10;
 
 function ok(req, res, data, message = 'OK') {
   return res.json({ code: 0, message, data, traceId: req.traceId });
@@ -43,6 +46,50 @@ async function studentEnrolledInClass(pool, studentId, classId) {
     [classId, studentId]
   );
   return rows.length > 0;
+}
+
+function formatTaskDeadline(val) {
+  if (val == null || val === '') return '';
+  const s = String(val).trim();
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(s)) return s.slice(0, 16);
+  if (val instanceof Date && !Number.isNaN(val.getTime())) {
+    const y = val.getFullYear();
+    const m = String(val.getMonth() + 1).padStart(2, '0');
+    const d = String(val.getDate()).padStart(2, '0');
+    const hh = String(val.getHours()).padStart(2, '0');
+    const mm = String(val.getMinutes()).padStart(2, '0');
+    return `${y}-${m}-${d} ${hh}:${mm}`;
+  }
+  const parsed = new Date(s);
+  if (!Number.isNaN(parsed.getTime())) {
+    const y = parsed.getFullYear();
+    const m = String(parsed.getMonth() + 1).padStart(2, '0');
+    const d = String(parsed.getDate()).padStart(2, '0');
+    const hh = String(parsed.getHours()).padStart(2, '0');
+    const mm = String(parsed.getMinutes()).padStart(2, '0');
+    return `${y}-${m}-${d} ${hh}:${mm}`;
+  }
+  return formatDateOnly(val);
+}
+
+function normalizeTaskDeadlineInput(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return '';
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(s)) return s;
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(s)) return `${s}:00`;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return `${s} 23:59:00`;
+  const parsed = new Date(s);
+  if (!Number.isNaN(parsed.getTime())) return `${formatTaskDeadline(parsed)}:00`;
+  return s;
+}
+
+function normalizeUploadFileName(name) {
+  const raw = String(name || 'file').trim() || 'file';
+  const decoded = Buffer.from(raw, 'latin1').toString('utf8');
+  const looksLatin1Mojibake = /[\u0080-\u00ff]/.test(raw);
+  const decodedLooksValid =
+    decoded && decoded !== raw && !decoded.includes('\uFFFD') && /[^\u0000-\u00ff]/.test(decoded);
+  return looksLatin1Mojibake && decodedLooksValid ? decoded : raw;
 }
 
 function formatDateOnly(val) {
@@ -153,24 +200,123 @@ async function notifyTaskTargets(db, { classId, teacherId, task, action }) {
         ? `教师已修改实训任务「${task.title}」，请在待办任务中查看最新要求。`
         : `教师已发布实训任务「${task.title}」，请在待办任务中查看并按时完成。`;
 
+  const taskId = String(task.id);
+  const relatedLink = `/student-center?tab=overview&panel=tasks&classId=${classId}&taskId=${taskId}`;
   for (const studentId of targetIds) {
     await db.query(
       `INSERT INTO notifications (receiver_id, sender_id, type, title, content, related_module, related_link, is_read)
-       VALUES ($1, $2, 'system', $3, $4, 'personal_class_task', '/student-center?tab=overview&panel=tasks', false)`,
-      [studentId, teacherId, title, content]
+       VALUES ($1, $2, 'system', $3, $4, 'personal_class_task', $5, false)`,
+      [studentId, teacherId, title, content, relatedLink]
     );
   }
+}
+
+const GUIDANCE_TYPES = new Set(['broadcast', 'oneOnOne', 'resource', 'urge']);
+const GUIDANCE_TARGET_SCOPES = new Set(['all', 'team', 'student']);
+const GUIDANCE_URGENCIES = new Set(['urgent', 'high', 'normal', 'low']);
+
+const GUIDANCE_TYPE_LABELS = {
+  broadcast: '全员通知',
+  oneOnOne: '一对一引导',
+  resource: '学习资源推送',
+  urge: '学习督促',
+};
+
+function guidanceNotificationType(guidanceType) {
+  return guidanceType === 'urge' ? 'reminder' : 'guidance';
+}
+
+function buildGuidanceTitle(guidanceType, targetLabel, urgency) {
+  const label = GUIDANCE_TYPE_LABELS[guidanceType] || '教师引导';
+  let prefix = '';
+  if (guidanceType === 'broadcast') {
+    if (urgency === 'urgent') prefix = '【紧急】';
+    else if (urgency === 'high') prefix = '【较紧急】';
+    else if (urgency === 'low') prefix = '【不紧急】';
+  }
+  return `${prefix}${label} · ${targetLabel}`;
+}
+
+async function resolveGuidanceTargetStudentIds(db, classId, targetScope, teamId, studentId) {
+  if (targetScope === 'student') {
+    const sid = parseId(studentId);
+    if (!sid) return [];
+    if (!(await studentEnrolledInClass(db, sid, classId))) return [];
+    return [sid];
+  }
+  if (targetScope === 'team') {
+    const tid = parseId(teamId);
+    if (!tid) return [];
+    const { rows } = await db.query(
+      `SELECT 1 FROM teacher_personal_class_teams WHERE id = $1 AND teacher_personal_class_id = $2`,
+      [tid, classId]
+    );
+    if (!rows.length) return [];
+    return getTaskTargetStudentIds(db, classId, 'specific', [String(tid)]);
+  }
+  return getTaskTargetStudentIds(db, classId, 'all', []);
+}
+
+function formatGuidanceSentAt(val) {
+  if (!val) return '';
+  const d = val instanceof Date ? val : new Date(val);
+  if (Number.isNaN(d.getTime())) return String(val);
+  const now = new Date();
+  const diffMs = now.getTime() - d.getTime();
+  const diffMin = Math.floor(diffMs / 60000);
+  if (diffMin < 1) return '刚刚';
+  if (diffMin < 60) return `${diffMin} 分钟前`;
+  const diffH = Math.floor(diffMin / 60);
+  if (diffH < 24) return `${diffH} 小时前`;
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `${y}-${m}-${day} ${hh}:${mm}`;
+}
+
+function parseGuidanceLinkMeta(relatedLink) {
+  const out = {
+    targetScope: 'all',
+    teamId: '',
+    studentId: '',
+    urgency: 'normal',
+    guidanceType: '',
+    makeupDeadline: '',
+  };
+  if (!relatedLink) return out;
+  try {
+    const q = relatedLink.includes('?') ? relatedLink.slice(relatedLink.indexOf('?') + 1) : '';
+    const p = new URLSearchParams(q);
+    if (p.get('makeupDeadline')) out.makeupDeadline = String(p.get('makeupDeadline'));
+    const gScope = p.get('gScope');
+    if (gScope && GUIDANCE_TARGET_SCOPES.has(gScope)) out.targetScope = gScope;
+    if (p.get('teamId')) out.teamId = String(p.get('teamId'));
+    if (p.get('studentId')) out.studentId = String(p.get('studentId'));
+    const u = p.get('urgency');
+    if (u && GUIDANCE_URGENCIES.has(u)) out.urgency = u;
+    const gt = p.get('gType');
+    if (gt && GUIDANCE_TYPES.has(gt)) out.guidanceType = gt;
+  } catch {
+    /* ignore */
+  }
+  return out;
+}
+
+function inferGuidanceTypeFromRow(row) {
+  if (row.type === 'reminder') return 'urge';
+  const title = String(row.title || '');
+  if (title.includes('一对一')) return 'oneOnOne';
+  if (title.includes('资源')) return 'resource';
+  return 'broadcast';
 }
 
 function displayStatus(row) {
   if (row.status === 'draft') return 'draft';
   const deadline = row.deadline ? new Date(row.deadline) : null;
-  if (deadline) {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const d = new Date(deadline);
-    d.setHours(0, 0, 0, 0);
-    if (d < today) return 'expired';
+  if (deadline && !Number.isNaN(deadline.getTime()) && deadline.getTime() < Date.now()) {
+    return 'expired';
   }
   return 'published';
 }
@@ -579,7 +725,7 @@ function validateTaskBody(body) {
   const description = String(body?.description || '').trim();
   const module = String(body?.module || '').trim();
   const priority = String(body?.priority || 'normal').trim();
-  const deadline = String(body?.deadline || '').trim();
+  const deadline = normalizeTaskDeadlineInput(body?.deadline);
   const scope = body?.scope === 'specific' ? 'specific' : 'all';
   const status = body?.status === 'published' ? 'published' : 'draft';
   const attachmentsEnabled = Boolean(body?.attachmentsEnabled);
@@ -641,7 +787,7 @@ async function mapTaskRow(pool, classId, row) {
     description: row.description,
     module: row.module,
     priority: row.priority,
-    deadline: formatDateOnly(row.deadline),
+    deadline: formatTaskDeadline(row.deadline),
     scope: row.scope,
     status: displayStatus(row),
     attachmentsEnabled: row.attachments_enabled,
@@ -649,7 +795,7 @@ async function mapTaskRow(pool, classId, row) {
     resourceLinkEnabled: row.resource_link_enabled,
     resourceNodeIds,
     resourceNodes,
-    publishedAt: row.published_at ? String(row.published_at).slice(0, 10) : '',
+    publishedAt: row.published_at ? formatTaskDeadline(row.published_at) : '',
     publishedBy: pub[0]?.real_name || '',
     attachments,
     targetTeamIds: teamIds,
@@ -661,7 +807,7 @@ async function mapTaskRow(pool, classId, row) {
 
 async function mapStudentTodoTaskRow(pool, row, studentId, forceStatus = null) {
   const moduleId = TASK_MODULE_TO_TRAINING_ID[row.module] || null;
-  const dl = formatDateOnly(row.deadline);
+  const dl = formatTaskDeadline(row.deadline);
   const resourceNodes = await loadModuleResourceNodes(pool, row.module, { studentId });
   let status = forceStatus || row.status;
   if (status === 'published' && dl) {
@@ -750,7 +896,7 @@ const storage = multer.diskStorage({
     cb(null, dir);
   },
   filename(req, file, cb) {
-    const safe = String(file.originalname || 'file').replace(/[/\\]/g, '_');
+    const safe = normalizeUploadFileName(file.originalname).replace(/[/\\]/g, '_');
     cb(null, `${randomUUID()}_${safe}`);
   },
 });
@@ -771,7 +917,7 @@ const studentSubmissionStorage = multer.diskStorage({
     cb(null, dir);
   },
   filename(req, file, cb) {
-    const safe = String(file.originalname || 'file').replace(/[/\\]/g, '_');
+    const safe = normalizeUploadFileName(file.originalname).replace(/[/\\]/g, '_');
     cb(null, `${randomUUID()}_${safe}`);
   },
 });
@@ -780,6 +926,46 @@ const uploadStudentSubmission = multer({
   storage: studentSubmissionStorage,
   limits: { fileSize: MAX_TASK_ATTACHMENT_BYTES },
 });
+
+const guidanceUpload = multer({
+  storage: multer.diskStorage({
+    destination(req, file, cb) {
+      const classId = parseId(req.params.classId);
+      if (!classId) return cb(new Error('参数无效'));
+      if (!req._guidanceBatchId) {
+        req._guidanceBatchId = randomUUID();
+        const dir = path.join(GUIDANCE_UPLOAD_ROOT, String(classId), req._guidanceBatchId);
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      const dir = path.join(GUIDANCE_UPLOAD_ROOT, String(classId), req._guidanceBatchId);
+      cb(null, dir);
+    },
+    filename(req, file, cb) {
+      const safe = normalizeUploadFileName(file.originalname).replace(/[/\\]/g, '_');
+      cb(null, `${randomUUID()}_${safe}`);
+    },
+  }),
+  limits: { fileSize: MAX_GUIDANCE_ATTACHMENT_BYTES },
+});
+
+function guidanceAttachmentAbs(storageKey) {
+  return path.join(GUIDANCE_UPLOAD_ROOT, storageKey);
+}
+
+function guidanceMultipartMiddleware(req, res, next) {
+  if (!req.is('multipart/form-data')) return next();
+  guidanceUpload.array('files', MAX_GUIDANCE_FILES)(req, res, (err) => {
+    if (err) {
+      return bad(req, res, 400, 40003, err.message || '文件上传失败');
+    }
+    if (Array.isArray(req.files)) {
+      for (const file of req.files) {
+        file.originalname = normalizeUploadFileName(file.originalname);
+      }
+    }
+    next();
+  });
+}
 
 function submissionAttachmentAbsPath(storageKey) {
   return path.join(UPLOAD_ROOT, storageKey);
@@ -1085,6 +1271,8 @@ router.put(
         if (v.status === 'published') {
           const action = existing[0].status === 'published' || existing[0].published_at ? 'updated' : 'published';
           await notifyTaskTargets(client, { classId, teacherId: tid, task: upd[0], action });
+        } else if (existing[0].status === 'published' && v.status === 'draft') {
+          await notifyTaskTargets(client, { classId, teacherId: tid, task: upd[0], action: 'deleted' });
         }
         await client.query('COMMIT');
         return ok(req, res, await mapTaskRow(pool, classId, upd[0]));
@@ -1190,16 +1378,17 @@ router.post(
       }
       if (!req.file) return bad(req, res, 400, 40013, '请选择文件');
 
+      const fileName = normalizeUploadFileName(req.file.originalname);
       const relKey = path.join(String(tid), String(classId), String(taskId), req.file.filename);
       const { rows: ins } = await pool.query(
         `INSERT INTO teacher_personal_class_task_attachments (task_id, storage_key, file_name, file_size, sort_order)
          VALUES ($1, $2, $3, $4, $5)
          RETURNING id`,
-        [taskId, relKey, req.file.originalname, req.file.size, cnt[0].c]
+        [taskId, relKey, fileName, req.file.size, cnt[0].c]
       );
       return ok(req, res, {
         id: String(ins[0].id),
-        fileName: req.file.originalname,
+        fileName,
         fileSize: req.file.size,
         size: formatSize(req.file.size),
         storageKey: relKey,
@@ -1425,11 +1614,12 @@ router.post(
           for (let i = 0; i < files.length; i += 1) {
             const file = files[i];
             const relKey = path.join('student-submissions', String(classId), String(taskId), String(sid), file.filename);
+            const fileName = normalizeUploadFileName(file.originalname);
             await client.query(
               `INSERT INTO student_personal_class_task_completion_attachments
                 (task_id, student_id, storage_key, file_name, file_size, sort_order)
                VALUES ($1, $2, $3, $4, $5, $6)`,
-              [taskId, sid, relKey, file.originalname, file.size, i]
+              [taskId, sid, relKey, fileName, file.size, i]
             );
           }
         }
@@ -1482,6 +1672,616 @@ router.get(
       return res.download(abs, rows[0].fileName);
     } catch (e) {
       logError(`GET student task attachment download traceId=${req.traceId}`, e);
+      return bad(req, res, 500, 50000, e.message);
+    }
+  }
+);
+
+router.post(
+  '/teacher/personal-classes/:classId/guidance/messages',
+  requireAuth(),
+  requireTeacher(),
+  guidanceMultipartMiddleware,
+  async (req, res) => {
+    try {
+      const tid = teacherIdFromReq(req);
+      const classId = parseId(req.params.classId);
+      if (!tid || !classId) return bad(req, res, 400, 40003, '参数无效');
+      const pool = getPool();
+      if (!(await ownsPersonalClass(pool, tid, classId))) {
+        return bad(req, res, 404, 40402, '班级不存在或无权操作');
+      }
+
+      const guidanceType = String(req.body?.guidanceType || '').trim();
+      const targetScope = String(req.body?.targetScope || '').trim();
+      const content = String(req.body?.content || '').trim();
+      const urgency = String(req.body?.urgency || 'normal').trim();
+      const teamId = req.body?.teamId != null ? String(req.body.teamId).trim() : '';
+      const studentId = req.body?.studentId != null ? String(req.body.studentId).trim() : '';
+      const uploadedFiles = Array.isArray(req.files) ? req.files : [];
+      const makeupDeadlineRaw =
+        req.body?.makeupDeadline != null ? String(req.body.makeupDeadline).trim() : '';
+      const makeupDeadline =
+        guidanceType === 'urge' && makeupDeadlineRaw
+          ? normalizeTaskDeadlineInput(makeupDeadlineRaw)
+          : null;
+
+      if (!GUIDANCE_TYPES.has(guidanceType)) return bad(req, res, 400, 40003, '引导类型无效');
+      if (!GUIDANCE_TARGET_SCOPES.has(targetScope)) return bad(req, res, 400, 40003, '发送对象无效');
+      if (!content) return bad(req, res, 400, 40003, '请填写引导内容');
+      if (
+        guidanceType === 'broadcast' &&
+        urgency &&
+        !GUIDANCE_URGENCIES.has(urgency)
+      ) {
+        return bad(req, res, 400, 40003, '紧急程度无效');
+      }
+      if (uploadedFiles.length && guidanceType !== 'resource') {
+        return bad(req, res, 400, 40003, '仅推送资源可上传附件');
+      }
+      if (targetScope === 'team' && !teamId) return bad(req, res, 400, 40003, '请选择小组');
+      if (targetScope === 'student' && !studentId) return bad(req, res, 400, 40003, '请选择学生');
+
+      let targetLabel = '全体学生';
+      if (targetScope === 'team') {
+        const { rows: tr } = await pool.query(
+          `SELECT name FROM teacher_personal_class_teams WHERE id = $1 AND teacher_personal_class_id = $2`,
+          [parseId(teamId), classId]
+        );
+        if (!tr.length) return bad(req, res, 400, 40003, '小组不存在');
+        targetLabel = tr[0].name;
+      } else if (targetScope === 'student') {
+        const sid = parseId(studentId);
+        const { rows: sr } = await pool.query(
+          `SELECT u.real_name AS "realName", u.username
+           FROM teacher_personal_class_students pcs
+           JOIN users u ON u.id = pcs.student_id
+           WHERE pcs.teacher_personal_class_id = $1 AND pcs.student_id = $2`,
+          [classId, sid]
+        );
+        if (!sr.length) return bad(req, res, 400, 40003, '学生不在本班');
+        targetLabel = (sr[0].realName || sr[0].username || '学生').trim();
+      }
+
+      const targetIds = await resolveGuidanceTargetStudentIds(
+        pool,
+        classId,
+        targetScope,
+        teamId,
+        studentId
+      );
+      if (!targetIds.length) return bad(req, res, 400, 40003, '没有可发送的对象');
+
+      const batchId = uploadedFiles.length ? req._guidanceBatchId || randomUUID() : null;
+      const attachmentRows = uploadedFiles.map((f, i) => ({
+        storageKey: `${classId}/${batchId}/${f.filename}`,
+        fileName: normalizeUploadFileName(f.originalname || f.filename || 'file').replace(/[/\\]/g, '_'),
+        fileSize: Number(f.size) || 0,
+        sortOrder: i,
+      }));
+
+      const notifType = guidanceNotificationType(guidanceType);
+      const title = buildGuidanceTitle(guidanceType, targetLabel, urgency);
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        if (batchId && attachmentRows.length) {
+          for (const a of attachmentRows) {
+            await client.query(
+              `INSERT INTO teacher_guidance_attachments
+                 (batch_id, teacher_personal_class_id, storage_key, file_name, file_size, sort_order)
+               VALUES ($1::uuid, $2, $3, $4, $5, $6)`,
+              [batchId, classId, a.storageKey, a.fileName, a.fileSize, a.sortOrder]
+            );
+          }
+        }
+        let sent = 0;
+        let firstNoticeId = null;
+        for (const receiverId of targetIds) {
+          const { rows: ins } = await client.query(
+            `INSERT INTO notifications (receiver_id, sender_id, type, title, content, related_module, related_link, is_read)
+             VALUES ($1, $2, $3, $4, $5, 'teacher_guidance', '', false)
+             RETURNING id`,
+            [receiverId, tid, notifType, title, content]
+          );
+          const noticeId = ins[0]?.id;
+          if (noticeId) {
+            if (firstNoticeId == null) firstNoticeId = noticeId;
+            const qs = new URLSearchParams();
+            qs.set('noticeId', String(noticeId));
+            if (batchId) qs.set('guidanceBatch', batchId);
+            qs.set('gScope', targetScope);
+            qs.set('gType', guidanceType);
+            if (guidanceType === 'broadcast') qs.set('urgency', urgency);
+            if (teamId) qs.set('teamId', teamId);
+            if (studentId) qs.set('studentId', studentId);
+            if (makeupDeadline) qs.set('makeupDeadline', formatTaskDeadline(makeupDeadline));
+            const link = `/student-center?tab=overview&panel=notifications&${qs.toString()}`;
+            await client.query(`UPDATE notifications SET related_link = $1 WHERE id = $2`, [link, noticeId]);
+          }
+          sent += 1;
+        }
+        await client.query(
+          `INSERT INTO teacher_guidance_history (
+             teacher_personal_class_id, teacher_id, source_message_id, guidance_batch_id,
+             guidance_type, target_label, content, target_scope, team_id, student_id, urgency,
+             recipient_count, read_count, sent_at, makeup_deadline
+           ) VALUES ($1, $2, $3, $4::uuid, $5, $6, $7, $8, $9, $10, $11, $12, 0, now(), $13)`,
+          [
+            classId,
+            tid,
+            firstNoticeId,
+            batchId,
+            guidanceType,
+            targetLabel,
+            content,
+            targetScope,
+            teamId ? parseId(teamId) : null,
+            studentId ? parseId(studentId) : null,
+            guidanceType === 'broadcast' ? urgency : 'normal',
+            sent,
+            makeupDeadline,
+          ]
+        );
+        await client.query('COMMIT');
+        return ok(req, res, { sent, targetLabel, title, batchId });
+      } catch (e) {
+        await client.query('ROLLBACK');
+        throw e;
+      } finally {
+        client.release();
+      }
+    } catch (e) {
+      logError(`POST guidance messages traceId=${req.traceId}`, e);
+      return bad(req, res, 500, 50000, e.message);
+    }
+  }
+);
+
+router.delete(
+  '/teacher/personal-classes/:classId/guidance/messages/:messageId',
+  requireAuth(),
+  requireTeacher(),
+  async (req, res) => {
+    try {
+      const tid = teacherIdFromReq(req);
+      const classId = parseId(req.params.classId);
+      const messageId = parseId(req.params.messageId);
+      if (!tid || !classId || !messageId) return bad(req, res, 400, 40003, '参数无效');
+      const pool = getPool();
+      if (!(await ownsPersonalClass(pool, tid, classId))) {
+        return bad(req, res, 404, 40402, '班级不存在或无权操作');
+      }
+
+      const { rows: hist } = await pool.query(
+        `SELECT id, guidance_type AS "guidanceType", target_label AS "target", content,
+                target_scope AS "targetScope", team_id::text AS "teamId", student_id::text AS "studentId",
+                urgency, guidance_batch_id::text AS "guidanceBatchId", sent_at AS "sentAt"
+         FROM teacher_guidance_history
+         WHERE id = $1 AND teacher_personal_class_id = $2 AND teacher_id = $3`,
+        [messageId, classId, tid]
+      );
+
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        if (hist.length) {
+          const row = hist[0];
+          let readCount = 0;
+          if (row.guidanceBatchId) {
+            const { rows: rc } = await client.query(
+              `SELECT COUNT(*) FILTER (WHERE is_read)::int AS c
+               FROM notifications
+               WHERE sender_id = $1 AND related_module = 'teacher_guidance'
+                 AND related_link LIKE '%guidanceBatch=' || $2 || '%'`,
+              [tid, row.guidanceBatchId]
+            );
+            readCount = rc[0]?.c ?? 0;
+            await client.query(
+              `DELETE FROM notifications
+               WHERE sender_id = $1 AND related_module = 'teacher_guidance'
+                 AND related_link LIKE '%guidanceBatch=' || $2 || '%'`,
+              [tid, row.guidanceBatchId]
+            );
+          } else {
+            const { rows: seed } = await client.query(
+              `SELECT title, content, type, date_trunc('minute', sent_at) AS "sentMinute"
+               FROM notifications WHERE id = (
+                 SELECT source_message_id FROM teacher_guidance_history WHERE id = $1
+               )`,
+              [messageId]
+            );
+            if (seed.length) {
+              const s = seed[0];
+              const { rows: rc } = await client.query(
+                `SELECT COUNT(*) FILTER (WHERE is_read)::int AS c
+                 FROM notifications n
+                 WHERE n.sender_id = $1 AND n.related_module = 'teacher_guidance'
+                   AND n.title = $2 AND n.content = $3 AND n.type = $4
+                   AND date_trunc('minute', n.sent_at) = $5
+                   AND n.receiver_id IN (
+                     SELECT student_id FROM teacher_personal_class_students WHERE teacher_personal_class_id = $6
+                   )`,
+                [tid, s.title, s.content, s.type, s.sentMinute, classId]
+              );
+              readCount = rc[0]?.c ?? 0;
+              await client.query(
+                `DELETE FROM notifications n
+                 WHERE n.sender_id = $1 AND n.related_module = 'teacher_guidance'
+                   AND n.title = $2 AND n.content = $3 AND n.type = $4
+                   AND date_trunc('minute', n.sent_at) = $5
+                   AND n.receiver_id IN (
+                     SELECT student_id FROM teacher_personal_class_students WHERE teacher_personal_class_id = $6
+                   )`,
+                [tid, s.title, s.content, s.type, s.sentMinute, classId]
+              );
+            }
+          }
+          await client.query(
+            `UPDATE teacher_guidance_history
+             SET withdrawn_at = now(), read_count = GREATEST(read_count, $2)
+             WHERE id = $1`,
+            [messageId, readCount]
+          );
+          await client.query('COMMIT');
+          return ok(req, res, {
+            guidanceType: row.guidanceType,
+            targetScope: row.targetScope,
+            teamId: row.teamId || undefined,
+            studentId: row.studentId || undefined,
+            urgency: row.urgency,
+            content: row.content,
+            target: row.target,
+          });
+        }
+
+        const { rows: seed } = await client.query(
+          `SELECT title, content, type, related_link AS "relatedLink",
+                  date_trunc('minute', sent_at) AS "sentMinute"
+           FROM notifications
+           WHERE id = $1 AND sender_id = $2 AND related_module = 'teacher_guidance'`,
+          [messageId, tid]
+        );
+        if (!seed.length) {
+          await client.query('ROLLBACK');
+          return bad(req, res, 404, 40404, '记录不存在');
+        }
+
+        const s = seed[0];
+        const meta = parseGuidanceLinkMeta(s.relatedLink);
+        const guidanceType = meta.guidanceType || inferGuidanceTypeFromRow(s);
+        const title = String(s.title || '');
+        const dot = title.indexOf(' · ');
+        const target = dot >= 0 ? title.slice(dot + 3) : '—';
+
+        await client.query(
+          `DELETE FROM notifications n
+           WHERE n.sender_id = $1
+             AND n.related_module = 'teacher_guidance'
+             AND n.title = $2
+             AND n.content = $3
+             AND n.type = $4
+             AND date_trunc('minute', n.sent_at) = $5
+             AND n.receiver_id IN (
+               SELECT student_id FROM teacher_personal_class_students WHERE teacher_personal_class_id = $6
+             )`,
+          [tid, s.title, s.content, s.type, s.sentMinute, classId]
+        );
+        await client.query('COMMIT');
+        return ok(req, res, {
+          guidanceType,
+          targetScope: meta.targetScope,
+          teamId: meta.teamId || undefined,
+          studentId: meta.studentId || undefined,
+          urgency: meta.urgency,
+          content: s.content,
+          target,
+        });
+      } catch (e) {
+        await client.query('ROLLBACK');
+        throw e;
+      } finally {
+        client.release();
+      }
+    } catch (e) {
+      logError(`DELETE guidance message traceId=${req.traceId}`, e);
+      return bad(req, res, 500, 50000, e.message);
+    }
+  }
+);
+
+router.get(
+  '/student/guidance-attachments/:attachmentId/download',
+  requireAuth(),
+  requireStudent(),
+  async (req, res) => {
+    try {
+      const sid = studentIdFromReq(req);
+      const attachmentId = parseId(req.params.attachmentId);
+      if (!sid || !attachmentId) return bad(req, res, 400, 40003, '参数无效');
+      const pool = getPool();
+      const { rows } = await pool.query(
+        `SELECT a.storage_key AS "storageKey", a.file_name AS "fileName", a.batch_id::text AS "batchId"
+         FROM teacher_guidance_attachments a
+         WHERE a.id = $1
+           AND EXISTS (
+             SELECT 1 FROM notifications n
+             WHERE n.receiver_id = $2
+               AND n.related_module = 'teacher_guidance'
+               AND n.related_link LIKE '%guidanceBatch=' || a.batch_id::text || '%'
+           )`,
+        [attachmentId, sid]
+      );
+      if (!rows.length) return bad(req, res, 404, 40404, '附件不存在');
+      const abs = guidanceAttachmentAbs(rows[0].storageKey);
+      if (!fs.existsSync(abs)) return bad(req, res, 404, 40405, '文件不存在');
+      return res.download(abs, rows[0].fileName);
+    } catch (e) {
+      logError(`GET student guidance attachment traceId=${req.traceId}`, e);
+      return bad(req, res, 500, 50000, e.message);
+    }
+  }
+);
+
+router.delete(
+  '/teacher/personal-classes/:classId/guidance/history/:historyId',
+  requireAuth(),
+  requireTeacher(),
+  async (req, res) => {
+    try {
+      const tid = teacherIdFromReq(req);
+      const classId = parseId(req.params.classId);
+      const historyId = parseId(req.params.historyId);
+      if (!tid || !classId || !historyId) return bad(req, res, 400, 40003, '参数无效');
+      const pool = getPool();
+      if (!(await ownsPersonalClass(pool, tid, classId))) {
+        return bad(req, res, 404, 40402, '班级不存在或无权操作');
+      }
+
+      const { rows: hist } = await pool.query(
+        `SELECT id, guidance_batch_id::text AS "guidanceBatchId", withdrawn_at AS "withdrawnAt"
+         FROM teacher_guidance_history
+         WHERE id = $1 AND teacher_personal_class_id = $2 AND teacher_id = $3`,
+        [historyId, classId, tid]
+      );
+      if (!hist.length) return bad(req, res, 404, 40404, '记录不存在');
+      if (!hist[0].withdrawnAt) {
+        return bad(req, res, 400, 40003, '请先撤回后再删除');
+      }
+
+      const batchId = hist[0].guidanceBatchId;
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        if (batchId) {
+          const { rows: att } = await client.query(
+            `SELECT storage_key AS "storageKey"
+             FROM teacher_guidance_attachments
+             WHERE batch_id = $1::uuid AND teacher_personal_class_id = $2`,
+            [batchId, classId]
+          );
+          await client.query(
+            `DELETE FROM teacher_guidance_attachments WHERE batch_id = $1::uuid AND teacher_personal_class_id = $2`,
+            [batchId, classId]
+          );
+          for (const a of att) {
+            try {
+              fs.unlinkSync(guidanceAttachmentAbs(a.storageKey));
+            } catch {
+              /* ignore */
+            }
+          }
+        }
+        await client.query(
+          `DELETE FROM teacher_guidance_history WHERE id = $1 AND teacher_personal_class_id = $2`,
+          [historyId, classId]
+        );
+        await client.query('COMMIT');
+      } catch (e) {
+        await client.query('ROLLBACK');
+        throw e;
+      } finally {
+        client.release();
+      }
+
+      return ok(req, res, { deleted: true });
+    } catch (e) {
+      logError(`DELETE guidance history traceId=${req.traceId}`, e);
+      return bad(req, res, 500, 50000, e.message);
+    }
+  }
+);
+
+router.get(
+  '/teacher/personal-classes/:classId/guidance-attachments/:attachmentId/download',
+  requireAuth(),
+  requireTeacher(),
+  async (req, res) => {
+    try {
+      const tid = teacherIdFromReq(req);
+      const classId = parseId(req.params.classId);
+      const attachmentId = parseId(req.params.attachmentId);
+      if (!tid || !classId || !attachmentId) return bad(req, res, 400, 40003, '参数无效');
+      const pool = getPool();
+      if (!(await ownsPersonalClass(pool, tid, classId))) {
+        return bad(req, res, 404, 40402, '班级不存在或无权操作');
+      }
+      const { rows } = await pool.query(
+        `SELECT a.storage_key AS "storageKey", a.file_name AS "fileName"
+         FROM teacher_guidance_attachments a
+         WHERE a.id = $1 AND a.teacher_personal_class_id = $2`,
+        [attachmentId, classId]
+      );
+      if (!rows.length) return bad(req, res, 404, 40404, '附件不存在');
+      const abs = guidanceAttachmentAbs(rows[0].storageKey);
+      if (!fs.existsSync(abs)) return bad(req, res, 404, 40405, '文件不存在');
+      return res.download(abs, rows[0].fileName);
+    } catch (e) {
+      logError(`GET teacher guidance attachment traceId=${req.traceId}`, e);
+      return bad(req, res, 500, 50000, e.message);
+    }
+  }
+);
+
+router.get(
+  '/teacher/personal-classes/:classId/guidance/messages',
+  requireAuth(),
+  requireTeacher(),
+  async (req, res) => {
+    try {
+      const tid = teacherIdFromReq(req);
+      const classId = parseId(req.params.classId);
+      if (!tid || !classId) return bad(req, res, 400, 40003, '参数无效');
+      const pool = getPool();
+      if (!(await ownsPersonalClass(pool, tid, classId))) {
+        return bad(req, res, 404, 40402, '班级不存在或无权操作');
+      }
+
+      let records = [];
+      try {
+        const { rows: histRows } = await pool.query(
+          `SELECT id::text, guidance_type AS "guidanceType", target_label AS "target", content,
+                  sent_at AS "sentAt", recipient_count AS "recipientCount", read_count AS "readCount",
+                  target_scope AS "targetScope", team_id::text AS "teamId", student_id::text AS "studentId",
+                  urgency, guidance_batch_id::text AS "guidanceBatchId", withdrawn_at AS "withdrawnAt",
+                  makeup_deadline AS "makeupDeadline"
+           FROM teacher_guidance_history
+           WHERE teacher_personal_class_id = $1 AND teacher_id = $2
+           ORDER BY sent_at DESC
+           LIMIT 200`,
+          [classId, tid]
+        );
+        const batchIds = histRows.map((r) => r.guidanceBatchId).filter(Boolean);
+        const attachmentsByBatch = {};
+        if (batchIds.length) {
+          const { rows: attRows } = await pool.query(
+            `SELECT batch_id::text AS "batchId", id::text AS id, file_name AS "fileName", file_size AS "fileSize"
+             FROM teacher_guidance_attachments
+             WHERE teacher_personal_class_id = $1 AND batch_id = ANY($2::uuid[])
+             ORDER BY sort_order, id`,
+            [classId, batchIds]
+          );
+          for (const a of attRows) {
+            if (!attachmentsByBatch[a.batchId]) attachmentsByBatch[a.batchId] = [];
+            attachmentsByBatch[a.batchId].push({
+              id: a.id,
+              fileName: a.fileName,
+              fileSize: Number(a.fileSize) || 0,
+            });
+          }
+        }
+        records = histRows.map((r) => {
+          const readCount = r.readCount ?? 0;
+          const recipientCount = r.recipientCount ?? 0;
+          const readRate =
+            recipientCount > 0 ? Math.round((readCount / recipientCount) * 100) : 0;
+          const batchId = r.guidanceBatchId;
+          const sentAtIso =
+            r.sentAt instanceof Date
+              ? r.sentAt.toISOString()
+              : r.sentAt
+                ? new Date(r.sentAt).toISOString()
+                : '';
+          return {
+            id: r.id,
+            guidanceType: r.guidanceType,
+            target: r.target,
+            content: r.content,
+            time: formatGuidanceSentAt(r.sentAt),
+            sentAt: sentAtIso && !Number.isNaN(new Date(sentAtIso).getTime()) ? sentAtIso : undefined,
+            status: 'sent',
+            recipientCount,
+            readCount,
+            readRate,
+            withdrawn: Boolean(r.withdrawnAt),
+            targetScope: r.targetScope,
+            teamId: r.teamId || undefined,
+            studentId: r.studentId || undefined,
+            urgency: r.urgency,
+            attachments: batchId ? attachmentsByBatch[batchId] || [] : [],
+            makeupDeadline: r.makeupDeadline ? formatTaskDeadline(r.makeupDeadline) : undefined,
+          };
+        });
+      } catch (e) {
+        if (e.code !== '42P01') throw e;
+        const { rows } = await pool.query(
+          `SELECT n.title, n.content, n.type,
+                  MAX(n.sent_at) AS "sentAt",
+                  COUNT(*)::int AS "recipientCount",
+                  COUNT(*) FILTER (WHERE n.is_read)::int AS "readCount",
+                  MIN(n.id)::text AS id,
+                  MIN(n.related_link) AS "relatedLink"
+           FROM notifications n
+           WHERE n.sender_id = $1
+             AND n.related_module = 'teacher_guidance'
+             AND n.receiver_id IN (
+               SELECT student_id FROM teacher_personal_class_students WHERE teacher_personal_class_id = $2
+             )
+           GROUP BY n.title, n.content, n.type, date_trunc('minute', n.sent_at)
+           ORDER BY MAX(n.sent_at) DESC
+           LIMIT 100`,
+          [tid, classId]
+        );
+        const batchIds = rows
+          .map((r) => {
+            const m = String(r.relatedLink || '').match(/[?&]guidanceBatch=([^&]+)/);
+            return m?.[1] || null;
+          })
+          .filter(Boolean);
+        const attachmentsByBatch = {};
+        if (batchIds.length) {
+          const { rows: attRows } = await pool.query(
+            `SELECT batch_id::text AS "batchId", id::text AS id, file_name AS "fileName", file_size AS "fileSize"
+             FROM teacher_guidance_attachments
+             WHERE teacher_personal_class_id = $1 AND batch_id = ANY($2::uuid[])
+             ORDER BY sort_order, id`,
+            [classId, batchIds]
+          );
+          for (const a of attRows) {
+            if (!attachmentsByBatch[a.batchId]) attachmentsByBatch[a.batchId] = [];
+            attachmentsByBatch[a.batchId].push({
+              id: a.id,
+              fileName: a.fileName,
+              fileSize: Number(a.fileSize) || 0,
+            });
+          }
+        }
+        records = rows.map((r) => {
+          const meta = parseGuidanceLinkMeta(r.relatedLink);
+          const guidanceType = meta.guidanceType || inferGuidanceTypeFromRow(r);
+          const title = String(r.title || '');
+          const dot = title.indexOf(' · ');
+          const target = dot >= 0 ? title.slice(dot + 3) : '—';
+          const readCount = r.readCount ?? 0;
+          const recipientCount = r.recipientCount ?? 0;
+          const readRate =
+            recipientCount > 0 ? Math.round((readCount / recipientCount) * 100) : 0;
+          const batchMatch = String(r.relatedLink || '').match(/[?&]guidanceBatch=([^&]+)/);
+          const batchId = batchMatch?.[1];
+          return {
+            id: r.id,
+            guidanceType,
+            target,
+            content: r.content,
+            time: formatGuidanceSentAt(r.sentAt),
+            status: 'sent',
+            recipientCount,
+            readCount,
+            readRate,
+            withdrawn: false,
+            targetScope: meta.targetScope,
+            teamId: meta.teamId || undefined,
+            studentId: meta.studentId || undefined,
+            urgency: meta.urgency,
+            attachments: batchId ? attachmentsByBatch[batchId] || [] : [],
+            makeupDeadline: meta.makeupDeadline || undefined,
+          };
+        });
+      }
+
+      return ok(req, res, { records });
+    } catch (e) {
+      logError(`GET guidance messages traceId=${req.traceId}`, e);
       return bad(req, res, 500, 50000, e.message);
     }
   }
