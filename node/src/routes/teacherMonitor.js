@@ -6,6 +6,7 @@ import { getPool } from '../lib/db.js';
 import { logError } from '../lib/logError.js';
 import { requireAuth, requireTeacher } from '../middleware/auth.js';
 import { coerceSections, sectionsToFullText } from '../lib/businessPlanSections.js';
+import { loadSurveyQuestions, mapSurveyRow } from '../lib/marketResearchSurveyDb.js';
 
 const router = Router();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -35,6 +36,29 @@ async function ownsPersonalClass(pool, teacherId, classId) {
     [classId, teacherId]
   );
   return rows.length > 0;
+}
+
+async function teamInPersonalClass(pool, classId, teamId) {
+  const { rows } = await pool.query(
+    `SELECT 1 FROM teacher_personal_class_teams WHERE id = $1 AND teacher_personal_class_id = $2`,
+    [teamId, classId]
+  );
+  return rows.length > 0;
+}
+
+function displayRespondentToken(row) {
+  const t = String(row.respondent_token || '').trim();
+  if (t) return t;
+  return `legacy-${row.id}`;
+}
+
+function mapPersonaRowForMonitor(row) {
+  const payload = row.payload && typeof row.payload === 'object' ? row.payload : {};
+  return {
+    id: String(row.id),
+    ...payload,
+    source: row.source,
+  };
 }
 
 function fmtZh(val) {
@@ -157,7 +181,7 @@ async function loadTeamsForClass(pool, classId) {
   if (!teams.length) return [];
   const teamIds = teams.map((t) => t.id);
   const { rows: members } = await pool.query(
-    `SELECT m.team_id, u.id AS student_id, COALESCE(u.real_name, u.username, '') AS name
+    `SELECT m.team_id, u.id AS student_id, COALESCE(u.real_name, u.username, '') AS name, u.avatar_url
      FROM teacher_personal_class_team_members m
      JOIN users u ON u.id = m.student_id
      WHERE m.team_id = ANY($1::bigint[])
@@ -166,7 +190,7 @@ async function loadTeamsForClass(pool, classId) {
   );
   const byTeam = new Map(teamIds.map((id) => [String(id), []]));
   for (const r of members) {
-    byTeam.get(String(r.team_id))?.push({ id: String(r.student_id), name: r.name || '' });
+    byTeam.get(String(r.team_id))?.push({ id: String(r.student_id), name: r.name || '', avatarUrl: r.avatar_url || '' });
   }
   return teams.map((t) => ({
     id: String(t.id),
@@ -425,7 +449,7 @@ router.get(
           id: Number(t.id),
           teamName: t.teamName,
           course: '',
-          members: t.members.map((m) => ({ name: m.name, avatar: '' })),
+          members: t.members.map((m) => ({ name: m.name, avatarUrl: m.avatarUrl || '' })),
           leader: t.leader,
           currentStage: currentStageFromStageProgress(stageProgress),
           overallProgress,
@@ -645,6 +669,107 @@ router.get(
       return ok(req, res, { submissions: items });
     } catch (e) {
       logError(`GET teacher monitor submissions traceId=${req.traceId}`, e);
+      return bad(req, res, 500, 50000, e.message);
+    }
+  }
+);
+
+router.get(
+  '/teacher/personal-classes/:classId/monitor/teams/:teamId/market-report-preview',
+  requireAuth(),
+  requireTeacher(),
+  async (req, res) => {
+    try {
+      const tid = teacherIdFromReq(req);
+      const classId = parseId(req.params.classId);
+      const teamId = parseId(req.params.teamId);
+      if (!tid || !classId || !teamId) return bad(req, res, 400, 40003, '参数无效');
+      const pool = getPool();
+      if (!(await ownsPersonalClass(pool, tid, classId))) {
+        return bad(req, res, 404, 40402, '班级不存在或无权操作');
+      }
+      if (!(await teamInPersonalClass(pool, classId, teamId))) {
+        return bad(req, res, 404, 40403, '团队不存在');
+      }
+
+      const { rows: uploadRows } = await pool.query(
+        `SELECT payload FROM teacher_personal_class_team_market_report_uploads WHERE team_id = $1`,
+        [teamId]
+      );
+      const rawPayload = uploadRows[0]?.payload;
+      let payload = null;
+      if (rawPayload && typeof rawPayload === 'object') {
+        payload = rawPayload;
+      } else if (typeof rawPayload === 'string' && rawPayload.trim()) {
+        try {
+          payload = JSON.parse(rawPayload);
+        } catch {
+          payload = null;
+        }
+      }
+      if (!payload) {
+        return bad(req, res, 404, 40404, '暂无市场调研报告');
+      }
+
+      const surveyIds = Array.isArray(payload.surveyIds)
+        ? payload.surveyIds.map(parseId).filter(Boolean)
+        : [];
+      const personaIds = Array.isArray(payload.personaIds)
+        ? payload.personaIds.map(parseId).filter(Boolean)
+        : [];
+
+      const surveys = [];
+      if (surveyIds.length) {
+        const { rows: surveyRows } = await pool.query(
+          `SELECT id, title, status, collected_count, public_slug, source, created_at, published_at, closes_at
+           FROM teacher_personal_class_team_surveys
+           WHERE team_id = $1 AND id = ANY($2::bigint[])
+           ORDER BY created_at DESC`,
+          [teamId, surveyIds]
+        );
+        for (const row of surveyRows) {
+          const sid = row.id;
+          const questions = await loadSurveyQuestions(pool, sid);
+          const survey = mapSurveyRow(row, questions, '');
+          const { rows: respRows } = await pool.query(
+            `SELECT id, answers, respondent_token, submitted_at
+             FROM teacher_personal_class_team_survey_responses
+             WHERE survey_id = $1
+             ORDER BY submitted_at DESC`,
+            [sid]
+          );
+          surveys.push({
+            ...survey,
+            responses: respRows.map((r) => ({
+              id: String(r.id),
+              respondentToken: displayRespondentToken(r),
+              submittedAt: r.submitted_at ? new Date(r.submitted_at).toLocaleString('zh-CN') : '',
+              answers:
+                r.answers && typeof r.answers === 'object' && !Array.isArray(r.answers) ? r.answers : {},
+            })),
+          });
+        }
+      }
+
+      let personas = [];
+      if (personaIds.length) {
+        const { rows: personaRows } = await pool.query(
+          `SELECT id, payload, source FROM teacher_personal_class_team_market_personas
+           WHERE team_id = $1 AND id = ANY($2::bigint[])
+           ORDER BY id ASC`,
+          [teamId, personaIds]
+        );
+        personas = personaRows.map(mapPersonaRowForMonitor);
+      }
+
+      return ok(req, res, {
+        analysisResult: payload.analysisResult || null,
+        analysisGeneratedAt: payload.analysisGeneratedAt || '',
+        surveys,
+        personas,
+      });
+    } catch (e) {
+      logError(`GET market-report-preview traceId=${req.traceId}`, e);
       return bad(req, res, 500, 50000, e.message);
     }
   }

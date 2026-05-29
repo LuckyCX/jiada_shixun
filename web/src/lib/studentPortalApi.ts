@@ -1,4 +1,4 @@
-import { portalAuthenticatedFetch, redirectStudentSessionExpired } from './authApi';
+import { getPortalToken, portalAuthenticatedFetch, redirectStudentSessionExpired } from './authApi';
 
 export { redirectStudentSessionExpired };
 
@@ -30,10 +30,36 @@ export type StudentProfile = {
   realName: string;
   studentNo: string;
   email: string;
+  avatarUrl: string;
+  classId: string;
+  className: string;
+  collegeId: string;
+  collegeName: string;
 };
 
 export async function getStudentProfile(): Promise<StudentProfile> {
   return studentFetch('/api/student/me') as Promise<StudentProfile>;
+}
+
+export async function updateStudentProfile(body: { email?: string; code?: string; oldPassword?: string; newPassword?: string }) {
+  return studentFetch('/api/student/me', { method: 'PATCH', body: JSON.stringify(body) }) as Promise<{ saved: boolean }>;
+}
+
+export async function sendStudentEmailCode(email: string) {
+  return studentFetch('/api/student/me/email-code', {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  }) as Promise<{ sent: boolean; id?: string }>;
+}
+
+export async function uploadStudentAvatar(file: File) {
+  const token = getPortalToken('student');
+  const fd = new FormData();
+  fd.append('file', file);
+  const r = await fetch('/api/student/me/avatar', { method: 'POST', headers: token ? { Authorization: `Bearer ${token}` } : {}, body: fd });
+  const j = await r.json().catch(() => ({ code: -1, message: '无效响应' }));
+  if (!r.ok || j.code !== 0) throw new Error(j.message || `HTTP ${r.status}`);
+  return j.data as { avatarUrl: string };
 }
 
 export async function fetchStudentPersonalEnrollments(): Promise<StudentPersonalEnrollment[]> {

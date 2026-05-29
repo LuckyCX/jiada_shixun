@@ -845,6 +845,8 @@ export default function MarketResearchModule({
       .finally(() => setChallengeRecordsLoading(false));
   };
 
+  const personaLocked = teamReportUploaded || trainingEnded;
+
   const planUploadMethods = useMemo(
     () => filterPlanUploadMethods(plan.methods),
     [plan.methods]
@@ -1932,7 +1934,9 @@ export default function MarketResearchModule({
               <div className="bg-green-50 border border-green-200 rounded-xl p-5">
                 <p className="text-sm text-green-700">
                   <i className="ri-information-line mr-2"></i>
-                  用户画像数据来源于问卷调查和数据分析模块，悬停卡片可编辑或删除画像
+                  {personaLocked
+                    ? '调研报告已提交，用户画像已归档，不可再编辑或删除'
+                    : '用户画像数据来源于问卷调查和数据分析模块，悬停卡片可编辑或删除画像'}
                 </p>
               </div>
 
@@ -1943,22 +1947,24 @@ export default function MarketResearchModule({
                 {personas.map((persona) => (
                   <div key={persona.id} className={`bg-white border-2 ${persona.borderColor} rounded-2xl p-8 relative group`}>
                     {/* Action buttons */}
-                    <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button
-                        onClick={() => setEditingPersona(persona)}
-                        className="w-8 h-8 flex items-center justify-center bg-white border border-gray-200 text-gray-500 hover:text-green-600 hover:border-green-300 rounded-lg shadow-sm transition-colors cursor-pointer"
-                        title="编辑画像"
-                      >
-                        <i className="ri-edit-line text-sm"></i>
-                      </button>
-                      <button
-                        onClick={() => void handleDeletePersona(persona.id)}
-                        className="w-8 h-8 flex items-center justify-center bg-white border border-gray-200 text-gray-500 hover:text-red-500 hover:border-red-300 rounded-lg shadow-sm transition-colors cursor-pointer"
-                        title="删除画像"
-                      >
-                        <i className="ri-delete-bin-line text-sm"></i>
-                      </button>
-                    </div>
+                    {!personaLocked && (
+                      <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button
+                          onClick={() => setEditingPersona(persona)}
+                          className="w-8 h-8 flex items-center justify-center bg-white border border-gray-200 text-gray-500 hover:text-green-600 hover:border-green-300 rounded-lg shadow-sm transition-colors cursor-pointer"
+                          title="编辑画像"
+                        >
+                          <i className="ri-edit-line text-sm"></i>
+                        </button>
+                        <button
+                          onClick={() => void handleDeletePersona(persona.id)}
+                          className="w-8 h-8 flex items-center justify-center bg-white border border-gray-200 text-gray-500 hover:text-red-500 hover:border-red-300 rounded-lg shadow-sm transition-colors cursor-pointer"
+                          title="删除画像"
+                        >
+                          <i className="ri-delete-bin-line text-sm"></i>
+                        </button>
+                      </div>
+                    )}
 
                     <div className="flex items-start gap-6 mb-6">
                       <div className={`w-24 h-24 rounded-full bg-gradient-to-br from-green-100 to-teal-100 flex items-center justify-center text-3xl font-bold ${persona.accentColor} border-4 border-gray-100 flex-shrink-0`}>
@@ -2001,12 +2007,14 @@ export default function MarketResearchModule({
                       ))}
                     </div>
 
-                    <button
-                      onClick={() => setEditingPersona(persona)}
-                      className="mt-6 w-full py-2 border border-gray-200 text-gray-600 text-sm rounded-xl hover:border-green-300 hover:text-green-600 transition-colors cursor-pointer flex items-center justify-center gap-2 whitespace-nowrap"
-                    >
-                      <i className="ri-edit-line"></i>编辑此画像
-                    </button>
+                    {!personaLocked && (
+                      <button
+                        onClick={() => setEditingPersona(persona)}
+                        className="mt-6 w-full py-2 border border-gray-200 text-gray-600 text-sm rounded-xl hover:border-green-300 hover:text-green-600 transition-colors cursor-pointer flex items-center justify-center gap-2 whitespace-nowrap"
+                      >
+                        <i className="ri-edit-line"></i>编辑此画像
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>
@@ -2014,15 +2022,15 @@ export default function MarketResearchModule({
               <div className="flex gap-4">
                 <button
                   onClick={() => setSurveySelectMode('persona')}
-                  disabled={trainingEnded}
+                  disabled={personaLocked}
                   className="flex-1 px-6 py-3 bg-gradient-to-r from-purple-600 to-blue-600 text-white text-sm font-medium rounded-xl hover:from-purple-700 hover:to-blue-700 transition-all shadow-lg cursor-pointer flex items-center justify-center gap-2 whitespace-nowrap"
                 >
                   <i className="ri-robot-line"></i>AI 生成画像
                 </button>
                 <button
                   onClick={() => setShowCreatePersona(true)}
-                  disabled={trainingEnded}
-                  className="flex-1 px-6 py-3 bg-green-500 text-white text-sm font-medium rounded-xl hover:bg-green-600 transition-colors whitespace-nowrap cursor-pointer flex items-center justify-center gap-2"
+                  disabled={personaLocked}
+                  className="flex-1 px-6 py-3 bg-green-500 text-white text-sm font-medium rounded-xl hover:bg-green-600 transition-colors whitespace-nowrap cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <i className="ri-add-line"></i>手动创建画像
                 </button>

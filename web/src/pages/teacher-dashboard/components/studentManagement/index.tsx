@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Modal, Spin, message } from 'antd';
 import { useTranslation } from 'react-i18next';
+import UserAvatar from '../../../../components/UserAvatar';
 import AddStudentsTransferModal from '../classManagement/AddStudentsTransferModal';
 import {
   listPersonalClassStudents,
@@ -367,11 +368,7 @@ export default function StudentManagement({ personalClass, onBack }: StudentMana
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-3">
-                          <div
-                            className={`w-8 h-8 rounded-full bg-gradient-to-br ${getColor(student.name)} flex items-center justify-center text-white text-xs font-bold flex-shrink-0`}
-                          >
-                            {student.name.charAt(0)}
-                          </div>
+                          <UserAvatar name={student.name} size="sm" />
                           <div className="font-medium text-gray-900">{student.name}</div>
                         </div>
                       </td>

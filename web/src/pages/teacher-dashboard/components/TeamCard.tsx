@@ -1,5 +1,6 @@
 
 import React, { useState } from 'react';
+import UserAvatar from '../../../components/UserAvatar';
 
 interface StageProgress {
   teamFormation: number;
@@ -15,7 +16,7 @@ export interface TeamProject {
   id: number;
   teamName: string;
   course: string;
-  members: { name: string; avatar: string }[];
+  members: { name: string; avatarUrl?: string }[];
   leader: string;
   currentStage: string;
   overallProgress: number;
@@ -157,13 +158,8 @@ export default function TeamCard({
         <div className="flex items-center gap-2 mb-3">
           <div className="flex -space-x-2">
             {team.members.slice(0, 4).map((m, i) => (
-              <div
-                key={i}
-                className="w-6 h-6 rounded-full border-2 border-white flex items-center justify-center text-xs font-bold text-white"
-                style={{ background: `hsl(${(i * 60 + 160) % 360}, 60%, 55%)` }}
-                title={m.name}
-              >
-                {m.name.charAt(0)}
+              <div key={i} className="border-2 border-white rounded-full" title={m.name}>
+                <UserAvatar name={m.name} avatarUrl={m.avatarUrl} size="sm" />
               </div>
             ))}
             {team.members.length > 4 && (

@@ -1,7 +1,8 @@
-import { useState, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { overviewStats, activityTrends, courseCompletionStats, recentOperations, trainingProgressStats, moduleCompletionRates, teamProgressDistribution } from './mockData';
+import { courseCompletionStats, moduleCompletionRates, teamProgressDistribution } from './mockData';
 import { SHARED_COURSE_CHAPTERS } from '../../../../mocks/courseChapters';
+import { fetchAdminOverview, type AdminOverviewResponse } from '../../../../lib/adminOverviewApi';
 
 type TimeRange = '7days' | '30days';
 
@@ -34,10 +35,71 @@ export default function Overview() {
   const [hoveredResource, setHoveredResource] = useState<number | null>(null);
   const svgContainerRef = useRef<HTMLDivElement>(null);
 
-  const currentTrends = activityTrends[timeRange];
-  const maxValue = Math.max(...currentTrends.map(t => t.value));
+  const [overviewData, setOverviewData] = useState<AdminOverviewResponse>({
+    stats: { students: 0, teachers: 0, classes: 0, activeTeams: 0 },
+    activityTrends: [],
+    recentOperations: [],
+  });
+  const currentTrends = overviewData.activityTrends;
+  const maxValue = currentTrends.length ? Math.max(...currentTrends.map(t => t.value)) : 0;
 
-  const userStats = overviewStats.slice(0, 4);
+  useEffect(() => {
+    let cancelled = false;
+    void fetchAdminOverview(timeRange)
+      .then((r) => {
+        if (!cancelled) setOverviewData(r);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setOverviewData({
+            stats: { students: 0, teachers: 0, classes: 0, activeTeams: 0 },
+            activityTrends: [],
+            recentOperations: [],
+          });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [timeRange]);
+
+  const userStats = useMemo(
+    () => [
+      {
+        label: '学生总数',
+        value: Number(overviewData.stats.students || 0).toLocaleString(),
+        icon: 'ri-user-line',
+        iconColor: 'text-teal-500',
+        bgColor: 'bg-teal-50',
+        trend: null,
+      },
+      {
+        label: '教师总数',
+        value: Number(overviewData.stats.teachers || 0).toLocaleString(),
+        icon: 'ri-user-star-line',
+        iconColor: 'text-indigo-500',
+        bgColor: 'bg-indigo-50',
+        trend: null,
+      },
+      {
+        label: '班级总数',
+        value: Number(overviewData.stats.classes || 0).toLocaleString(),
+        icon: 'ri-group-line',
+        iconColor: 'text-green-500',
+        bgColor: 'bg-green-50',
+        trend: null,
+      },
+      {
+        label: '活跃团队',
+        value: Number(overviewData.stats.activeTeams || 0).toLocaleString(),
+        icon: 'ri-team-line',
+        iconColor: 'text-orange-500',
+        bgColor: 'bg-orange-50',
+        trend: null,
+      },
+    ],
+    [overviewData.stats]
+  );
 
   const resourceItems = [
     { label: '视频课件', count: videoCount, icon: 'ri-video-line', color: 'text-red-500', bg: 'bg-red-50', bar: 'bg-red-400', barHover: 'bg-red-500' },
@@ -46,6 +108,7 @@ export default function Overview() {
   ];
 
   const handleSvgMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (currentTrends.length === 0 || maxValue <= 0) return;
     const svg = e.currentTarget;
     const rect = svg.getBoundingClientRect();
     const relX = e.clientX - rect.left;
@@ -233,7 +296,7 @@ export default function Overview() {
                   points={[
                     ...currentTrends.map((point, index) => {
                       const x = (index / (currentTrends.length - 1)) * 100;
-                      const y = 100 - (point.value / maxValue) * 100;
+                      const y = maxValue > 0 ? 100 - (point.value / maxValue) * 100 : 100;
                       return `${x}%,${y}%`;
                     }),
                     '100%,100%',
@@ -245,7 +308,7 @@ export default function Overview() {
                 <polyline
                   points={currentTrends.map((point, index) => {
                     const x = (index / (currentTrends.length - 1)) * 100;
-                    const y = 100 - (point.value / maxValue) * 100;
+                    const y = maxValue > 0 ? 100 - (point.value / maxValue) * 100 : 100;
                     return `${x}%,${y}%`;
                   }).join(' ')}
                   fill="none"
@@ -271,7 +334,7 @@ export default function Overview() {
                 {/* 数据点 */}
                 {currentTrends.map((point, index) => {
                   const x = (index / (currentTrends.length - 1)) * 100;
-                  const y = 100 - (point.value / maxValue) * 100;
+                  const y = maxValue > 0 ? 100 - (point.value / maxValue) * 100 : 100;
                   const isActive = activePointIdx === index;
                   return (
                     <g key={index}>
@@ -454,7 +517,7 @@ export default function Overview() {
             </Link>
           </div>
           <div className="space-y-4">
-            {recentOperations.slice(0, 3).map((operation, index) => (
+            {overviewData.recentOperations.slice(0, 3).map((operation, index) => (
               <div key={index} className="flex gap-3">
                 <div className="flex flex-col items-center">
                   <div className={`w-8 h-8 rounded-full ${operation.bgColor} flex items-center justify-center flex-shrink-0`}>
@@ -465,8 +528,18 @@ export default function Overview() {
                   )}
                 </div>
                 <div className="flex-1 pb-4">
-                  <div className="text-sm text-gray-900 mb-1">{operation.action}</div>
-                  <div className="text-xs text-gray-500">{operation.operator} · {operation.time}</div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-sm text-gray-900">{operation.action}</span>
+                    {operation.typeLabel && (
+                      <span className="px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-600 whitespace-nowrap">
+                        {operation.typeLabel}
+                      </span>
+                    )}
+                  </div>
+                  {operation.detail && (
+                    <div className="text-xs text-gray-500 line-clamp-1">{operation.detail}</div>
+                  )}
+                  <div className="text-xs text-gray-400 mt-0.5">{operation.operator} · {operation.time}</div>
                 </div>
               </div>
             ))}

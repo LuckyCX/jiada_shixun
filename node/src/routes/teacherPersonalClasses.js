@@ -3,8 +3,18 @@ import { getPool } from '../lib/db.js';
 import { seedDefaultTeamFormationQuestions } from '../lib/defaultTeamFormationQuestions.js';
 import { logError } from '../lib/logError.js';
 import { requireAuth, requireTeacher } from '../middleware/auth.js';
+import bcrypt from 'bcryptjs';
+import multer from 'multer';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { randomInt, randomUUID } from 'crypto';
+import { sendSmtpMail } from '../lib/mailProvider.js';
 
 const router = Router();
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const AVATAR_UPLOAD_ROOT = path.join(__dirname, '../../uploads/avatars');
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
 function ok(req, res, data, message = 'OK') {
   return res.json({ code: 0, message, data, traceId: req.traceId });
@@ -20,6 +30,81 @@ function teacherIdFromReq(req) {
   return Number.isFinite(id) && id > 0 ? id : null;
 }
 
+function normalizeEmail(value) {
+  const s = String(value || '').trim().toLowerCase();
+  if (!s) return '';
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s)) return '';
+  return s;
+}
+
+function extFromMime(mime) {
+  const m = String(mime || '').toLowerCase();
+  if (m === 'image/png') return '.png';
+  if (m === 'image/jpeg' || m === 'image/jpg') return '.jpg';
+  if (m === 'image/webp') return '.webp';
+  return '';
+}
+
+function genEmailCode() {
+  const n = randomInt(0, 1000000);
+  return String(n).padStart(6, '0');
+}
+
+async function sendBindEmailCode(pool, tid, email) {
+  const { rows: latest } = await pool.query(
+    `SELECT id, sent_at
+     FROM email_verification_codes
+     WHERE role = 'teacher' AND purpose = 'bind_email' AND user_id = $1 AND email = $2
+     ORDER BY id DESC
+     LIMIT 1`,
+    [tid, email]
+  );
+  const lastSentAt = latest[0]?.sent_at ? new Date(latest[0].sent_at).getTime() : 0;
+  if (lastSentAt && Date.now() - lastSentAt < 60 * 1000) {
+    throw new Error('验证码发送过于频繁，请稍后再试');
+  }
+  const code = genEmailCode();
+  const codeHash = await bcrypt.hash(code, 10);
+  const { rows } = await pool.query(
+    `INSERT INTO email_verification_codes (role, user_id, email, purpose, code_hash, sent_at, expires_at)
+     VALUES ('teacher', $1, $2, 'bind_email', $3, now(), now() + interval '10 minutes')
+     RETURNING id`,
+    [tid, email, codeHash]
+  );
+  await sendSmtpMail(email, {
+    subject: '实训平台 · 邮箱验证码',
+    text: `你的验证码是 ${code}，10 分钟内有效。`,
+    html: `<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.6;">你的验证码是 <b style="font-size:20px;">${code}</b>，10 分钟内有效。</div>`,
+  });
+  return rows[0]?.id ? String(rows[0].id) : '';
+}
+
+async function verifyBindEmailCode(pool, tid, email, code) {
+  const safeCode = String(code || '').trim();
+  if (!safeCode) throw new Error('请输入邮箱验证码');
+  const { rows } = await pool.query(
+    `SELECT id, code_hash, try_count
+     FROM email_verification_codes
+     WHERE role = 'teacher' AND purpose = 'bind_email'
+       AND user_id = $1 AND email = $2
+       AND used_at IS NULL
+       AND expires_at > now()
+     ORDER BY id DESC
+     LIMIT 1`,
+    [tid, email]
+  );
+  if (!rows.length) throw new Error('验证码无效或已过期');
+  const row = rows[0];
+  const tryCount = Number(row.try_count || 0);
+  if (tryCount >= 5) throw new Error('验证码错误次数过多，请重新获取');
+  const ok = await bcrypt.compare(safeCode, row.code_hash);
+  if (!ok) {
+    await pool.query(`UPDATE email_verification_codes SET try_count = try_count + 1 WHERE id = $1`, [row.id]);
+    throw new Error('验证码不正确');
+  }
+  await pool.query(`UPDATE email_verification_codes SET used_at = now() WHERE id = $1`, [row.id]);
+}
+
 /**
  * 教师档案：院系与 admin 用户管理一致，users.department 存学院 colleges.id 的字符串。
  */
@@ -29,7 +114,7 @@ router.get('/teacher/me', requireAuth(), requireTeacher(), async (req, res) => {
     if (!tid) return bad(req, res, 400, 40001, '无效用户');
 
     const { rows } = await getPool().query(
-      `SELECT u.id, u.username, u.real_name AS "realName", u.email, u.department,
+      `SELECT u.id, u.username, u.real_name AS "realName", u.email, u.department, u.avatar_url AS "avatarUrl",
               col.name AS "collegeName"
        FROM users u
        LEFT JOIN colleges col
@@ -48,11 +133,104 @@ router.get('/teacher/me', requireAuth(), requireTeacher(), async (req, res) => {
       username: r.username || '',
       realName: r.realName || '',
       email: r.email || '',
+      avatarUrl: r.avatarUrl || '',
       departmentCollegeId: r.department != null ? String(r.department).trim() : '',
       collegeName: r.collegeName || '',
     });
   } catch (e) {
     logError(`GET /api/teacher/me traceId=${req.traceId}`, e);
+    return bad(req, res, 500, 50000, e.message);
+  }
+});
+
+router.post('/teacher/me/email-code', requireAuth(), requireTeacher(), async (req, res) => {
+  try {
+    const tid = teacherIdFromReq(req);
+    if (!tid) return bad(req, res, 400, 40001, '无效用户');
+    const email = normalizeEmail(req.body?.email);
+    if (!email) return bad(req, res, 400, 40002, '邮箱格式错误');
+    const id = await sendBindEmailCode(getPool(), tid, email);
+    return ok(req, res, { sent: true, id }, '已发送');
+  } catch (e) {
+    logError(`POST /api/teacher/me/email-code traceId=${req.traceId}`, e);
+    return bad(req, res, 500, 50000, e.message);
+  }
+});
+
+router.patch('/teacher/me', requireAuth(), requireTeacher(), async (req, res) => {
+  try {
+    const tid = teacherIdFromReq(req);
+    if (!tid) return bad(req, res, 400, 40001, '无效用户');
+    const emailRaw = req.body?.email;
+    const emailCode = req.body?.code ?? req.body?.emailCode;
+    const oldPassword = String(req.body?.oldPassword || '');
+    const newPassword = String(req.body?.newPassword || '');
+
+    const sets = [];
+    const params = [];
+    let i = 1;
+
+    let newEmail = null;
+    let emailChanged = false;
+    if (emailRaw !== undefined) {
+      const normalized = normalizeEmail(emailRaw);
+      if (!normalized) return bad(req, res, 400, 40002, '邮箱格式错误');
+      await verifyBindEmailCode(getPool(), tid, normalized, emailCode);
+      sets.push(`email = $${i++}`);
+      params.push(normalized);
+      newEmail = normalized;
+      emailChanged = true;
+    }
+
+    if (newPassword || oldPassword) {
+      if (!oldPassword) return bad(req, res, 400, 40003, '请输入旧密码');
+      if (!newPassword || newPassword.length < 6) return bad(req, res, 400, 40004, '新密码至少 6 位');
+      const { rows } = await getPool().query(`SELECT password_hash FROM users WHERE id = $1 AND role = 'teacher'`, [tid]);
+      if (!rows.length) return bad(req, res, 404, 40401, '教师不存在');
+      const okPwd = await bcrypt.compare(oldPassword, rows[0].password_hash);
+      if (!okPwd) return bad(req, res, 400, 40005, '旧密码不正确');
+      const password_hash = await bcrypt.hash(newPassword, 10);
+      sets.push(`password_hash = $${i++}`);
+      params.push(password_hash);
+    }
+
+    if (!sets.length) return bad(req, res, 400, 40006, '无更新字段');
+    params.push(tid);
+    await getPool().query(`UPDATE users SET ${sets.join(', ')}, updated_at = now() WHERE id = $${i}`, params);
+
+    if (emailChanged && newEmail) {
+      await sendSmtpMail(newEmail, {
+        subject: '实训平台 · 邮箱变更通知',
+        text: '你的账号邮箱已更新。如非本人操作，请尽快联系管理员。',
+      });
+    }
+
+    return ok(req, res, { saved: true }, '已保存');
+  } catch (e) {
+    logError(`PATCH /api/teacher/me traceId=${req.traceId}`, e);
+    return bad(req, res, 500, 50000, e.message);
+  }
+});
+
+router.post('/teacher/me/avatar', requireAuth(), requireTeacher(), upload.single('file'), async (req, res) => {
+  try {
+    const tid = teacherIdFromReq(req);
+    if (!tid) return bad(req, res, 400, 40001, '无效用户');
+    const file = req.file;
+    if (!file) return bad(req, res, 400, 40002, '请选择图片文件');
+    const ext = extFromMime(file.mimetype);
+    if (!ext) return bad(req, res, 400, 40003, '仅支持 PNG/JPG/WEBP 图片');
+    const dir = path.join(AVATAR_UPLOAD_ROOT, 'teacher', String(tid));
+    fs.mkdirSync(dir, { recursive: true });
+    const name = `${randomUUID()}${ext}`;
+    const rel = path.join('teacher', String(tid), name).replace(/\\/g, '/');
+    const abs = path.join(AVATAR_UPLOAD_ROOT, rel);
+    fs.writeFileSync(abs, file.buffer);
+    const url = `/uploads/avatars/${rel}`;
+    await getPool().query(`UPDATE users SET avatar_url = $1, updated_at = now() WHERE id = $2 AND role = 'teacher'`, [url, tid]);
+    return ok(req, res, { avatarUrl: url }, '已保存');
+  } catch (e) {
+    logError(`POST /api/teacher/me/avatar traceId=${req.traceId}`, e);
     return bad(req, res, 500, 50000, e.message);
   }
 });

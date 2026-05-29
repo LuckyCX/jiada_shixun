@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { getPool } from '../lib/db.js';
 import { logError } from '../lib/logError.js';
 import { requireAuth, requireAdmin } from '../middleware/auth.js';
+import { insertAdminOperationLog } from '../lib/adminOperationLog.js';
 
 const router = Router();
 
@@ -113,6 +114,14 @@ router.post('/admin/dict-types', requireAuth(), requireAdmin(), async (req, res)
        RETURNING id, name, code, status, remark, created_at AS "createdAt", updated_at AS "updatedAt"`,
       [n, c, st, remark ? String(remark) : null]
     );
+    await insertAdminOperationLog({
+      operatorId: req.user?.sub,
+      module: 'admin_dictionary',
+      action: 'create_dict_type',
+      targetType: 'dict_type',
+      targetId: rows[0]?.id,
+      detailText: `创建字典类型：${n}（${c}）`,
+    });
     return ok(req, res, rows[0], '已创建');
   } catch (e) {
     if (e.code === '23505') return bad(req, res, 409, 40901, 'code 已存在');
@@ -158,6 +167,14 @@ router.patch('/admin/dict-types/:id', requireAuth(), requireAdmin(), async (req,
       params
     );
     if (!rows.length) return bad(req, res, 404, 40401, '字典类型不存在');
+    await insertAdminOperationLog({
+      operatorId: req.user?.sub,
+      module: 'admin_dictionary',
+      action: 'update_dict_type',
+      targetType: 'dict_type',
+      targetId: rows[0]?.id,
+      detailText: `更新字典类型：${rows[0]?.name || ''}${rows[0]?.code ? `（${rows[0].code}）` : ''}`.trim(),
+    });
     return ok(req, res, rows[0], '已保存');
   } catch (e) {
     if (e.code === '23505') return bad(req, res, 409, 40901, 'code 已存在');
@@ -176,6 +193,14 @@ router.delete('/admin/dict-types/:id', requireAuth(), requireAdmin(), async (req
     }
     const r = await getPool().query('DELETE FROM dict_type WHERE id = $1 RETURNING id', [id]);
     if (!r.rowCount) return bad(req, res, 404, 40401, '字典类型不存在');
+    await insertAdminOperationLog({
+      operatorId: req.user?.sub,
+      module: 'admin_dictionary',
+      action: 'delete_dict_type',
+      targetType: 'dict_type',
+      targetId: id,
+      detailText: `删除字典类型：ID ${id}`,
+    });
     return ok(req, res, { id }, '已删除');
   } catch (e) {
     logError(`DELETE /api/admin/dict-types/:id traceId=${req.traceId}`, e);
@@ -242,6 +267,15 @@ router.post('/admin/dict-types/:typeId/items', requireAuth(), requireAdmin(), as
                  status, remark, created_at AS "createdAt", updated_at AS "updatedAt"`,
       [typeId, n, dk, so, st, remark ? String(remark) : null]
     );
+    await insertAdminOperationLog({
+      operatorId: req.user?.sub,
+      module: 'admin_dictionary',
+      action: 'create_dict_item',
+      targetType: 'dict_item',
+      targetId: rows[0]?.id,
+      detailText: `新增字典项：${n}（键值 ${dk}）`,
+      detailJson: { dictTypeId: typeId },
+    });
     return ok(req, res, rows[0], '已创建');
   } catch (e) {
     if (e.code === '23505') return bad(req, res, 409, 40901, '该类型下 data_key 已存在');
@@ -292,6 +326,14 @@ router.patch('/admin/dict-items/:id', requireAuth(), requireAdmin(), async (req,
       params
     );
     if (!rows.length) return bad(req, res, 404, 40401, '字典项不存在');
+    await insertAdminOperationLog({
+      operatorId: req.user?.sub,
+      module: 'admin_dictionary',
+      action: 'update_dict_item',
+      targetType: 'dict_item',
+      targetId: rows[0]?.id,
+      detailText: `更新字典项：${rows[0]?.name || ''}${rows[0]?.dataKey != null ? `（键值 ${rows[0].dataKey}）` : ''}`.trim(),
+    });
     return ok(req, res, rows[0], '已保存');
   } catch (e) {
     if (e.code === '23505') return bad(req, res, 409, 40901, '该类型下 data_key 已存在');
@@ -306,6 +348,14 @@ router.delete('/admin/dict-items/:id', requireAuth(), requireAdmin(), async (req
     if (!Number.isFinite(id) || id <= 0) return bad(req, res, 400, 40001, '无效 id');
     const r = await getPool().query('DELETE FROM dict_item WHERE id = $1 RETURNING id', [id]);
     if (!r.rowCount) return bad(req, res, 404, 40401, '字典项不存在');
+    await insertAdminOperationLog({
+      operatorId: req.user?.sub,
+      module: 'admin_dictionary',
+      action: 'delete_dict_item',
+      targetType: 'dict_item',
+      targetId: id,
+      detailText: `删除字典项：ID ${id}`,
+    });
     return ok(req, res, { id }, '已删除');
   } catch (e) {
     logError(`DELETE /api/admin/dict-items/:id traceId=${req.traceId}`, e);

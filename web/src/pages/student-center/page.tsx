@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
-import { Modal, notification, Tree, Upload } from 'antd';
+import { Drawer, Modal, notification, Tree, Upload, message as antdMessage, Input, Button } from 'antd';
 import type { UploadFile } from 'antd';
 import { clearPortalToken, getPortalToken, parseJwtPayload } from '../../lib/authApi';
 import { useSearchParams, useNavigate } from 'react-router-dom';
@@ -50,6 +50,9 @@ import { fetchStudentArchive, type ArchiveRecord, type ArchiveStats } from '../.
 import {
   fetchStudentPersonalEnrollments,
   getStudentProfile,
+  updateStudentProfile,
+  sendStudentEmailCode,
+  uploadStudentAvatar,
   type StudentPersonalEnrollment,
   type StudentProfile,
 } from '../../lib/studentPortalApi';
@@ -59,6 +62,7 @@ import {
   isTeamFormationDone,
   type GroupingTeam,
 } from '../../lib/teamFormationApi';
+import UserAvatar from '../../components/UserAvatar';
 import {
   completeStudentTodoTask,
   downloadStudentTaskAttachment,
@@ -277,6 +281,13 @@ export default function StudentCenterPage() {
   const [expandedNotificationId, setExpandedNotificationId] = useState<string | null>(null);
   const [logoutModalOpen, setLogoutModalOpen] = useState(false);
   const [studentProfile, setStudentProfile] = useState<StudentProfile | null>(null);
+  const [profileModalOpen, setProfileModalOpen] = useState(false);
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [profileEmailDraft, setProfileEmailDraft] = useState('');
+  const [profileEmailCode, setProfileEmailCode] = useState('');
+  const [profileEmailSending, setProfileEmailSending] = useState(false);
+  const [profileOldPwd, setProfileOldPwd] = useState('');
+  const [profileNewPwd, setProfileNewPwd] = useState('');
   const [enrollments, setEnrollments] = useState<StudentPersonalEnrollment[]>([]);
   const [selectedClassId, setSelectedClassId] = useState<string>('');
   const [studentTodoTasks, setStudentTodoTasks] = useState<StudentTodoTask[]>([]);
@@ -318,7 +329,10 @@ export default function StudentCenterPage() {
 
   useEffect(() => {
     getStudentProfile()
-      .then(setStudentProfile)
+      .then((p) => {
+        setStudentProfile(p);
+        setProfileEmailDraft(p.email || '');
+      })
       .catch(() => {
         /* 失败时下面仍用 JWT username 兜底 */
       });
@@ -623,7 +637,7 @@ export default function StudentCenterPage() {
     currentLevel: '初级创业者', nextLevel: '中级创业者', levelProgress: 36,
   };
 
-  const { studentDisplayName, studentAvatarChar } = useMemo(() => {
+  const { studentDisplayName } = useMemo(() => {
     const token = getPortalToken('student');
     const payloadUser = token ? parseJwtPayload(token)?.username : null;
     const jwtFallback = (payloadUser && String(payloadUser).trim()) || '';
@@ -634,7 +648,7 @@ export default function StudentCenterPage() {
 
     /** 姓名 → 学号 → 登录名（JWT 常为数字内部账号，不适合作为首选展示） */
     const name = realName || studentNo || loginUsername || '学生';
-    return { studentDisplayName: name, studentAvatarChar: [...name][0] || '学' };
+    return { studentDisplayName: name };
   }, [studentProfile]);
   const currentStudentId = useMemo(() => {
     const token = getPortalToken('student');
@@ -1918,9 +1932,14 @@ export default function StudentCenterPage() {
 
         <div className="p-3 border-t border-gray-100 shrink-0 space-y-2">
           <div className={`flex items-center gap-2.5 ${sidebarCollapsed ? 'justify-center' : ''}`}>
-            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-teal-400 to-cyan-400 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
-              {studentAvatarChar}
-            </div>
+            <button
+              type="button"
+              onClick={() => setProfileModalOpen(true)}
+              className="flex-shrink-0 cursor-pointer"
+              title="个人中心"
+            >
+              <UserAvatar name={studentDisplayName} avatarUrl={studentProfile?.avatarUrl} size="sm" />
+            </button>
             {!sidebarCollapsed && (
               <div className="flex-1 min-w-0">
                 <div className="text-xs font-semibold text-gray-800 truncate">{studentDisplayName}</div>
@@ -1965,16 +1984,172 @@ export default function StudentCenterPage() {
                 selectedClassId={selectedClassId}
                 onClassChange={handleClassChange}
               />
-              <div className="flex items-center gap-2 px-3 py-1.5 text-sm text-gray-600 bg-gray-50 border border-gray-100 rounded-lg whitespace-nowrap">
+              <button
+                type="button"
+                onClick={() => setProfileModalOpen(true)}
+                className="w-9 h-9 flex items-center justify-center text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors cursor-pointer"
+                title="个人中心"
+              >
+                <i className="ri-user-3-line text-base" />
+              </button>
+              {/* <div className="flex items-center gap-2 px-3 py-1.5 text-sm text-gray-600 bg-gray-50 border border-gray-100 rounded-lg whitespace-nowrap">
                 <i className="ri-trophy-line text-teal-600"></i>
                 <span>{overallProgress.currentLevel}</span>
                 <span className="text-xs text-gray-400">
                   {overallProgress.levelProgress}% → {overallProgress.nextLevel}
                 </span>
-              </div>
+              </div> */}
             </div>
           </div>
         </header>
+
+        <Drawer
+          open={profileModalOpen}
+          onClose={() => setProfileModalOpen(false)}
+          title="个人中心"
+          placement="right"
+          width={520}
+        >
+          <div className="flex flex-col gap-4 min-w-0">
+            <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+              <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+                <div className="flex items-center gap-4 min-w-0 flex-1">
+                  <div className="flex-shrink-0">
+                    <UserAvatar name={studentDisplayName} avatarUrl={studentProfile?.avatarUrl} size="lg" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-base font-bold text-gray-900 truncate">{studentProfile?.realName || studentDisplayName}</div>
+                    <div className="text-sm text-gray-500 mt-0.5">
+                      {studentProfile?.studentNo ? `学号：${studentProfile.studentNo}` : ''}
+                    </div>
+                    <div className="text-sm text-gray-500">
+                      {studentProfile?.collegeName ? `学院：${studentProfile.collegeName}` : '学院：'}
+                      <br/>
+                      {studentProfile?.className ? `班级：${studentProfile.className}` : '班级：'}
+                    </div>
+                  </div>
+                </div>
+                <Upload
+                  showUploadList={false}
+                  beforeUpload={async (file) => {
+                    try {
+                      const r = await uploadStudentAvatar(file as File);
+                      const p = await getStudentProfile();
+                      setStudentProfile({ ...p, avatarUrl: r.avatarUrl || p.avatarUrl });
+                      antdMessage.success('头像已更新');
+                    } catch (e: any) {
+                      antdMessage.error(e?.message || '上传失败');
+                    }
+                    return false;
+                  }}
+                >
+                  <Button className="w-full sm:w-auto">上传头像</Button>
+                </Upload>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+              <div className="text-sm font-semibold text-gray-900 mb-3">个性化班级</div>
+              <div className="space-y-2 max-h-40 overflow-y-auto">
+                {(enrollments || []).map((e) => (
+                  <div key={e.classId} className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2.5 min-w-0">
+                    <div className="text-sm text-gray-800 truncate">{e.className}</div>
+                    <div className="text-xs text-gray-500 truncate mt-0.5">教师：{e.teacherName || '-'}</div>
+                  </div>
+                ))}
+                {(!enrollments || enrollments.length === 0) && (
+                  <div className="text-sm text-gray-400 py-2">暂无加入的个性化班级</div>
+                )}
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+              <div className="text-sm font-semibold text-gray-900 mb-3">邮箱</div>
+              <div className="space-y-3">
+                <Input value={profileEmailDraft} onChange={(e) => setProfileEmailDraft(e.target.value)} placeholder="绑定/修改邮箱" />
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <Input
+                    className="min-w-0 flex-1"
+                    value={profileEmailCode}
+                    onChange={(e) => setProfileEmailCode(e.target.value)}
+                    placeholder="邮箱验证码"
+                  />
+                  <Button
+                    className="w-full sm:w-auto sm:flex-shrink-0"
+                    loading={profileEmailSending}
+                    onClick={async () => {
+                      setProfileEmailSending(true);
+                      try {
+                        await sendStudentEmailCode(profileEmailDraft);
+                        antdMessage.success('验证码已发送');
+                      } catch (e: any) {
+                        antdMessage.error(e?.message || '发送失败');
+                      } finally {
+                        setProfileEmailSending(false);
+                      }
+                    }}
+                  >
+                    获取验证码
+                  </Button>
+                </div>
+                <div className="flex justify-end">
+                  <Button
+                    type="primary"
+                    size="small"
+                    className="!bg-teal-500 !border-teal-500 hover:!bg-teal-600"
+                    loading={profileSaving}
+                    onClick={async () => {
+                      setProfileSaving(true);
+                      try {
+                        await updateStudentProfile({ email: profileEmailDraft, code: profileEmailCode });
+                        const p = await getStudentProfile();
+                        setStudentProfile(p);
+                        antdMessage.success('已保存');
+                      } catch (e: any) {
+                        antdMessage.error(e?.message || '保存失败');
+                      } finally {
+                        setProfileSaving(false);
+                      }
+                    }}
+                  >
+                    保存邮箱
+                  </Button>
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+              <div className="text-sm font-semibold text-gray-900 mb-3">修改密码</div>
+              <div className="space-y-3">
+                <Input.Password value={profileOldPwd} onChange={(e) => setProfileOldPwd(e.target.value)} placeholder="旧密码" />
+                <Input.Password value={profileNewPwd} onChange={(e) => setProfileNewPwd(e.target.value)} placeholder="新密码（至少6位）" />
+                <div className="flex justify-end">
+                  <Button
+                    type="primary"
+                    size="small"
+                    className="!bg-teal-500 !border-teal-500 hover:!bg-teal-600"
+                    loading={profileSaving}
+                    onClick={async () => {
+                      setProfileSaving(true);
+                      try {
+                        await updateStudentProfile({ oldPassword: profileOldPwd, newPassword: profileNewPwd });
+                        setProfileOldPwd('');
+                        setProfileNewPwd('');
+                        antdMessage.success('密码已更新');
+                      } catch (e: any) {
+                        antdMessage.error(e?.message || '保存失败');
+                      } finally {
+                        setProfileSaving(false);
+                      }
+                    }}
+                  >
+                    保存密码
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </Drawer>
 
         <main key={selectedClassId || 'student-no-class'} className="flex-1 p-6">
 
@@ -2368,7 +2543,7 @@ export default function StudentCenterPage() {
               <div><h2 className="text-2xl font-bold text-gray-900 mb-1">实践课程</h2><p className="text-sm text-gray-500">学习知识点、完成检测、获取能力点，构建完整能力体系</p></div>
               <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-2">
                 <div className="flex space-x-2">
-                  {[{ id: 'overview', label: '学习概览', icon: 'ri-dashboard-line' }, { id: 'knowledge', label: '知识点库', icon: 'ri-book-2-line' }, { id: 'ability', label: '能力雷达', icon: 'ri-radar-line' }, { id: 'progress', label: '进度看板', icon: 'ri-line-chart-line' }].map((tab) => (
+                  {[{ id: 'overview', label: '学习概览', icon: 'ri-dashboard-line' }, { id: 'knowledge', label: '知识点库', icon: 'ri-book-2-line' } , { id: 'progress', label: '进度看板', icon: 'ri-line-chart-line' }].map((tab) => (
                     <button key={tab.id} onClick={() => setKnowledgeSubTab(tab.id as typeof knowledgeSubTab)}
                       className={`flex-1 px-4 py-2.5 rounded-xl font-medium transition-all whitespace-nowrap text-sm flex items-center justify-center gap-2 ${knowledgeSubTab === tab.id ? 'bg-gradient-to-r from-teal-500 to-cyan-600 text-white shadow-lg' : 'text-gray-600 hover:bg-gray-50'}`}
                     >
@@ -2399,8 +2574,8 @@ export default function StudentCenterPage() {
                         { icon: 'ri-book-open-line', label: '学习实践课程', color: 'from-teal-500 to-teal-600', desc: '观看视频、阅读文档' },
                         { icon: 'ri-checkbox-line', label: '学习检测', color: 'from-cyan-500 to-cyan-600', desc: '测试达标解锁' },
                         { icon: 'ri-edit-box-line', label: '实践操作', color: 'from-orange-500 to-orange-600', desc: '完成实践任务' },
-                        { icon: 'ri-star-line', label: '教师评价', color: 'from-purple-500 to-purple-600', desc: '获得反馈指导' },
-                        { icon: 'ri-medal-line', label: '获得能力点', color: 'from-purple-500 to-purple-600', desc: '解锁下一环节' },
+                        // { icon: 'ri-star-line', label: '教师评价', color: 'from-purple-500 to-purple-600', desc: '获得反馈指导' },
+                        // { icon: 'ri-medal-line', label: '获得能力点', color: 'from-purple-500 to-purple-600', desc: '解锁下一环节' },
                       ].map((step, index) => (
                         <div key={index} className="flex items-center gap-3 flex-1">
                           <div className="flex-1 text-center">

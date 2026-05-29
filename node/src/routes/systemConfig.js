@@ -4,6 +4,7 @@ import { logError } from '../lib/logError.js';
 import { humanizeSmtpError, sendSmtpTestMail } from '../lib/mailProvider.js';
 import { sendSmsCode } from '../lib/smsProvider.js';
 import { requireAuth, requireAdmin } from '../middleware/auth.js';
+import { insertAdminOperationLog } from '../lib/adminOperationLog.js';
 
 const router = Router();
 
@@ -43,6 +44,13 @@ router.patch('/admin/system-config', requireAuth(), requireAdmin(), async (req, 
     }
     const userId = Number(req.user.sub);
     await patchConfig(patches, userId);
+    await insertAdminOperationLog({
+      operatorId: userId,
+      module: 'admin_system_config',
+      action: 'update_system_config',
+      detailText: `更新系统配置：${Object.keys(patches).slice(0, 6).join('、')}${Object.keys(patches).length > 6 ? '…' : ''}`,
+      detailJson: { keys: Object.keys(patches) },
+    });
     const all = await getAllConfigRaw(false);
     const masked = maskConfigForAdmin(all);
     return res.json({ code: 0, message: '已保存', data: masked, traceId: req.traceId });

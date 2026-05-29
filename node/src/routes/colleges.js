@@ -3,6 +3,7 @@ import { Router } from 'express';
 import { getPool } from '../lib/db.js';
 import { logError } from '../lib/logError.js';
 import { requireAuth, requireAdmin } from '../middleware/auth.js';
+import { insertAdminOperationLog } from '../lib/adminOperationLog.js';
 
 const router = Router();
 
@@ -96,6 +97,14 @@ router.post('/admin/colleges', requireAuth(), requireAdmin(), async (req, res) =
       [name]
     );
     const r = rows[0];
+    await insertAdminOperationLog({
+      operatorId: req.user?.sub,
+      module: 'admin_college',
+      action: 'create_college',
+      targetType: 'college',
+      targetId: r?.id,
+      detailText: `创建学院：${r?.name || name}`,
+    });
     return ok(req, res, { ...r, id: String(r.id), classCount: 0 }, '已创建');
   } catch (e) {
     if (e.code === '23505') return bad(req, res, 409, 40901, '学院名称已存在');
@@ -133,6 +142,14 @@ router.patch('/admin/colleges/:id', requireAuth(), requireAdmin(), async (req, r
     if (!rows.length) return bad(req, res, 404, 40401, '学院不存在');
     const r = rows[0];
     const { rows: cc } = await getPool().query(`SELECT COUNT(*)::int AS c FROM classes WHERE college_id = $1`, [id]);
+    await insertAdminOperationLog({
+      operatorId: req.user?.sub,
+      module: 'admin_college',
+      action: 'update_college',
+      targetType: 'college',
+      targetId: id,
+      detailText: `更新学院：${r?.name || ''}`.trim() || `更新学院：ID ${id}`,
+    });
     return ok(req, res, { ...r, id: String(r.id), classCount: cc[0]?.c ?? 0 });
   } catch (e) {
     if (e.code === '23505') return bad(req, res, 409, 40901, '学院名称已存在');
@@ -151,6 +168,14 @@ router.delete('/admin/colleges/:id', requireAuth(), requireAdmin(), async (req, 
     }
     const { rowCount } = await getPool().query(`DELETE FROM colleges WHERE id = $1`, [id]);
     if (!rowCount) return bad(req, res, 404, 40401, '学院不存在');
+    await insertAdminOperationLog({
+      operatorId: req.user?.sub,
+      module: 'admin_college',
+      action: 'delete_college',
+      targetType: 'college',
+      targetId: id,
+      detailText: `删除学院：ID ${id}`,
+    });
     return ok(req, res, { ok: true });
   } catch (e) {
     logError(`DELETE /api/admin/colleges/:id traceId=${req.traceId}`, e);
@@ -256,7 +281,7 @@ router.post('/admin/classes', requireAuth(), requireAdmin(), async (req, res) =>
         teacherEmail = ur[0].email || '';
       }
     }
-    return ok(req, res, {
+    const out = {
       id: String(r.id),
       name: r.name,
       code: r.code,
@@ -270,7 +295,17 @@ router.post('/admin/classes', requireAuth(), requireAdmin(), async (req, res) =>
       teacherName,
       teacherEmail,
       studentCount: 0,
+    };
+    await insertAdminOperationLog({
+      operatorId: req.user?.sub,
+      module: 'admin_class',
+      action: 'create_class',
+      targetType: 'class',
+      targetId: r?.id,
+      detailText: `创建班级：${out.name}${out.teacherName ? `（指派教师：${out.teacherName}）` : ''}`,
+      detailJson: { classId: String(out.id), collegeId: out.collegeId },
     });
+    return ok(req, res, out);
   } catch (e) {
     if (e.code === '23505') return bad(req, res, 409, 40901, '班级编码已存在');
     logError(`POST /api/admin/classes traceId=${req.traceId}`, e);
@@ -371,7 +406,7 @@ router.patch('/admin/classes/:id', requireAuth(), requireAdmin(), async (req, re
       [id]
     );
     const r = rows[0];
-    return ok(req, res, {
+    const out = {
       id: String(r.id),
       name: r.name,
       code: r.code,
@@ -385,7 +420,19 @@ router.patch('/admin/classes/:id', requireAuth(), requireAdmin(), async (req, re
       teacherName: r.teacherName || '',
       teacherEmail: r.teacherEmail || '',
       studentCount: r.studentCount ?? 0,
-    });
+    };
+    if (sets.length) {
+      await insertAdminOperationLog({
+        operatorId: req.user?.sub,
+        module: 'admin_class',
+        action: 'update_class',
+        targetType: 'class',
+        targetId: id,
+        detailText: `更新班级：${out.name}`,
+        detailJson: { classId: String(out.id), collegeId: out.collegeId },
+      });
+    }
+    return ok(req, res, out);
   } catch (e) {
     if (e.code === '23505') return bad(req, res, 409, 40901, '班级编码已存在');
     logError(`PATCH /api/admin/classes/:id traceId=${req.traceId}`, e);
@@ -399,6 +446,14 @@ router.delete('/admin/classes/:id', requireAuth(), requireAdmin(), async (req, r
     if (!Number.isFinite(id) || id <= 0) return bad(req, res, 400, 40001, '无效班级 id');
     const { rowCount } = await getPool().query(`DELETE FROM classes WHERE id = $1`, [id]);
     if (!rowCount) return bad(req, res, 404, 40401, '班级不存在');
+    await insertAdminOperationLog({
+      operatorId: req.user?.sub,
+      module: 'admin_class',
+      action: 'delete_class',
+      targetType: 'class',
+      targetId: id,
+      detailText: `删除班级：ID ${id}`,
+    });
     return ok(req, res, { ok: true });
   } catch (e) {
     logError(`DELETE /api/admin/classes/:id traceId=${req.traceId}`, e);

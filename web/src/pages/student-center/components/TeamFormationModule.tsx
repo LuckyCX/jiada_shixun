@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import VersionControl, { Version } from '../../../components/feature/VersionControl';
 import TeamFormationAssessmentPanel from './TeamFormationAssessmentPanel';
+import UserAvatar from '../../../components/UserAvatar';
 import { getPortalToken, parseJwtPayload } from '../../../lib/authApi';
 import {
   fetchStudentMyTeam,
@@ -21,24 +22,17 @@ type TeamFormationModuleProps = {
   onTeamUpdated?: () => void;
 };
 
-function memberAvatarChar(name: string): string {
-  const ch = [...(name || '?').trim()][0];
-  return ch || '?';
-}
-
-function MemberTextAvatar({ name, size = 'md' }: { name: string; size?: 'sm' | 'md' }) {
-  const cls =
-    size === 'sm'
-      ? 'w-8 h-8 text-xs border-2 border-white'
-      : 'w-10 h-10 text-sm flex-shrink-0';
-  return (
-    <div
-      className={`rounded-full bg-teal-600 text-white flex items-center justify-center font-bold ${cls}`}
-      aria-hidden
-    >
-      {memberAvatarChar(name)}
-    </div>
-  );
+function MemberTextAvatar({
+  name,
+  avatarUrl,
+  size = 'md',
+}: {
+  name: string;
+  avatarUrl?: string;
+  size?: 'sm' | 'md';
+}) {
+  const cls = size === 'sm' ? 'border-2 border-white' : 'flex-shrink-0';
+  return <UserAvatar name={name} avatarUrl={avatarUrl} size={size === 'sm' ? 'sm' : 'md'} className={cls} />;
 }
 
 function apiTeamToMyTeam(t: GroupingTeam): MyTeam {
@@ -54,7 +48,7 @@ function apiTeamToMyTeam(t: GroupingTeam): MyTeam {
       aiMatchedRole: roleLabel as AIMatchedRole,
       skills: [] as string[],
       profile: normalizeTeamDimensionProfile(m.profile) as unknown as AbilityProfile,
-      avatar: '',
+      avatarUrl: m.avatarUrl || '',
       major: '',
       grade: '',
       isLeader,
@@ -86,7 +80,7 @@ type TeamMember = {
   aiMatchedRole: AIMatchedRole;
   skills: string[];
   profile: AbilityProfile;
-  avatar: string;
+  avatarUrl: string;
   major: string;
   grade: string;
   isLeader: boolean;
@@ -229,7 +223,7 @@ const mockMatchedTeams: MyTeam[] = [
         aiMatchedRole: '团队负责人',
         skills: ['项目管理', '商业分析'],
         profile: { techGeek: 60, designAesthetic: 45, businessOperator: 92 },
-        avatar: 'https://readdy.ai/api/search-image?query=professional%20asian%20male%20university%20student%20portrait%20with%20confident%20leadership%20smile%20in%20modern%20campus%20setting%2C%20clean%20bright%20background%20with%20soft%20lighting%2C%20business%20atmosphere&width=200&height=200&seq=sc-matched-m1&orientation=squarish',
+        avatarUrl: 'https://readdy.ai/api/search-image?query=professional%20asian%20male%20university%20student%20portrait%20with%20confident%20leadership%20smile%20in%20modern%20campus%20setting%2C%20clean%20bright%20background%20with%20soft%20lighting%2C%20business%20atmosphere&width=200&height=200&seq=sc-matched-m1&orientation=squarish',
         major: '工商管理',
         grade: '大三',
         isLeader: true,
@@ -241,7 +235,7 @@ const mockMatchedTeams: MyTeam[] = [
         aiMatchedRole: '技术负责人',
         skills: ['前端开发', 'Python'],
         profile: { techGeek: 88, designAesthetic: 55, businessOperator: 40 },
-        avatar: 'https://readdy.ai/api/search-image?query=professional%20asian%20female%20university%20student%20portrait%20with%20focused%20technical%20expression%20in%20modern%20tech%20campus%20setting%2C%20clean%20bright%20background%20with%20soft%20lighting&width=200&height=200&seq=sc-matched-m2&orientation=squarish',
+        avatarUrl: 'https://readdy.ai/api/search-image?query=professional%20asian%20female%20university%20student%20portrait%20with%20focused%20technical%20expression%20in%20modern%20tech%20campus%20setting%2C%20clean%20bright%20background%20with%20soft%20lighting&width=200&height=200&seq=sc-matched-m2&orientation=squarish',
         major: '计算机科学',
         grade: '大二',
         isLeader: false,
@@ -253,7 +247,7 @@ const mockMatchedTeams: MyTeam[] = [
         aiMatchedRole: '运营负责人',
         skills: ['UI设计', 'Figma'],
         profile: { techGeek: 35, designAesthetic: 90, businessOperator: 50 },
-        avatar: 'https://readdy.ai/api/search-image?query=professional%20asian%20male%20university%20student%20portrait%20with%20creative%20artistic%20expression%20in%20modern%20design%20campus%20setting%2C%20clean%20bright%20background%20with%20soft%20lighting&width=200&height=200&seq=sc-matched-m3&orientation=squarish',
+        avatarUrl: 'https://readdy.ai/api/search-image?query=professional%20asian%20male%20university%20student%20portrait%20with%20creative%20artistic%20expression%20in%20modern%20design%20campus%20setting%2C%20clean%20bright%20background%20with%20soft%20lighting&width=200&height=200&seq=sc-matched-m3&orientation=squarish',
         major: '视觉传达',
         grade: '大三',
         isLeader: false,
@@ -265,7 +259,7 @@ const mockMatchedTeams: MyTeam[] = [
         aiMatchedRole: '市场负责人',
         skills: ['市场调研', '内容运营'],
         profile: { techGeek: 30, designAesthetic: 60, businessOperator: 85 },
-        avatar: 'https://readdy.ai/api/search-image?query=professional%20asian%20female%20university%20student%20portrait%20with%20friendly%20marketing%20smile%20in%20modern%20business%20campus%20setting%2C%20clean%20bright%20background%20with%20soft%20lighting&width=200&height=200&seq=sc-matched-m4&orientation=squarish',
+        avatarUrl: 'https://readdy.ai/api/search-image?query=professional%20asian%20female%20university%20student%20portrait%20with%20friendly%20marketing%20smile%20in%20modern%20business%20campus%20setting%2C%20clean%20bright%20background%20with%20soft%20lighting&width=200&height=200&seq=sc-matched-m4&orientation=squarish',
         major: '市场营销',
         grade: '大二',
         isLeader: false,
@@ -286,7 +280,7 @@ const mockMatchedTeams: MyTeam[] = [
         aiMatchedRole: '团队负责人',
         skills: ['战略规划', '团队管理'],
         profile: { techGeek: 50, designAesthetic: 40, businessOperator: 88 },
-        avatar: 'https://readdy.ai/api/search-image?query=professional%20asian%20male%20university%20student%20portrait%20with%20strategic%20leadership%20expression%20in%20modern%20campus%20setting%2C%20clean%20bright%20background%20with%20soft%20lighting&width=200&height=200&seq=sc-matched-m5&orientation=squarish',
+        avatarUrl: 'https://readdy.ai/api/search-image?query=professional%20asian%20male%20university%20student%20portrait%20with%20strategic%20leadership%20expression%20in%20modern%20campus%20setting%2C%20clean%20bright%20background%20with%20soft%20lighting&width=200&height=200&seq=sc-matched-m5&orientation=squarish',
         major: '工商管理',
         grade: '大三',
         isLeader: true,
@@ -298,7 +292,7 @@ const mockMatchedTeams: MyTeam[] = [
         aiMatchedRole: '技术负责人',
         skills: ['Java', '数据库'],
         profile: { techGeek: 92, designAesthetic: 35, businessOperator: 45 },
-        avatar: 'https://readdy.ai/api/search-image?query=professional%20asian%20female%20university%20student%20portrait%20with%20technical%20expertise%20expression%20in%20modern%20tech%20campus%20setting%2C%20clean%20bright%20background%20with%20soft%20lighting&width=200&height=200&seq=sc-matched-m6&orientation=squarish',
+        avatarUrl: 'https://readdy.ai/api/search-image?query=professional%20asian%20female%20university%20student%20portrait%20with%20technical%20expertise%20expression%20in%20modern%20tech%20campus%20setting%2C%20clean%20bright%20background%20with%20soft%20lighting&width=200&height=200&seq=sc-matched-m6&orientation=squarish',
         major: '软件工程',
         grade: '大二',
         isLeader: false,
@@ -310,7 +304,7 @@ const mockMatchedTeams: MyTeam[] = [
         aiMatchedRole: '财务负责人',
         skills: ['数据分析', 'Excel'],
         profile: { techGeek: 70, designAesthetic: 30, businessOperator: 65 },
-        avatar: 'https://readdy.ai/api/search-image?query=professional%20asian%20male%20university%20student%20portrait%20with%20analytical%20focused%20expression%20in%20modern%20campus%20setting%2C%20clean%20bright%20background%20with%20soft%20lighting&width=200&height=200&seq=sc-matched-m7&orientation=squarish',
+        avatarUrl: 'https://readdy.ai/api/search-image?query=professional%20asian%20male%20university%20student%20portrait%20with%20analytical%20focused%20expression%20in%20modern%20campus%20setting%2C%20clean%20bright%20background%20with%20soft%20lighting&width=200&height=200&seq=sc-matched-m7&orientation=squarish',
         major: '数据科学',
         grade: '大三',
         isLeader: false,
@@ -570,7 +564,7 @@ export default function TeamFormationModule({ classId, className, initialSubTab,
           aiMatchedRole: aiMatchedRole!,
           skills: ['待完善'],
           profile: abilityProfile,
-          avatar: 'https://readdy.ai/api/search-image?query=professional%20asian%20university%20student%20portrait%20with%20confident%20friendly%20smile%20in%20modern%20campus%20setting%2C%20clean%20bright%20background%20with%20soft%20lighting&width=200&height=200&seq=sc-me-avatar&orientation=squarish',
+          avatarUrl: 'https://readdy.ai/api/search-image?query=professional%20asian%20university%20student%20portrait%20with%20confident%20friendly%20smile%20in%20modern%20campus%20setting%2C%20clean%20bright%20background%20with%20soft%20lighting&width=200&height=200&seq=sc-me-avatar&orientation=squarish',
           major: '计算机科学',
           grade: '大二',
           isLeader: false,
@@ -582,7 +576,7 @@ export default function TeamFormationModule({ classId, className, initialSubTab,
           aiMatchedRole: '技术负责人',
           skills: ['前端开发'],
           profile: { techGeek: 85, designAesthetic: 50, businessOperator: 40 },
-          avatar: 'https://readdy.ai/api/search-image?query=professional%20asian%20university%20student%20portrait%20with%20technical%20focused%20expression%20in%20modern%20campus%20setting%2C%20clean%20bright%20background%20with%20soft%20lighting&width=200&height=200&seq=sc-teammate-a&orientation=squarish',
+          avatarUrl: 'https://readdy.ai/api/search-image?query=professional%20asian%20university%20student%20portrait%20with%20technical%20focused%20expression%20in%20modern%20campus%20setting%2C%20clean%20bright%20background%20with%20soft%20lighting&width=200&height=200&seq=sc-teammate-a&orientation=squarish',
           major: '软件工程',
           grade: '大三',
           isLeader: false,
@@ -594,7 +588,7 @@ export default function TeamFormationModule({ classId, className, initialSubTab,
           aiMatchedRole: '市场负责人',
           skills: ['市场调研'],
           profile: { techGeek: 35, designAesthetic: 60, businessOperator: 80 },
-          avatar: 'https://readdy.ai/api/search-image?query=professional%20asian%20university%20student%20portrait%20with%20marketing%20friendly%20smile%20in%20modern%20campus%20setting%2C%20clean%20bright%20background%20with%20soft%20lighting&width=200&height=200&seq=sc-teammate-b&orientation=squarish',
+          avatarUrl: 'https://readdy.ai/api/search-image?query=professional%20asian%20university%20student%20portrait%20with%20marketing%20friendly%20smile%20in%20modern%20campus%20setting%2C%20clean%20bright%20background%20with%20soft%20lighting&width=200&height=200&seq=sc-teammate-b&orientation=squarish',
           major: '市场营销',
           grade: '大二',
           isLeader: false,
@@ -925,7 +919,7 @@ export default function TeamFormationModule({ classId, className, initialSubTab,
                           key={member.id}
                           className="bg-gray-50 border border-gray-100 rounded-xl p-3 flex flex-col items-center text-center hover:border-teal-200 hover:bg-teal-50/40 transition-colors"
                         >
-                          <MemberTextAvatar name={member.name} />
+                          <MemberTextAvatar name={member.name} avatarUrl={member.avatarUrl} />
                           <div className="mt-2 flex flex-wrap items-center justify-center gap-1 w-full">
                             <span className="text-sm font-bold text-gray-900 truncate max-w-full">{member.name}</span>
                             {member.isLeader && (
@@ -1002,7 +996,7 @@ export default function TeamFormationModule({ classId, className, initialSubTab,
                     <div className="flex items-center gap-2 mb-3">
                       {team.members.slice(0, 4).map(member => (
                         <div key={member.id} className="relative group">
-                          <MemberTextAvatar name={member.name} size="sm" />
+                          <MemberTextAvatar name={member.name} avatarUrl={member.avatarUrl} size="sm" />
                           {member.isLeader && (
                             <i className="ri-vip-crown-fill absolute -top-1 -right-1 text-xs text-amber-500 bg-white rounded-full"></i>
                           )}

@@ -153,16 +153,6 @@ export default function BusinessPlanModule({
     };
   }, [classId, loadWorkspace]);
 
-  const completedCount = useMemo(
-    () => sections.filter((s) => String(s.content || '').replace(/<[^>]+>/g, '').trim().length > 0).length,
-    [sections]
-  );
-
-  const totalChars = useMemo(
-    () => sections.reduce((n, s) => n + String(s.content || '').replace(/<[^>]+>/g, '').length, 0),
-    [sections]
-  );
-
   const activeSection = sections.find((s) => s.key === activeSectionKey) || sections[0];
 
   const [editingTitleKey, setEditingTitleKey] = useState<string | null>(null);
@@ -179,6 +169,26 @@ export default function BusinessPlanModule({
     const html = editorDraftHtmlRef.current;
     return sections.map((s) => (s.key === activeSectionKey ? { ...s, content: html } : s));
   }, [activeSectionKey, sections]);
+
+  const sectionsWithDraft = useMemo(
+    () => getSectionsSnapshotWithDraft(),
+    [getSectionsSnapshotWithDraft, editorDraftHtml, sections, activeSectionKey]
+  );
+
+  const sectionTotal = sectionsWithDraft.length;
+
+  const completedCount = useMemo(
+    () =>
+      sectionsWithDraft.filter((s) => String(s.content || '').replace(/<[^>]+>/g, '').trim().length > 0).length,
+    [sectionsWithDraft]
+  );
+
+  const sectionProgressPercent = sectionTotal > 0 ? Math.round((completedCount / sectionTotal) * 100) : 0;
+
+  const totalChars = useMemo(
+    () => sectionsWithDraft.reduce((n, s) => n + String(s.content || '').replace(/<[^>]+>/g, '').length, 0),
+    [sectionsWithDraft]
+  );
 
   const isDirty = useMemo(() => {
     const snapshot = getSectionsSnapshotWithDraft();
@@ -883,10 +893,10 @@ export default function BusinessPlanModule({
                     <i className="ri-file-chart-line text-2xl text-white/80"></i>
                   </div>
                   <div className="text-3xl font-bold mb-1">
-                    {Math.round((completedCount / 8) * 100)}%
+                    {sectionProgressPercent}%
                   </div>
                   <div className="text-xs text-white/80">
-                    8 个章节中已完成 {completedCount} 个
+                    {sectionTotal} 个章节中已完成 {completedCount} 个
                   </div>
                 </div>
                 <div className="bg-gradient-to-br from-blue-500 to-indigo-500 rounded-xl p-6 text-white">

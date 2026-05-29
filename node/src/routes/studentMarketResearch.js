@@ -1016,6 +1016,18 @@ function mapPersonaRow(row) {
   };
 }
 
+async function assertMarketPersonaEditable(pool, teamId, req, res) {
+  const { rows } = await pool.query(
+    `SELECT 1 FROM teacher_personal_class_team_market_report_uploads WHERE team_id = $1 LIMIT 1`,
+    [teamId]
+  );
+  if (rows.length) {
+    bad(req, res, 400, 40020, '调研报告已提交，无法再修改用户画像');
+    return false;
+  }
+  return true;
+}
+
 async function loadPersonaMap(pool, teamId) {
   const { rows } = await pool.query(
     `SELECT id, payload FROM teacher_personal_class_team_market_personas WHERE team_id = $1`,
@@ -1182,6 +1194,7 @@ router.post(
     try {
       const ctx = await requireTeamContext(req, res);
       if (!ctx) return;
+      if (!(await assertMarketPersonaEditable(ctx.pool, ctx.team.id, req, res))) return;
       const body = req.body || {};
       const name = String(body.name || '').trim();
       if (!name) return bad(req, res, 400, 40004, '请填写姓名');
@@ -1218,6 +1231,7 @@ router.put(
     try {
       const ctx = await requireTeamContext(req, res);
       if (!ctx) return;
+      if (!(await assertMarketPersonaEditable(ctx.pool, ctx.team.id, req, res))) return;
       const personaId = parseId(req.params.personaId);
       if (!personaId) return bad(req, res, 400, 40003, '参数无效');
       const body = req.body || {};
@@ -1260,6 +1274,7 @@ router.delete(
     try {
       const ctx = await requireTeamContext(req, res);
       if (!ctx) return;
+      if (!(await assertMarketPersonaEditable(ctx.pool, ctx.team.id, req, res))) return;
       const personaId = parseId(req.params.personaId);
       if (!personaId) return bad(req, res, 400, 40003, '参数无效');
       const del = await ctx.pool.query(
@@ -1284,6 +1299,14 @@ router.post(
     try {
       const ctx = await requireTeamContext(req, res);
       if (!ctx) return res.end();
+      const { rows: reportLockRows } = await ctx.pool.query(
+        `SELECT 1 FROM teacher_personal_class_team_market_report_uploads WHERE team_id = $1 LIMIT 1`,
+        [ctx.team.id]
+      );
+      if (reportLockRows.length) {
+        sseWrite(res, 'error', { message: '调研报告已提交，无法再修改用户画像' });
+        return res.end();
+      }
       const provider = await getEnabledProvider('multimodal');
       if (!provider) {
         sseWrite(res, 'error', { message: '未配置已启用的 LLM 服务' });

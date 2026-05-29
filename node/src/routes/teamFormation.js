@@ -515,7 +515,7 @@ router.get(
         return bad(req, res, 404, 40402, '班级不存在或无权操作');
       }
       const { rows } = await pool.query(
-        `SELECT u.id, u.real_name AS name, u.student_no AS "studentNo", u.email,
+        `SELECT u.id, u.real_name AS name, u.student_no AS "studentNo", u.email, u.avatar_url,
                 s.ai_matched_role AS "aiMatchedRole", s.ai_analysis_raw AS "aiAnalysisRaw",
                 s.answers, s.video_transcript AS "videoTranscript",
                 s.submitted_at AS "submittedAt"
@@ -538,7 +538,7 @@ router.get(
             email: r.email || '',
             major: '',
             grade: '',
-            avatar: '',
+            avatarUrl: r.avatar_url || '',
             aiMatchedRole: r.aiMatchedRole || '',
             aiMatchedRoleLabel: TEAM_ROLE_LABELS[r.aiMatchedRole] || r.aiMatchedRole || '',
             status: 'pending',

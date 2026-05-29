@@ -264,6 +264,7 @@ export type GroupingTeamMember = {
   id: string;
   name: string;
   studentId: string;
+  avatarUrl?: string;
   aiMatchedRole?: string;
   aiMatchedRoleLabel?: string;
   isTeamLeader?: boolean;

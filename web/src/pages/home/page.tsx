@@ -31,7 +31,7 @@ export default function Home() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [scrolled, setScrolled] = useState(false);
   const [showLoginModal, setShowLoginModal] = useState(false);
-  const [loginRole, setLoginRole] = useState<'student' | 'teacher' | 'admin'>('student');
+  const [loginRole, setLoginRole] = useState<'student' | 'teacher'>('student');
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [userInfo, setUserInfo] = useState<{ name: string; role: 'student' | 'teacher' | 'admin' } | null>(null);
   // 记录点击模块时的目标路径，登录后跳转
@@ -41,6 +41,12 @@ export default function Home() {
   const [loginUsername, setLoginUsername] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [loginRemember, setLoginRemember] = useState(false);
+  const [loginCardMode, setLoginCardMode] = useState<'login' | 'reset'>('login');
+  const [resetEmail, setResetEmail] = useState('');
+  const [resetCode, setResetCode] = useState('');
+  const [resetNewPassword, setResetNewPassword] = useState('');
+  const [resetLoading, setResetLoading] = useState(false);
+  const [resetSending, setResetSending] = useState(false);
 
   useEffect(() => {
     const handleScroll = () => setScrolled(window.scrollY > 50);
@@ -50,10 +56,8 @@ export default function Home() {
 
   useEffect(() => {
     if (searchParams.get('adminExpired') === '1') {
-      setLoginError('管理员登录已过期，请重新登录');
-      setLoginRole('admin');
-      setShowLoginModal(true);
       setSearchParams({}, { replace: true });
+      navigate('/admin?expired=1');
     } else if (searchParams.get('teacherExpired') === '1') {
       setLoginError('教师登录已过期，请重新登录');
       setLoginRole('teacher');
@@ -125,7 +129,6 @@ export default function Home() {
     try {
       const { token, refreshToken, user } = await loginWithApi(username, password);
       if (user.role !== expected) {
-        if (expected === 'admin') throw new Error('该账号不是管理员，请使用管理员账号登录');
         if (expected === 'teacher') throw new Error('该账号不是教师，请使用教师账号登录');
         throw new Error('该账号不是学生，请使用学生账号登录');
       }
@@ -525,7 +528,7 @@ export default function Home() {
           </div>
           <div className="border-t border-gray-800 pt-8 flex flex-col md:flex-row items-center justify-between gap-4">
             <p className="text-sm text-gray-400">© 2025 嘉兴大学创业实训平台. All rights reserved.</p>
-            <a href="https://readdy.ai/?ref=logo" target="_blank" rel="noopener noreferrer nofollow" className="text-sm text-gray-400 hover:text-teal-400 transition-colors cursor-pointer">Powered by Readdy</a>
+            <a href=" " target="_blank" rel="noopener noreferrer nofollow" className="text-sm text-gray-400 hover:text-teal-400 transition-colors cursor-pointer">Powered by 天明嘉兴智能科技</a>
           </div>
         </div>
       </footer>
@@ -536,8 +539,16 @@ export default function Home() {
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
             <div className="bg-gradient-to-r from-teal-500 to-cyan-600 p-6 text-white">
               <div className="flex items-center justify-between mb-2">
-                <h2 className="text-2xl font-bold">登录</h2>
-                <button onClick={() => { setShowLoginModal(false); setPendingNavTarget(''); setLoginError(''); }} className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/20 transition-colors cursor-pointer">
+                <h2 className="text-2xl font-bold">{loginCardMode === 'login' ? '登录' : '重置密码'}</h2>
+                <button
+                  onClick={() => {
+                    setShowLoginModal(false);
+                    setPendingNavTarget('');
+                    setLoginError('');
+                    setLoginCardMode('login');
+                  }}
+                  className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/20 transition-colors cursor-pointer"
+                >
                   <i className="ri-close-line text-xl"></i>
                 </button>
               </div>
@@ -546,68 +557,191 @@ export default function Home() {
               </p>
             </div>
             <div className="p-6">
-              <div className="flex gap-3 mb-6">
-                {(['student', 'teacher', 'admin'] as const).map((role) => (
-                  <button key={role} onClick={() => { setLoginRole(role); setLoginError(''); }}
-                    className={`flex-1 py-3 px-4 rounded-xl font-medium transition-all cursor-pointer ${loginRole === role ? 'bg-gradient-to-r from-teal-500 to-cyan-600 text-white shadow-lg' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
-                  >
-                    <i className={`${role === 'student' ? 'ri-user-line' : role === 'teacher' ? 'ri-user-star-line' : 'ri-shield-star-line'} mr-2`}></i>
-                    {role === 'student' ? '学生' : role === 'teacher' ? '教师' : '管理员'}
-                  </button>
-                ))}
-              </div>
-              <form onSubmit={handleLogin} className="space-y-4" autoComplete="off">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    {loginRole === 'admin' ? '管理员账号' : loginRole === 'student' ? '学号' : '工号'}
-                  </label>
-                  <input
-                    type="text"
-                    name="username"
-                    required
-                    autoComplete="off"
-                    value={loginUsername}
-                    onChange={(ev) => setLoginUsername(ev.target.value)}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all text-sm"
-                    placeholder={loginRole === 'admin' ? '请输入管理员账号' : loginRole === 'student' ? '请输入学号' : '请输入工号'}
-                  />
+              {loginCardMode === 'login' && (
+                <div className="flex gap-3 mb-6">
+                  {(['student', 'teacher'] as const).map((role) => (
+                    <button
+                      key={role}
+                      type="button"
+                      onClick={() => {
+                        setLoginRole(role);
+                        setLoginError('');
+                      }}
+                      className={`flex-1 py-3 px-4 rounded-xl font-medium transition-all cursor-pointer ${loginRole === role ? 'bg-gradient-to-r from-teal-500 to-cyan-600 text-white shadow-lg' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                    >
+                      <i className={`${role === 'student' ? 'ri-user-line' : 'ri-user-star-line'} mr-2`}></i>
+                      {role === 'student' ? '学生' : '教师'}
+                    </button>
+                  ))}
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">密码</label>
-                  <input
-                    type="password"
-                    name="password"
-                    required
-                    autoComplete="off"
-                    value={loginPassword}
-                    onChange={(ev) => setLoginPassword(ev.target.value)}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all text-sm"
-                    placeholder="请输入密码"
-                  />
-                </div>
-                {loginError && (
-                  <p className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2">{loginError}</p>
+              )}
+              <form
+                onSubmit={loginCardMode === 'login' ? handleLogin : (e) => e.preventDefault()}
+                className="space-y-4"
+                autoComplete="off"
+              >
+                {loginCardMode === 'login' ? (
+                  <>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        {loginRole === 'student' ? '学号' : '工号'}
+                      </label>
+                      <input
+                        type="text"
+                        name="username"
+                        required
+                        autoComplete="off"
+                        value={loginUsername}
+                        onChange={(ev) => setLoginUsername(ev.target.value)}
+                        className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all text-sm"
+                        placeholder={loginRole === 'student' ? '请输入学号' : '请输入工号'}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">密码</label>
+                      <input
+                        type="password"
+                        name="password"
+                        required
+                        autoComplete="off"
+                        value={loginPassword}
+                        onChange={(ev) => setLoginPassword(ev.target.value)}
+                        className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all text-sm"
+                        placeholder="请输入密码"
+                      />
+                    </div>
+                    {loginError && (
+                      <p className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2">{loginError}</p>
+                    )}
+                    <div className="flex items-center justify-between text-sm">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          name="remember"
+                          checked={loginRemember}
+                          onChange={(ev) => setLoginRemember(ev.target.checked)}
+                          className="w-4 h-4 text-teal-500 rounded focus:ring-teal-500"
+                        />
+                        <span className="text-gray-600">记住我</span>
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setResetEmail('');
+                          setResetCode('');
+                          setResetNewPassword('');
+                          setLoginCardMode('reset');
+                        }}
+                        className="text-teal-600 hover:text-teal-700 font-medium cursor-pointer"
+                      >
+                        忘记密码？
+                      </button>
+                    </div>
+                    <button
+                      type="submit"
+                      disabled={loginLoading}
+                      className="w-full py-3 bg-gradient-to-r from-teal-500 to-cyan-600 text-white font-semibold rounded-xl hover:shadow-lg transition-all cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+                    >
+                      {loginLoading ? '登录中…' : loginRole === 'teacher' ? '进入教师看板' : '进入学生中心'}
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">邮箱</label>
+                      <input
+                        type="email"
+                        autoComplete="off"
+                        value={resetEmail}
+                        onChange={(ev) => setResetEmail(ev.target.value)}
+                        className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all text-sm"
+                        placeholder="请输入邮箱"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">验证码</label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          autoComplete="off"
+                          value={resetCode}
+                          onChange={(ev) => setResetCode(ev.target.value)}
+                          className="flex-1 min-w-0 px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all text-sm"
+                          placeholder="请输入验证码"
+                        />
+                        <button
+                          type="button"
+                          disabled={resetSending}
+                          onClick={async () => {
+                            setResetSending(true);
+                            try {
+                              const r = await fetch('/api/auth/password-reset/code', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ email: resetEmail }),
+                              });
+                              const j = await r.json().catch(() => ({ code: -1, message: '无效响应' }));
+                              if (!r.ok || j.code !== 0) throw new Error(j.message || `HTTP ${r.status}`);
+                              message.success('验证码已发送');
+                            } catch (e: any) {
+                              message.error(e?.message || '发送失败');
+                            } finally {
+                              setResetSending(false);
+                            }
+                          }}
+                          className="flex-shrink-0 px-4 py-3 border border-gray-300 rounded-xl text-sm font-medium text-gray-700 hover:bg-gray-50 transition-all cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed whitespace-nowrap"
+                        >
+                          {resetSending ? '发送中…' : '获取验证码'}
+                        </button>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">新密码</label>
+                      <input
+                        type="password"
+                        autoComplete="new-password"
+                        value={resetNewPassword}
+                        onChange={(ev) => setResetNewPassword(ev.target.value)}
+                        className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all text-sm"
+                        placeholder="至少 6 位"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      disabled={resetLoading}
+                      onClick={async () => {
+                        setResetLoading(true);
+                        try {
+                          const r = await fetch('/api/auth/password-reset/confirm', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ email: resetEmail, code: resetCode, newPassword: resetNewPassword }),
+                          });
+                          const j = await r.json().catch(() => ({ code: -1, message: '无效响应' }));
+                          if (!r.ok || j.code !== 0) throw new Error(j.message || `HTTP ${r.status}`);
+                          message.success('密码已重置，请使用新密码登录');
+                          setLoginCardMode('login');
+                        } catch (e: any) {
+                          message.error(e?.message || '重置失败');
+                        } finally {
+                          setResetLoading(false);
+                        }
+                      }}
+                      className="w-full py-3 bg-gradient-to-r from-teal-500 to-cyan-600 text-white font-semibold rounded-xl hover:shadow-lg transition-all cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+                    >
+                      {resetLoading ? '提交中…' : '确认重置'}
+                    </button>
+                    <div className="text-center">
+                      <button
+                        type="button"
+                        onClick={() => setLoginCardMode('login')}
+                        className="text-sm text-teal-600 hover:text-teal-700 font-medium cursor-pointer"
+                      >
+                        返回登录
+                      </button>
+                    </div>
+                  </>
                 )}
-                <div className="flex items-center justify-between text-sm">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      name="remember"
-                      checked={loginRemember}
-                      onChange={(ev) => setLoginRemember(ev.target.checked)}
-                      className="w-4 h-4 text-teal-500 rounded focus:ring-teal-500"
-                    />
-                    <span className="text-gray-600">记住我</span>
-                  </label>
-                  <a href="#" className="text-teal-600 hover:text-teal-700 font-medium">忘记密码？</a>
-                </div>
-                <button
-                  type="submit"
-                  disabled={loginLoading}
-                  className="w-full py-3 bg-gradient-to-r from-teal-500 to-cyan-600 text-white font-semibold rounded-xl hover:shadow-lg transition-all cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
-                >
-                  {loginLoading ? '登录中…' : loginRole === 'admin' ? '进入管理后台' : loginRole === 'teacher' ? '进入教师看板' : '进入学生中心'}
-                </button>
               </form>
             </div>
           </div>

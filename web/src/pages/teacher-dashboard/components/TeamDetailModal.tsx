@@ -1,6 +1,11 @@
 import { TeamProject } from './TeamCard';
 import { useState } from 'react';
 import { fetchTeacherMonitorTeamSubmissions, type TeacherMonitorSubmissionItem } from '../../../lib/teacherMonitorApi';
+import UserAvatar from '../../../components/UserAvatar';
+import { getPortalToken } from '../../../lib/authApi';
+import { message } from 'antd';
+import { sanitizeRichText } from '../../../lib/richText';
+import MarketReportSubmissionPreview from './MarketReportSubmissionPreview';
 
 interface TeamDetailModalProps {
   classId: string;
@@ -32,11 +37,210 @@ const evalColor = {
   passed: 'bg-green-100 text-green-700',
 };
 
+const reviewStatusLabel: Record<string, string> = {
+  pending: '审核中',
+  approved: '已通过',
+  rejected: '已驳回',
+};
+
+function formatReviewStatus(status?: string): string {
+  if (!status) return '';
+  return reviewStatusLabel[status] || status;
+}
+
+function topicReviewHeadline(status?: string): string {
+  if (status === 'approved') return '已通过';
+  if (status === 'rejected') return '已退回';
+  if (status === 'pending') return '审核中';
+  return formatReviewStatus(status) || '审核中';
+}
+
 export default function TeamDetailModal({ classId, team, onClose, onIntervene }: TeamDetailModalProps) {
   const [activeTab, setActiveTab] = useState<'overview' | 'submissions'>('overview');
   const [submissions, setSubmissions] = useState<TeacherMonitorSubmissionItem[]>([]);
   const [submissionsLoading, setSubmissionsLoading] = useState(false);
   const [preview, setPreview] = useState<TeacherMonitorSubmissionItem | null>(null);
+
+  const downloadWithAuth = async (downloadUrl: string, filename: string) => {
+    const token = getPortalToken('teacher');
+    if (!token) {
+      message.error('未登录');
+      return;
+    }
+    try {
+      const r = await fetch(downloadUrl, { headers: { Authorization: `Bearer ${token}` } });
+      if (!r.ok) {
+        const j = await r.json().catch(() => null);
+        const m = j?.message || `下载失败（HTTP ${r.status}）`;
+        message.error(m);
+        return;
+      }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename || 'download';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e: any) {
+      message.error(e?.message || '下载失败');
+    }
+  };
+
+  const renderSubmissionPreview = (item: TeacherMonitorSubmissionItem) => {
+    const payload: any = (item as any).payload;
+    if (!payload) return <div className="text-sm text-gray-500">暂无可预览内容</div>;
+    if (typeof payload === 'object' && typeof payload.code === 'number' && typeof payload.message === 'string') {
+      return (
+        <div className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2">
+          {payload.message}
+        </div>
+      );
+    }
+
+    // 2 创新思维：项目选题（与学生端「已提交的项目信息」展示一致）
+    if (item.stageKey === 'ideation' && item.title === '项目选题' && typeof payload === 'object') {
+      const topicStatus = String(payload.status || '');
+      const topicFields: [string, string][] = [
+        ['项目名称', String(payload.projectName || '')],
+        ['项目方向', String(payload.projectDirection || '')],
+        ['项目描述', String(payload.projectDescription || '')],
+        ['目标用户', String(payload.targetUsers || '')],
+        ['核心价值主张', String(payload.coreValue || '')],
+        ['解决的核心问题', String(payload.coreProblem || '')],
+        ['解决方案概述', String(payload.solutionOverview || '')],
+        ['市场规模', String(payload.marketSize || '')],
+        ['竞争优势', String(payload.competitiveAdvantage || '')],
+      ];
+      const reviewHint =
+        String(payload.reviewComment || '').trim() ||
+        (topicStatus === 'approved'
+          ? '请按课程设置进入下一阶段'
+          : topicStatus === 'rejected'
+            ? '请根据教师意见修改后重新提交'
+            : '教师将对你的项目选题进行评审，请耐心等待');
+      return (
+        <div className="space-y-3">
+          <div className="bg-gradient-to-br from-orange-50 to-amber-50 rounded-2xl p-6 text-left">
+            <h3 className="text-sm font-bold text-gray-900 mb-4 flex items-center gap-2">
+              <i className="ri-file-list-3-line text-orange-500"></i>
+              已提交的项目信息
+            </h3>
+            <div className="space-y-3">
+              {topicFields.map(([label, value]) => (
+                <div key={label}>
+                  <span className="text-xs font-semibold text-gray-500">{label}：</span>
+                  <p className="text-sm text-gray-900 mt-1 whitespace-pre-wrap break-all">{value || '未填写'}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+          {topicStatus ? (
+            <div className="flex items-center gap-3 bg-blue-50 border border-blue-200 rounded-xl p-4">
+              <i
+                className={`${topicStatus === 'approved' ? 'ri-checkbox-circle-line text-teal-500' : 'ri-information-line text-blue-500'} text-xl flex-shrink-0`}
+              ></i>
+              <div className="text-left min-w-0">
+                <p className="text-sm font-semibold text-blue-900">{topicReviewHeadline(topicStatus)}</p>
+                <p className="text-xs text-blue-700 whitespace-pre-wrap break-words">{reviewHint}</p>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      );
+    }
+
+    if (item.stageKey === 'marketResearch' && item.title === '市场调研报告') {
+      return <MarketReportSubmissionPreview classId={classId} teamId={team.id} />;
+    }
+
+    // 7 商业计划书：Word 式文档排版预览
+    if (item.stageKey === 'businessPlan' && item.title === '商业计划书提交' && typeof payload === 'object') {
+      const sections = Array.isArray(payload.sections) ? payload.sections : [];
+      const fullText = String(payload.fullText || '');
+      const versionLabel = payload.version ? String(payload.version) : '';
+      const statusLabel = payload.status ? formatReviewStatus(String(payload.status)) : '';
+      const metaLine = [versionLabel, statusLabel].filter(Boolean).join(' · ');
+
+      const renderDocBody = (html: string) => (
+        <div
+          className="business-plan-doc text-[15px] text-gray-800 leading-[1.75] [&_p]:mb-3 [&_ul]:list-disc [&_ul]:pl-6 [&_ol]:list-decimal [&_ol]:pl-6 [&_li]:mb-1 [&_h1]:text-xl [&_h1]:font-bold [&_h1]:mb-3 [&_h2]:text-lg [&_h2]:font-bold [&_h2]:mb-2 [&_h3]:text-base [&_h3]:font-semibold [&_h3]:mb-2"
+          dangerouslySetInnerHTML={{ __html: html || '<p class="text-gray-400">（本章暂无内容）</p>' }}
+        />
+      );
+
+      return (
+        <div className="bg-stone-200/70 rounded-lg p-3 sm:p-6 -mx-1">
+          <article className="mx-auto max-w-[210mm] bg-white shadow-[0_4px_24px_rgba(0,0,0,0.12)] border border-stone-300/60 px-8 py-10 sm:px-12 sm:py-14 min-h-[280px]">
+            <header className="text-center mb-10 pb-6 border-b-2 border-stone-800/90">
+              <h1 className="text-2xl sm:text-[26px] font-bold text-stone-900 tracking-[0.2em] font-serif">
+                商业计划书
+              </h1>
+              {metaLine ? <p className="text-sm text-stone-500 mt-4">{metaLine}</p> : null}
+            </header>
+
+            {payload.reviewComment ? (
+              <aside className="mb-8 text-sm text-stone-600 bg-stone-50 border border-stone-200 rounded px-4 py-3">
+                <span className="font-semibold text-stone-800">教师评语：</span>
+                <span className="whitespace-pre-wrap break-words">{String(payload.reviewComment)}</span>
+              </aside>
+            ) : null}
+
+            {(() => {
+              const filled = sections
+                .map((s: any, idx: number) => {
+                  const title = String(s.title || s.key || `章节${idx + 1}`);
+                  const html = sanitizeRichText(String(s.content || ''));
+                  const plain = html.replace(/<[^>]+>/g, '').trim();
+                  if (!plain) return null;
+                  return { title, html, key: `${title}-${idx}` };
+                })
+                .filter(Boolean) as { title: string; html: string; key: string }[];
+
+              if (filled.length > 0) {
+                return (
+                  <div className="space-y-10">
+                    {filled.map((block, displayIdx) => (
+                      <section key={block.key} className="break-inside-avoid">
+                        <h2 className="text-lg font-bold text-stone-900 mb-4 pb-1 border-b border-stone-300 font-serif">
+                          {displayIdx + 1}．{block.title}
+                        </h2>
+                        {renderDocBody(block.html)}
+                      </section>
+                    ))}
+                  </div>
+                );
+              }
+              if (sections.length > 0) {
+                return <p className="text-sm text-stone-500 text-center py-8">各章节暂无正文内容</p>;
+              }
+              return <section>{renderDocBody(sanitizeRichText(fullText))}</section>;
+            })()}
+
+            <footer className="mt-12 pt-4 border-t border-stone-200 text-center text-xs text-stone-400">
+              — 全文完 —
+            </footer>
+          </article>
+        </div>
+      );
+    }
+
+    // 其它数据：尽量按“正文内容”展示，不 dump JSON
+    if (typeof payload === 'string') {
+      const s = payload.trim();
+      const htmlLike = s.includes('<') && s.includes('>');
+      return htmlLike ? (
+        <div className="prose prose-sm max-w-none" dangerouslySetInnerHTML={{ __html: sanitizeRichText(s) }} />
+      ) : (
+        <div className="text-sm text-gray-700 whitespace-pre-wrap break-words">{s}</div>
+      );
+    }
+
+    // fallback：仍然不输出 JSON，提示无法预览
+    return <div className="text-sm text-gray-500">该内容暂不支持预览</div>;
+  };
 
   const loadSubmissions = async () => {
     if (!classId) return;
@@ -64,13 +268,7 @@ export default function TeamDetailModal({ classId, team, onClose, onIntervene }:
         <div className={`sticky top-0 z-10 px-8 py-5 border-b border-gray-100 bg-white`}>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className={`w-12 h-12 rounded-xl flex items-center justify-center text-white text-xl font-bold ${
-                team.status === 'on-track' ? 'bg-gradient-to-br from-teal-500 to-cyan-500' :
-                team.status === 'at-risk' ? 'bg-gradient-to-br from-orange-500 to-amber-500' :
-                'bg-gradient-to-br from-red-500 to-rose-500'
-              }`}>
-                {team.teamName.charAt(0)}
-              </div>
+              <UserAvatar name={team.teamName} size="lg" />
               <div>
                 <h2 className="text-xl font-bold text-gray-900">{team.teamName}</h2>
                 <div className="flex items-center gap-2 mt-0.5">
@@ -147,12 +345,7 @@ export default function TeamDetailModal({ classId, team, onClose, onIntervene }:
                 <div className="flex flex-wrap gap-2">
                   {team.members.map((m, i) => (
                     <div key={i} className="flex items-center gap-2 bg-gray-50 rounded-xl px-3 py-2">
-                      <div
-                        className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white"
-                        style={{ background: `hsl(${(i * 60 + 160) % 360}, 60%, 55%)` }}
-                      >
-                        {m.name.charAt(0)}
-                      </div>
+                      <UserAvatar name={m.name} avatarUrl={m.avatarUrl} size="sm" />
                       <span className="text-sm text-gray-700">{m.name}</span>
                       {m.name === team.leader && (
                         <span className="px-1.5 py-0.5 bg-teal-100 text-teal-700 text-xs rounded-full">队长</span>
@@ -272,12 +465,13 @@ export default function TeamDetailModal({ classId, team, onClose, onIntervene }:
                             <div className="text-sm font-medium text-gray-800 truncate">{submission.file.name}</div>
                             <div className="text-xs text-gray-500 mt-0.5">文件提交</div>
                           </div>
-                          <a
-                            href={submission.file.downloadUrl}
-                            className="px-3 py-2 bg-white border border-gray-200 rounded-lg text-xs font-medium text-gray-700 hover:bg-gray-50 whitespace-nowrap"
+                          <button
+                            type="button"
+                            onClick={() => downloadWithAuth(submission.file.downloadUrl, submission.file.name)}
+                            className="px-3 py-2 bg-white border border-gray-200 rounded-lg text-xs font-medium text-gray-700 hover:bg-gray-50 whitespace-nowrap cursor-pointer"
                           >
                             <i className="ri-download-line mr-1.5"></i>下载
-                          </a>
+                          </button>
                         </div>
                       ) : (
                         <button
@@ -296,15 +490,16 @@ export default function TeamDetailModal({ classId, team, onClose, onIntervene }:
                         <h5 className="text-xs font-bold text-gray-700 mb-2">附件：</h5>
                         <div className="flex flex-wrap gap-2">
                           {submission.files.map((file, idx) => (
-                            <a
+                            <button
+                              type="button"
                               key={idx}
-                              href={file.downloadUrl}
+                              onClick={() => downloadWithAuth(file.downloadUrl, file.name)}
                               className="flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-200 rounded-lg text-xs text-gray-700 hover:bg-gray-50 transition-colors cursor-pointer"
                             >
                               <i className="ri-file-line text-teal-500"></i>
                               <span>{file.name}</span>
                               <i className="ri-download-line text-gray-400"></i>
-                            </a>
+                            </button>
                           ))}
                         </div>
                       </div>
@@ -318,7 +513,15 @@ export default function TeamDetailModal({ classId, team, onClose, onIntervene }:
           {/* 预览弹窗（数据上传） */}
           {preview && preview.kind !== 'file' && (
             <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4" onClick={() => setPreview(null)}>
-              <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+              <div
+                className={`bg-white rounded-2xl shadow-2xl w-full overflow-hidden ${
+                  (preview.stageKey === 'marketResearch' && preview.title === '市场调研报告') ||
+                  (preview.stageKey === 'businessPlan' && preview.title === '商业计划书提交')
+                    ? 'max-w-4xl'
+                    : 'max-w-2xl'
+                }`}
+                onClick={(e) => e.stopPropagation()}
+              >
                 <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
                   <div className="min-w-0">
                     <div className="text-sm font-bold text-gray-900 truncate">{preview.title}</div>
@@ -332,7 +535,7 @@ export default function TeamDetailModal({ classId, team, onClose, onIntervene }:
                   </button>
                 </div>
                 <div className="p-6 max-h-[70vh] overflow-y-auto">
-                  <pre className="text-xs text-gray-700 whitespace-pre-wrap break-words">{JSON.stringify(preview.payload ?? null, null, 2)}</pre>
+                  {renderSubmissionPreview(preview)}
                 </div>
               </div>
             </div>

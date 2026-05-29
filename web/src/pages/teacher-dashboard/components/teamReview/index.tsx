@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Alert, Button, Modal, Popover, Spin } from 'antd';
 import type { TeacherPersonalClassRow } from '../../teacherPortalApi';
+import UserAvatar from '../../../../components/UserAvatar';
 import {
   addTeamMember,
   confirmTeacherAiGroupRandom,
@@ -706,12 +707,7 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
                       </Popover>
                     )}
                     <div className="flex items-start gap-3">
-                      <div
-                        className="w-12 h-12 rounded-full flex-shrink-0 bg-teal-600 text-white flex items-center justify-center text-lg font-bold"
-                        aria-hidden
-                      >
-                        {(student.name || '?').trim().charAt(0) || '?'}
-                      </div>
+                      <UserAvatar name={student.name || '?'} size="lg" />
                       <div className="flex-1 min-w-0">
                         <h4 className="text-sm font-bold text-gray-900 leading-snug mb-1">{student.name}</h4>
                         <div className="flex gap-1 mb-1.5">

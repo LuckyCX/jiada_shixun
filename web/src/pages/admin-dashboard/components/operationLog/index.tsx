@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { operationLogs } from './mockData';
+import { useEffect, useMemo, useState } from 'react';
+import { fetchAdminOperationLogs, type AdminOperationLogRow } from '../../../../lib/adminOperationLogApi';
 
 type OperationType = 'all' | 'user' | 'class' | 'course' | 'system';
 type TimeRange = 'today' | '7days' | '30days';
@@ -10,57 +10,49 @@ export default function OperationLog() {
   const [searchKeyword, setSearchKeyword] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
+  const [logs, setLogs] = useState<AdminOperationLogRow[]>([]);
+  const [total, setTotal] = useState(0);
+  const [stats, setStats] = useState<{ total: number; byType: Record<string, number> }>({ total: 0, byType: {} });
 
-  // 筛选日志
-  const filteredLogs = operationLogs.filter(log => {
-    // 按操作类型筛选
-    if (operationType !== 'all' && log.type !== operationType) return false;
-    
-    // 按时间范围筛选
-    const logDate = new Date(log.timestamp);
-    const now = new Date();
-    const diffDays = Math.floor((now.getTime() - logDate.getTime()) / (1000 * 60 * 60 * 24));
-    
-    if (timeRange === 'today' && diffDays > 0) return false;
-    if (timeRange === '7days' && diffDays > 7) return false;
-    if (timeRange === '30days' && diffDays > 30) return false;
-    
-    // 按关键词搜索
-    if (searchKeyword) {
-      const keyword = searchKeyword.toLowerCase();
-      return (
-        log.action.toLowerCase().includes(keyword) ||
-        log.operator.toLowerCase().includes(keyword) ||
-        log.detail.toLowerCase().includes(keyword)
-      );
-    }
-    
-    return true;
-  });
+  useEffect(() => {
+    let cancelled = false;
+    void fetchAdminOperationLogs({
+      type: operationType,
+      timeRange,
+      q: searchKeyword.trim(),
+      page: currentPage,
+      pageSize: itemsPerPage,
+    })
+      .then((r) => {
+        if (cancelled) return;
+        setLogs(Array.isArray(r.list) ? r.list : []);
+        setTotal(Number(r.total || 0));
+        setStats(r.stats || { total: 0, byType: {} });
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setLogs([]);
+        setTotal(0);
+        setStats({ total: 0, byType: {} });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [operationType, timeRange, searchKeyword, currentPage]);
 
-  // 分页
-  const totalPages = Math.ceil(filteredLogs.length / itemsPerPage);
-  const startIndex = (currentPage - 1) * itemsPerPage;
-  const paginatedLogs = filteredLogs.slice(startIndex, startIndex + itemsPerPage);
+  const totalPages = Math.ceil(total / itemsPerPage);
 
   // 操作类型配置
-  const operationTypes = [
-    { id: 'all' as OperationType, label: '全部操作', count: operationLogs.length },
-    { id: 'class' as OperationType, label: '班级管理', count: operationLogs.filter(l => l.type === 'class').length },
-    { id: 'user' as OperationType, label: '用户管理', count: operationLogs.filter(l => l.type === 'user').length },
-    { id: 'course' as OperationType, label: '课程资源', count: operationLogs.filter(l => l.type === 'course').length },
-    { id: 'system' as OperationType, label: '系统操作', count: operationLogs.filter(l => l.type === 'system').length }
-  ];
-
-  const getOperationIcon = (type: string) => {
-    switch (type) {
-      case 'user': return { icon: 'ri-user-line', color: 'text-blue-500', bg: 'bg-blue-50' };
-      case 'class': return { icon: 'ri-team-line', color: 'text-purple-500', bg: 'bg-purple-50' };
-      case 'course': return { icon: 'ri-book-2-line', color: 'text-orange-500', bg: 'bg-orange-50' };
-      case 'system': return { icon: 'ri-settings-3-line', color: 'text-gray-500', bg: 'bg-gray-50' };
-      default: return { icon: 'ri-information-line', color: 'text-teal-500', bg: 'bg-teal-50' };
-    }
-  };
+  const operationTypes = useMemo(() => {
+    const byType = stats.byType || {};
+    return [
+      { id: 'all' as OperationType, label: '全部操作', count: Number(stats.total || 0) },
+      { id: 'class' as OperationType, label: '班级管理', count: Number(byType.class || 0) },
+      { id: 'user' as OperationType, label: '用户管理', count: Number(byType.user || 0) },
+      { id: 'course' as OperationType, label: '课程资源', count: Number(byType.course || 0) },
+      { id: 'system' as OperationType, label: '系统操作', count: Number(byType.system || 0) },
+    ];
+  }, [stats]);
 
   return (
     <div className="space-y-6">
@@ -162,15 +154,14 @@ export default function OperationLog() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {paginatedLogs.length > 0 ? (
-                paginatedLogs.map((log, index) => {
-                  const iconConfig = getOperationIcon(log.type);
+              {logs.length > 0 ? (
+                logs.map((log, index) => {
                   return (
                     <tr key={index} className="hover:bg-gray-50 transition-colors">
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="flex items-center gap-2">
-                          <div className={`w-8 h-8 rounded-lg ${iconConfig.bg} flex items-center justify-center`}>
-                            <i className={`${iconConfig.icon} ${iconConfig.color} text-sm`}></i>
+                          <div className={`w-8 h-8 rounded-lg ${log.bgColor} flex items-center justify-center`}>
+                            <i className={`${log.icon} ${log.iconColor} text-sm`}></i>
                           </div>
                           <span className="text-sm text-gray-600">{log.typeLabel}</span>
                         </div>
@@ -208,7 +199,7 @@ export default function OperationLog() {
         {totalPages > 1 && (
           <div className="px-6 py-4 border-t border-gray-100 flex items-center justify-between">
             <div className="text-sm text-gray-600">
-              共 {filteredLogs.length} 条记录，第 {currentPage}/{totalPages} 页
+              共 {total} 条记录，第 {currentPage}/{totalPages} 页
             </div>
             <div className="flex gap-2">
               <button

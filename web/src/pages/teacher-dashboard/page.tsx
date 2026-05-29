@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Dropdown } from 'antd';
+import { Dropdown, Drawer, Modal, Upload, message as antdMessage, Input, Button } from 'antd';
 import { clearPortalToken, getPortalToken, parseJwtPayload } from '../../lib/authApi';
 import { useSiteBrand } from '../../lib/publicSite';
 import TeamCard, { TeamProject } from './components/TeamCard';
@@ -27,10 +27,14 @@ import EvaluationPanel from './components/EvaluationPanel';
 import {
   getTeacherProfile,
   listTeacherPersonalClasses,
+  sendTeacherEmailCode,
+  updateTeacherProfile,
+  uploadTeacherAvatar,
   type TeacherPersonalClassRow,
   type TeacherProfile,
 } from './teacherPortalApi';
 import { fetchTeacherMonitorTeams } from '../../lib/teacherMonitorApi';
+import UserAvatar from '../../components/UserAvatar';
 
 type TabKey =
   | 'monitor'
@@ -187,6 +191,13 @@ export default function TeacherDashboard() {
   const [searchQuery, setSearchQuery] = useState('');
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [teacherProfile, setTeacherProfile] = useState<TeacherProfile | null>(null);
+  const [profileModalOpen, setProfileModalOpen] = useState(false);
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [profileEmailDraft, setProfileEmailDraft] = useState('');
+  const [profileEmailCode, setProfileEmailCode] = useState('');
+  const [profileEmailSending, setProfileEmailSending] = useState(false);
+  const [profileOldPwd, setProfileOldPwd] = useState('');
+  const [profileNewPwd, setProfileNewPwd] = useState('');
   const [personalClasses, setPersonalClasses] = useState<TeacherPersonalClassRow[]>([]);
   const [selectedPersonalClass, setSelectedPersonalClass] = useState<TeacherPersonalClassRow | null>(null);
   const [monitorTeams, setMonitorTeams] = useState<TeamProject[]>([]);
@@ -262,7 +273,10 @@ export default function TeacherDashboard() {
 
   useEffect(() => {
     getTeacherProfile()
-      .then(setTeacherProfile)
+      .then((p) => {
+        setTeacherProfile(p);
+        setProfileEmailDraft(p.email || '');
+      })
       .catch(() => {
         /* 侧栏仍可用 JWT 中的 username 兜底 */
       });
@@ -585,9 +599,9 @@ export default function TeacherDashboard() {
         {/* 底部用户信息 */}
         <div className="px-4 py-4 border-t border-gray-100">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-teal-400 to-cyan-400 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
-              {teacherAvatarChar}
-            </div>
+            <button type="button" onClick={() => setProfileModalOpen(true)} className="flex-shrink-0 cursor-pointer" title="个人中心">
+              <UserAvatar name={teacherDisplayName} avatarUrl={teacherProfile?.avatarUrl} size="sm" />
+            </button>
             <div className="flex-1 min-w-0">
               <div className="text-xs font-semibold text-gray-800 truncate">{teacherDisplayName}</div>
             </div>
@@ -690,11 +704,140 @@ export default function TeacherDashboard() {
               <i className="ri-notification-3-line text-base"></i>
               <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>
             </button>
-            <button className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors cursor-pointer">
-              <i className="ri-question-line text-base"></i>
+            <button
+              type="button"
+              onClick={() => setProfileModalOpen(true)}
+              className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors cursor-pointer"
+              title="个人中心"
+            >
+              <i className="ri-user-3-line text-base"></i>
             </button>
           </div>
         </header>
+
+        <Drawer
+          open={profileModalOpen}
+          onClose={() => setProfileModalOpen(false)}
+          title="个人中心"
+          placement="right"
+          width={520}
+        >
+          <div className="flex flex-col gap-4 min-w-0">
+            <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+              <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+                <div className="flex items-center gap-4 min-w-0 flex-1">
+                  <UserAvatar name={teacherDisplayName} avatarUrl={teacherProfile?.avatarUrl} size="lg" />
+                  <div className="min-w-0 flex-1">
+                    <div className="text-base font-bold text-gray-900 truncate">{teacherProfile?.realName || teacherDisplayName}</div>
+                    <div className="text-sm text-gray-500 mt-0.5">{teacherProfile?.collegeName ? `学院：${teacherProfile.collegeName}` : '学院：'}</div>
+                  </div>
+                </div>
+                <Upload
+                  showUploadList={false}
+                  beforeUpload={async (file) => {
+                    try {
+                      const r = await uploadTeacherAvatar(file as File);
+                      const p = await getTeacherProfile();
+                      setTeacherProfile({ ...p, avatarUrl: r.avatarUrl || p.avatarUrl });
+                      antdMessage.success('头像已更新');
+                    } catch (e: any) {
+                      antdMessage.error(e?.message || '上传失败');
+                    }
+                    return false;
+                  }}
+                >
+                  <Button className="w-full sm:w-auto">上传头像</Button>
+                </Upload>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+              <div className="text-sm font-semibold text-gray-900 mb-3">邮箱</div>
+              <div className="space-y-3">
+                <Input value={profileEmailDraft} onChange={(e) => setProfileEmailDraft(e.target.value)} placeholder="修改邮箱" />
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <Input
+                    className="min-w-0 flex-1"
+                    value={profileEmailCode}
+                    onChange={(e) => setProfileEmailCode(e.target.value)}
+                    placeholder="邮箱验证码"
+                  />
+                  <Button
+                    className="w-full sm:w-auto sm:flex-shrink-0"
+                    loading={profileEmailSending}
+                    onClick={async () => {
+                      setProfileEmailSending(true);
+                      try {
+                        await sendTeacherEmailCode(profileEmailDraft);
+                        antdMessage.success('验证码已发送');
+                      } catch (e: any) {
+                        antdMessage.error(e?.message || '发送失败');
+                      } finally {
+                        setProfileEmailSending(false);
+                      }
+                    }}
+                  >
+                    获取验证码
+                  </Button>
+                </div>
+                <div className="flex justify-end">
+                  <Button
+                    type="primary"
+                    size="small"
+                    className="!bg-teal-500 !border-teal-500 hover:!bg-teal-600"
+                    loading={profileSaving}
+                    onClick={async () => {
+                      setProfileSaving(true);
+                      try {
+                        await updateTeacherProfile({ email: profileEmailDraft, code: profileEmailCode });
+                        const p = await getTeacherProfile();
+                        setTeacherProfile(p);
+                        antdMessage.success('已保存');
+                      } catch (e: any) {
+                        antdMessage.error(e?.message || '保存失败');
+                      } finally {
+                        setProfileSaving(false);
+                      }
+                    }}
+                  >
+                    保存邮箱
+                  </Button>
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+              <div className="text-sm font-semibold text-gray-900 mb-3">修改密码</div>
+              <div className="space-y-3">
+                <Input.Password value={profileOldPwd} onChange={(e) => setProfileOldPwd(e.target.value)} placeholder="旧密码" />
+                <Input.Password value={profileNewPwd} onChange={(e) => setProfileNewPwd(e.target.value)} placeholder="新密码（至少6位）" />
+                <div className="flex justify-end">
+                  <Button
+                    type="primary"
+                    size="small"
+                    className="!bg-teal-500 !border-teal-500 hover:!bg-teal-600"
+                    loading={profileSaving}
+                    onClick={async () => {
+                      setProfileSaving(true);
+                      try {
+                        await updateTeacherProfile({ oldPassword: profileOldPwd, newPassword: profileNewPwd });
+                        setProfileOldPwd('');
+                        setProfileNewPwd('');
+                        antdMessage.success('密码已更新');
+                      } catch (e: any) {
+                        antdMessage.error(e?.message || '保存失败');
+                      } finally {
+                        setProfileSaving(false);
+                      }
+                    }}
+                  >
+                    保存密码
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </Drawer>
 
         {/* 主内容 */}
         <main className="flex-1 overflow-y-auto py-6 px-6">

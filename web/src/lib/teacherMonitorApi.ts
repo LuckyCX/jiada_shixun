@@ -87,6 +87,37 @@ export async function fetchTeacherMonitorTeamSubmissions(classId: string, teamId
   return j.submissions || [];
 }
 
+export type TeacherMarketReportSurveyPreview = {
+  id: string;
+  title: string;
+  status: string;
+  questions: { id: string; text: string; type: string; options?: string[] }[];
+  collected: number;
+  fromPlan?: boolean;
+  responses: {
+    id: string;
+    respondentToken: string;
+    submittedAt: string;
+    answers: Record<string, unknown>;
+  }[];
+};
+
+export type TeacherMarketReportPreview = {
+  analysisResult: unknown;
+  analysisGeneratedAt: string;
+  surveys: TeacherMarketReportSurveyPreview[];
+  personas: Record<string, unknown>[];
+};
+
+export async function fetchTeacherMarketReportPreview(
+  classId: string,
+  teamId: number
+): Promise<TeacherMarketReportPreview> {
+  return teacherFetch(
+    `/api/teacher/personal-classes/${encodeURIComponent(classId)}/monitor/teams/${teamId}/market-report-preview`
+  ) as Promise<TeacherMarketReportPreview>;
+}
+
 export async function submitTeacherMonitorBatchScoring(
   classId: string,
   body: { taskType: string; results: { teamId: number; score: number; comment: string }[] }

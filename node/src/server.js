@@ -1,6 +1,8 @@
 import express from 'express';
 import cors from 'cors';
 import { randomUUID } from 'crypto';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { config } from './config.js';
 import { getPool } from './lib/db.js';
 import { logError } from './lib/logError.js';
@@ -9,6 +11,8 @@ import systemConfigRoutes from './routes/systemConfig.js';
 import dictionaryRoutes from './routes/dictionary.js';
 import adminUsersRoutes from './routes/adminUsers.js';
 import collegesRoutes from './routes/colleges.js';
+import adminOverviewRoutes from './routes/adminOverview.js';
+import adminOperationLogsRoutes from './routes/adminOperationLogs.js';
 import teacherPersonalClassesRoutes from './routes/teacherPersonalClasses.js';
 import studentPortalRoutes from './routes/studentPortal.js';
 import teamFormationRoutes from './routes/teamFormation.js';
@@ -31,6 +35,8 @@ import courseSettingsRoutes from './routes/courseSettings.js';
 import { startCourseSettingReminderJob } from './jobs/courseSettingReminderJob.js';
 
 const app = express();
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const AVATAR_UPLOAD_ROOT = path.join(__dirname, '../uploads/avatars');
 
 app.use(
   cors({
@@ -39,6 +45,7 @@ app.use(
   })
 );
 app.use(express.json({ limit: '2mb' }));
+app.use('/uploads/avatars', express.static(AVATAR_UPLOAD_ROOT));
 
 app.use((req, res, next) => {
   req.traceId = randomUUID();
@@ -66,6 +73,8 @@ app.use('/api', systemConfigRoutes);
 app.use('/api', dictionaryRoutes);
 app.use('/api', collegesRoutes);
 app.use('/api', adminUsersRoutes);
+app.use('/api', adminOverviewRoutes);
+app.use('/api', adminOperationLogsRoutes);
 app.use('/api', teacherPersonalClassesRoutes);
 app.use('/api', studentPortalRoutes);
 app.use('/api', teamFormationRoutes);

@@ -19,6 +19,7 @@ const IterationOptimizationPage = lazy(() => import('../pages/iteration-optimiza
 const AIValidationPage = lazy(() => import('../pages/ai-validation/page'));
 const StudentCenterPage = lazy(() => import('../pages/student-center/page'));
 const AdminDashboardPage = lazy(() => import('../pages/admin-dashboard/page'));
+const AdminLoginPage = lazy(() => import('../pages/admin-login/page'));
 const NotFoundPage = lazy(() => import('../pages/NotFound'));
 const UserGuidePage = lazy(() => import('../pages/user-guide/page'));
 const TeacherGuidePage = lazy(() => import('../pages/teacher-guide/page'));
@@ -105,6 +106,10 @@ const routes: RouteObject[] = [
         <AdminDashboardPage />
       </RequireRole>
     ),
+  },
+  {
+    path: '/admin',
+    element: <AdminLoginPage />,
   },
   {
     path: '/user-guide',
