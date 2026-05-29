@@ -10,6 +10,7 @@ import {
   saveTeamAnswers,
   submitTeamFormation,
   uploadTeamVideo,
+  loadTeamIntroVideoObjectUrl,
   type TeamQuestion,
   TEAM_DIMENSION_BARS,
   normalizeTeamDimensionProfile,
@@ -40,6 +41,9 @@ export default function TeamFormationAssessmentPanel({ classId, onSubmitted }: P
   const [assessmentCompleted, setAssessmentCompleted] = useState(false);
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [serverVideoName, setServerVideoName] = useState<string | null>(null);
+  const [serverHasVideo, setServerHasVideo] = useState(false);
+  const [localPreviewUrl, setLocalPreviewUrl] = useState<string | null>(null);
+  const [serverPreviewUrl, setServerPreviewUrl] = useState<string | null>(null);
   const [videoUploaded, setVideoUploaded] = useState(false);
   const [aiAnalyzing, setAiAnalyzing] = useState(false);
   const [analyzeStep, setAnalyzeStep] = useState('');
@@ -73,7 +77,9 @@ export default function TeamFormationAssessmentPanel({ classId, onSubmitted }: P
         setAnalysisBody(savedBody);
         setAnalysisSummary(savedBody.slice(0, 280));
       }
-      setServerVideoName(sub.videoStorageKey ? sub.videoStorageKey.split('/').pop() || '已上传视频' : null);
+      const hasVid = Boolean(sub.videoStorageKey);
+      setServerHasVideo(hasVid);
+      setServerVideoName(hasVid ? sub.videoStorageKey!.split('/').pop() || '已上传视频' : null);
       setVideoUploaded(Boolean(sub.videoStorageKey && sub.aiMatchedRole));
       setAssessmentCompleted(qs.length > 0 && Object.keys(sub.answers || {}).length >= qs.length);
       if (sub.videoStorageKey && !sub.aiMatchedRole) {
@@ -98,6 +104,33 @@ export default function TeamFormationAssessmentPanel({ classId, onSubmitted }: P
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     };
   }, []);
+
+  useEffect(() => {
+    if (!serverHasVideo || videoFile) {
+      setServerPreviewUrl(null);
+      return undefined;
+    }
+    let url: string | null = null;
+    void loadTeamIntroVideoObjectUrl('student', classId)
+      .then((u) => {
+        url = u;
+        setServerPreviewUrl(u);
+      })
+      .catch(() => setServerPreviewUrl(null));
+    return () => {
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [serverHasVideo, videoFile, classId]);
+
+  useEffect(() => {
+    if (!videoFile) {
+      setLocalPreviewUrl(null);
+      return undefined;
+    }
+    const url = URL.createObjectURL(videoFile);
+    setLocalPreviewUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [videoFile]);
 
   const persistAnswersNow = async (next: Record<string, string | string[]>) => {
     try {
@@ -126,11 +159,21 @@ export default function TeamFormationAssessmentPanel({ classId, onSubmitted }: P
 
   const q = questions[currentQuestion];
 
-  const setAnswerForCurrent = (value: string | string[]) => {
+  const setAnswerForCurrent = (value: string | string[], opts?: { autoNext?: boolean }) => {
     if (!q) return;
     const next = { ...answers, [q.id]: value };
     setAnswers(next);
     schedulePersistAnswers(next);
+    if (opts?.autoNext && q.questionType === 'single') {
+      setTimeout(() => {
+        if (currentQuestion < questions.length - 1) {
+          setCurrentQuestion(currentQuestion + 1);
+        } else {
+          setAssessmentCompleted(true);
+          showToast('答题完成，请上传视频');
+        }
+      }, 200);
+    }
   };
 
   const goNext = async () => {
@@ -152,8 +195,17 @@ export default function TeamFormationAssessmentPanel({ classId, onSubmitted }: P
   const handleVideoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    const mime = String(file.type || '').toLowerCase();
+    const name = file.name.toLowerCase();
+    const ok = mime === 'video/mp4' || mime === 'video/webm' || name.endsWith('.mp4') || name.endsWith('.webm');
+    if (!ok) {
+      showToast('请上传 MP4 或 WebM 格式', 'error');
+      e.target.value = '';
+      return;
+    }
     if (file.size > MAX_VIDEO) {
       showToast('视频不能超过 50MB', 'error');
+      e.target.value = '';
       return;
     }
     setVideoFile(file);
@@ -183,6 +235,8 @@ export default function TeamFormationAssessmentPanel({ classId, onSubmitted }: P
           await deleteTeamVideo(classId);
           setVideoFile(null);
           setServerVideoName(null);
+          setServerHasVideo(false);
+          setServerPreviewUrl(null);
           setVideoUploaded(false);
           setAiMatchedRoleLabel(null);
           setAnalysisSummary('');
@@ -224,7 +278,7 @@ export default function TeamFormationAssessmentPanel({ classId, onSubmitted }: P
   };
 
   const handleSubmitVideo = async () => {
-    if (!videoFile && !serverVideoName) {
+    if (!videoFile && !serverHasVideo) {
       showToast('请先选择或保留已上传视频', 'error');
       return;
     }
@@ -241,6 +295,7 @@ export default function TeamFormationAssessmentPanel({ classId, onSubmitted }: P
         await uploadTeamVideo(classId, videoFile);
         const name = videoFile.name;
         setServerVideoName(name);
+        setServerHasVideo(true);
         setVideoFile(null);
       }
       setAnalyzeStep('正在分析测评结果…');
@@ -360,7 +415,7 @@ export default function TeamFormationAssessmentPanel({ classId, onSubmitted }: P
                   <button
                     key={index}
                     type="button"
-                    onClick={() => setAnswerForCurrent(option.value)}
+                    onClick={() => setAnswerForCurrent(option.value, { autoNext: true })}
                     className={`w-full p-3.5 text-left border-2 rounded-xl transition-colors cursor-pointer ${
                       answers[q.id] === option.value ? 'border-teal-500 bg-teal-50' : 'border-gray-200 hover:border-teal-300'
                     }`}
@@ -419,16 +474,34 @@ export default function TeamFormationAssessmentPanel({ classId, onSubmitted }: P
             <p className="text-white/80 text-xs mt-1">请上传自我介绍视频（≤50MB）</p>
           </div>
           <div className="bg-white border-2 border-gray-100 rounded-xl p-5">
-            <div className="bg-gradient-to-br from-blue-50 to-indigo-50 border-2 border-dashed border-blue-300 rounded-xl p-6 text-center mb-4">
-              <p className="text-xs text-gray-500 mb-4">支持 MP4、MOV 等，最大 50MB</p>
-              <input type="file" accept="video/*" onChange={handleVideoUpload} className="hidden" id="video-upload-tf" />
-              <label
-                htmlFor="video-upload-tf"
-                className="inline-block px-5 py-2.5 bg-gradient-to-r from-blue-500 to-indigo-500 text-white text-sm font-medium rounded-xl cursor-pointer"
-              >
-                选择视频
-              </label>
-            </div>
+            {!(videoFile || serverHasVideo) ? (
+              <div className="bg-gradient-to-br from-blue-50 to-indigo-50 border-2 border-dashed border-blue-300 rounded-xl p-6 text-center mb-4">
+                <p className="text-xs text-gray-500 mb-4">支持 MP4、WebM，最大 50MB，需浏览器可在线预览</p>
+                <input
+                  type="file"
+                  accept="video/mp4,video/webm,.mp4,.webm"
+                  onChange={handleVideoUpload}
+                  className="hidden"
+                  id="video-upload-tf"
+                />
+                <label
+                  htmlFor="video-upload-tf"
+                  className="inline-block px-5 py-2.5 bg-gradient-to-r from-blue-500 to-indigo-500 text-white text-sm font-medium rounded-xl cursor-pointer"
+                >
+                  选择视频
+                </label>
+              </div>
+            ) : null}
+            {(localPreviewUrl || serverPreviewUrl) && (
+              <div className="mb-4 rounded-xl overflow-hidden border border-gray-200 bg-black">
+                <video
+                  src={localPreviewUrl || serverPreviewUrl || undefined}
+                  controls
+                  className="w-full max-h-64"
+                  playsInline
+                />
+              </div>
+            )}
             {(videoFile || serverVideoName) && (
               <div className="flex items-center justify-between gap-2 mb-4 p-3 bg-gray-50 rounded-lg border border-gray-100">
                 <p className="text-sm text-gray-600 min-w-0 truncate">
@@ -475,7 +548,7 @@ export default function TeamFormationAssessmentPanel({ classId, onSubmitted }: P
             <button
               type="button"
               onClick={() => void handleSubmitVideo()}
-              disabled={(!videoFile && !serverVideoName) || aiAnalyzing}
+              disabled={(!videoFile && !serverHasVideo) || aiAnalyzing}
               className="w-full px-5 py-3 text-sm font-medium rounded-xl bg-teal-600 text-white disabled:bg-gray-100 disabled:text-gray-400 cursor-pointer"
             >
               {aiAnalyzing ? (

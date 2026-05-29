@@ -25,6 +25,7 @@ export type BatchImportRow = {
   idNumber: string;
   email?: string;
   collegeId: string;
+  majorId: string;
   /** 学生必填；教师可省略 */
   classId?: string;
 };
@@ -38,6 +39,7 @@ export async function fetchAdminUsers(params: {
   classId?: string;
   /** 与 colleges.id 一致，筛选 users.department */
   collegeId?: string;
+  majorId?: string;
 }): Promise<AdminUsersPage> {
   const q = new URLSearchParams();
   q.set('page', String(params.page ?? 1));
@@ -47,12 +49,16 @@ export async function fetchAdminUsers(params: {
   if (params.status && params.status !== 'all') q.set('status', params.status);
   if (params.classId?.trim()) q.set('classId', params.classId.trim());
   if (params.collegeId?.trim()) q.set('collegeId', params.collegeId.trim());
+  if (params.majorId?.trim()) q.set('majorId', params.majorId.trim());
   return adminFetch(`/api/admin/users?${q}`);
 }
 
-export async function fetchAdminClasses(collegeId?: string): Promise<AdminClassOption[]> {
-  const q = collegeId ? `?collegeId=${encodeURIComponent(collegeId)}` : '';
-  const rows = await adminFetch(`/api/admin/classes${q}`) as Array<{
+export async function fetchAdminClasses(collegeId?: string, majorId?: string): Promise<AdminClassOption[]> {
+  const q = new URLSearchParams();
+  if (collegeId) q.set('collegeId', collegeId);
+  if (majorId) q.set('majorId', majorId);
+  const qs = q.toString();
+  const rows = await adminFetch(`/api/admin/classes${qs ? `?${qs}` : ''}`) as Array<{
     id: string;
     name: string;
     code: string;
@@ -67,6 +73,7 @@ export async function createAdminUser(body: {
   idNumber: string;
   email?: string;
   department: string;
+  majorId?: string;
   password: string;
 }): Promise<User> {
   const payload: Record<string, unknown> = {
@@ -76,6 +83,7 @@ export async function createAdminUser(body: {
     department: body.department,
     password: body.password,
   };
+  if (body.majorId?.trim()) payload.majorId = body.majorId.trim();
   if (body.email?.trim()) payload.email = body.email.trim();
   return adminFetch('/api/admin/users', { method: 'POST', body: JSON.stringify(payload) });
 }
@@ -86,6 +94,7 @@ export async function updateAdminUser(
     name: string;
     email: string;
     department: string;
+    majorId: string;
     role: UserRole;
     idNumber: string;
     classId: string;

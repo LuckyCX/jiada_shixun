@@ -42,8 +42,21 @@ export default function CollegeManagement() {
   };
 
   const columns: ColumnsType<AdminCollegeRow> = [
-    { title: '学院名称', dataIndex: 'name', key: 'name', ellipsis: true },
-    { title: '学院 ID', dataIndex: 'id', key: 'id', width: 100, render: (v: string) => <span className="font-mono text-gray-700">{v}</span> },
+    {
+      title: '学院名称',
+      key: 'name',
+      ellipsis: true,
+      render: (_, row) => (
+        <span className="text-gray-900">{row.name}（{row.id}）</span>
+      ),
+    },
+    {
+      title: '教师数量',
+      dataIndex: 'teacherCount',
+      key: 'teacherCount',
+      width: 120,
+      render: (n: number) => <span className="text-purple-600 font-medium">{n}</span>,
+    },
     {
       title: '班级数量',
       dataIndex: 'classCount',

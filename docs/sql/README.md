@@ -2,13 +2,19 @@
 
 ## 文件与顺序
 
-在**空库**中按编号执行（`ON_ERROR_STOP` 建议在失败时中断）：
+在**空库**中一键初始化（在 `docs/sql` 目录执行，或指定完整路径）：
 
 ```bash
-psql -v ON_ERROR_STOP=1 -U postgres -d your_db -f docs/sql/000_extensions.sql
-psql -v ON_ERROR_STOP=1 -U postgres -d your_db -f docs/sql/001_schema.sql
-psql -v ON_ERROR_STOP=1 -U postgres -d your_db -f docs/sql/002_rls_notes.sql
-psql -v ON_ERROR_STOP=1 -U postgres -d your_db -f docs/sql/003_seed.sql
+cd docs/sql && psql -v ON_ERROR_STOP=1 -U postgres -d your_db -f init_all.sql
+```
+
+也可按编号逐文件执行；学院与专业数据见 `037_colleges_majors_seed.sql`（已由 `003_seed.sql` 引用）。
+
+**已有库**若缺少专业表，请先执行：
+
+```bash
+psql -v ON_ERROR_STOP=1 -U postgres -d your_db -f docs/sql/036_majors.sql
+psql -v ON_ERROR_STOP=1 -U postgres -d your_db -f docs/sql/037_colleges_majors_seed.sql
 ```
 
 Docker 首次初始化可将本目录挂载到 Postgres 容器的 `/docker-entrypoint-initdb.d/`（仅**第一次**建数据目录时执行）。

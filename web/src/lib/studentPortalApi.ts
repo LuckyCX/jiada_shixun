@@ -35,6 +35,7 @@ export type StudentProfile = {
   className: string;
   collegeId: string;
   collegeName: string;
+  majorName: string;
 };
 
 export async function getStudentProfile(): Promise<StudentProfile> {

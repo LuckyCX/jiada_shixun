@@ -15,6 +15,7 @@ import {
 } from '../../lib/authApi';
 import { studentHasActivePersonalClassWithToken } from '../../lib/studentPortalApi';
 import { useSiteBrand } from '../../lib/publicSite';
+import { USER_GUIDE_PATH } from '../../lib/appPaths';
 import bg from '../../assets/images/bg.jpg';
 
 function getRequiredPortalRole(link: string): PortalRole | null {
@@ -243,8 +244,7 @@ export default function Home() {
           <div className="flex items-center gap-8">
             <a href="#modules" className={`text-sm font-medium transition-colors hover:text-teal-500 cursor-pointer ${scrolled ? 'text-gray-700' : 'text-white'}`}>实训模块</a>
             <a href="#features" className={`text-sm font-medium transition-colors hover:text-teal-500 cursor-pointer ${scrolled ? 'text-gray-700' : 'text-white'}`}>平台特色</a>
-            <a href="#process" className={`text-sm font-medium transition-colors hover:text-teal-500 cursor-pointer ${scrolled ? 'text-gray-700' : 'text-white'}`}>实训流程</a>
-            <Link to="/user-guide" className={`text-sm font-medium transition-colors hover:text-teal-500 cursor-pointer whitespace-nowrap ${scrolled ? 'text-gray-700' : 'text-white'}`}>
+            <Link to={USER_GUIDE_PATH} className={`text-sm font-medium transition-colors hover:text-teal-500 cursor-pointer whitespace-nowrap ${scrolled ? 'text-gray-700' : 'text-white'}`}>
               <i className="ri-question-line mr-1"></i>帮助中心
             </Link>
             {!isLoggedIn ? (
@@ -309,7 +309,7 @@ export default function Home() {
               立即开始实训
             </button>
             <Link
-              to="/user-guide"
+              to={USER_GUIDE_PATH}
               className="px-8 py-4 rounded-xl bg-white/90 backdrop-blur-sm text-slate-900 font-bold text-lg hover:shadow-xl hover:scale-105 transition-all border-2 border-slate-200 whitespace-nowrap flex items-center gap-2"
             >
               <i className="ri-book-open-line"></i><span>使用指南</span>

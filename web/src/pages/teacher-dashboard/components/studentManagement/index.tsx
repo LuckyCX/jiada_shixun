@@ -59,12 +59,16 @@ function StudentDetailDrawer({ student, className, onClose }: StudentDetailDrawe
             </button>
           </div>
           <div className="flex items-center gap-4">
-            <div className="w-16 h-16 rounded-2xl bg-white/20 flex items-center justify-center text-white text-2xl font-bold flex-shrink-0">
-              {student.name.charAt(0)}
-            </div>
+            <UserAvatar
+              name={student.name}
+              avatarUrl={student.avatarUrl}
+              size="lg"
+              className="!w-16 !h-16 !rounded-2xl flex-shrink-0"
+            />
             <div>
-              <h2 className="text-xl font-bold text-white">{student.name}</h2>
-              <p className="text-teal-100 text-sm mt-0.5">{student.studentNo || t('dash')}</p>
+              <h2 className="text-xl font-bold text-white">
+                {student.name || '学生'}（{student.studentNo}）
+              </h2>
             </div>
           </div>
         </div>
@@ -76,6 +80,7 @@ function StudentDetailDrawer({ student, className, onClose }: StudentDetailDrawe
               {[
                 { icon: 'ri-mail-line', label: '邮箱', value: student.email || t('dash') },
                 { icon: 'ri-building-line', label: '院系', value: student.collegeName || t('dash') },
+                { icon: 'ri-book-2-line', label: '专业', value: student.majorName || t('dash') },
                 { icon: 'ri-team-line', label: '所在班级', value: className },
               ].map((item) => (
                 <div key={item.label} className="flex items-center gap-3">
@@ -194,7 +199,8 @@ export default function StudentManagement({ personalClass, onBack }: StudentMana
         s.name.toLowerCase().includes(q) ||
         s.studentNo.toLowerCase().includes(q) ||
         s.email.toLowerCase().includes(q) ||
-        s.collegeName.toLowerCase().includes(q)
+        s.collegeName.toLowerCase().includes(q) ||
+        (s.majorName || '').toLowerCase().includes(q)
     );
   }, [students, search]);
 
@@ -266,7 +272,7 @@ export default function StudentManagement({ personalClass, onBack }: StudentMana
           <i className="ri-search-line absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm" />
           <input
             type="text"
-            placeholder="搜索姓名、学号、邮箱、院系..."
+            placeholder="搜索姓名、邮箱、院系、专业..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="w-full pl-9 pr-4 py-2 text-sm border border-gray-200 rounded-lg bg-gray-50 focus:outline-none focus:ring-2 focus:ring-teal-300 focus:bg-white"
@@ -330,12 +336,10 @@ export default function StudentManagement({ personalClass, onBack }: StudentMana
                     {t('teacher_class.page.th_name')}
                   </th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">
-                    {t('teacher_class.page.th_student_no')}
-                  </th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">
                     {t('teacher_class.page.th_email')}
                   </th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">院系</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">专业</th>
                   <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500">
                     {t('teacher_class.page.th_action')}
                   </th>
@@ -368,16 +372,18 @@ export default function StudentManagement({ personalClass, onBack }: StudentMana
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-3">
-                          <UserAvatar name={student.name} size="sm" />
-                          <div className="font-medium text-gray-900">{student.name}</div>
+                          <UserAvatar name={student.name} avatarUrl={student.avatarUrl} size="sm" />
+                          <div className="font-medium text-gray-900">
+                            {student.name || '学生'}（{student.studentNo}）
+                          </div>
                         </div>
-                      </td>
-                      <td className="px-4 py-3 text-gray-600 font-mono text-xs">
-                        {student.studentNo || t('dash')}
                       </td>
                       <td className="px-4 py-3 text-gray-600 text-xs">{student.email || t('dash')}</td>
                       <td className="px-4 py-3 text-gray-600 text-xs">
                         {student.collegeName || t('dash')}
+                      </td>
+                      <td className="px-4 py-3 text-gray-600 text-xs">
+                        {student.majorName || t('dash')}
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center justify-center gap-1">

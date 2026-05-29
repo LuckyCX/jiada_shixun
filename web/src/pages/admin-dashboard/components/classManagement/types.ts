@@ -6,8 +6,9 @@ export interface Class {
   collegeId: string;
   /** 与 collegeId 一致，用于兼容旧筛选字段 */
   department: string;
+  majorId: string;
+  majorName: string;
   academicYear: string;
-  /** 学期字典 semester 的 data_key 字符串（如 0 春季、9 秋季） */
   semester: string;
   studentCount: number;
   /** 班级状态字典 class_status：0 待开班 / 1 进行中 / 2 已结束 */

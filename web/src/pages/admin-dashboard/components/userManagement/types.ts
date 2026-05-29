@@ -6,10 +6,14 @@ export interface User {
   /** 登录名，与学号/工号一致（管理员为 admin 等）；接口可能返回 */
   username?: string;
   name: string;
+  avatarUrl?: string;
   studentId?: string; // 学号（学生）
   employeeId?: string; // 工号（教师/管理员）
   email: string;
-  department: string; // 院系
+  department: string; // 学院 colleges.id
+  collegeName?: string;
+  majorId?: string;
+  majorName?: string;
   role: UserRole;
   status: UserStatus;
   lastLogin: string;

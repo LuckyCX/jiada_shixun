@@ -9,6 +9,7 @@ import {
   notifyTeacherTeamStudents,
   fetchTeacherGrouping,
   fetchTeacherTeamQuestions,
+  loadTeamIntroVideoObjectUrl,
   normalizeTeamDimensionProfile,
   postTeacherAiGroupStream,
   removeTeamMember,
@@ -30,7 +31,8 @@ type Student = {
   studentId: string;
   major: string;
   grade: string;
-  avatar: string;
+  avatarUrl?: string;
+  hasIntroVideo?: boolean;
   profile: AbilityProfile;
   skills: string[];
   status: 'pending' | 'grouped' | 'confirmed';
@@ -59,7 +61,7 @@ const mockStudentsGrouped: Student[] = (
     studentId: '2021001',
     major: '计算机科学',
     grade: '大三',
-    avatar: 'https://readdy.ai/api/search-image?query=professional%20asian%20male%20university%20student%20portrait%20with%20confident%20smile%20in%20modern%20campus%20setting%2C%20clean%20bright%20background%20with%20soft%20lighting%2C%20professional%20headshot%20style&width=200&height=200&seq=stu-001&orientation=squarish',
+    avatarUrl: 'https://readdy.ai/api/search-image?query=professional%20asian%20male%20university%20student%20portrait%20with%20confident%20smile%20in%20modern%20campus%20setting%2C%20clean%20bright%20background%20with%20soft%20lighting%2C%20professional%20headshot%20style&width=200&height=200&seq=stu-001&orientation=squarish',
     profile: { techGeek: 85, designAesthetic: 45, businessOperator: 92 },
     skills: ['项目管理', '商业分析', 'Python'],
     status: 'pending',
@@ -70,7 +72,7 @@ const mockStudentsGrouped: Student[] = (
     studentId: '2021002',
     major: '软件工程',
     grade: '大三',
-    avatar: 'https://readdy.ai/api/search-image?query=professional%20asian%20female%20university%20student%20portrait%20with%20friendly%20smile%20in%20modern%20campus%20setting%2C%20clean%20bright%20background%20with%20soft%20lighting%2C%20professional%20headshot%20style&width=200&height=200&seq=stu-002&orientation=squarish',
+    avatarUrl: 'https://readdy.ai/api/search-image?query=professional%20asian%20female%20university%20student%20portrait%20with%20friendly%20smile%20in%20modern%20campus%20setting%2C%20clean%20bright%20background%20with%20soft%20lighting%2C%20professional%20headshot%20style&width=200&height=200&seq=stu-002&orientation=squarish',
     profile: { techGeek: 92, designAesthetic: 55, businessOperator: 48 },
     skills: ['前端开发', 'React', 'TypeScript'],
     status: 'pending',
@@ -81,7 +83,7 @@ const mockStudentsGrouped: Student[] = (
     studentId: '2021003',
     major: '视觉传达设计',
     grade: '大三',
-    avatar: 'https://readdy.ai/api/search-image?query=professional%20asian%20male%20university%20student%20portrait%20with%20creative%20expression%20in%20modern%20campus%20setting%2C%20clean%20bright%20background%20with%20soft%20lighting%2C%20professional%20headshot%20style&width=200&height=200&seq=stu-003&orientation=squarish',
+    avatarUrl: 'https://readdy.ai/api/search-image?query=professional%20asian%20male%20university%20student%20portrait%20with%20creative%20expression%20in%20modern%20campus%20setting%2C%20clean%20bright%20background%20with%20soft%20lighting%2C%20professional%20headshot%20style&width=200&height=200&seq=stu-003&orientation=squarish',
     profile: { techGeek: 38, designAesthetic: 95, businessOperator: 52 },
     skills: ['UI设计', 'Figma', '用户体验'],
     status: 'pending',
@@ -92,7 +94,7 @@ const mockStudentsGrouped: Student[] = (
     studentId: '2021004',
     major: '市场营销',
     grade: '大三',
-    avatar: 'https://readdy.ai/api/search-image?query=professional%20asian%20female%20university%20student%20portrait%20with%20confident%20business%20smile%20in%20modern%20campus%20setting%2C%20clean%20bright%20background%20with%20soft%20lighting%2C%20professional%20headshot%20style&width=200&height=200&seq=stu-004&orientation=squarish',
+    avatarUrl: 'https://readdy.ai/api/search-image?query=professional%20asian%20female%20university%20student%20portrait%20with%20confident%20business%20smile%20in%20modern%20campus%20setting%2C%20clean%20bright%20background%20with%20soft%20lighting%2C%20professional%20headshot%20style&width=200&height=200&seq=stu-004&orientation=squarish',
     profile: { techGeek: 42, designAesthetic: 68, businessOperator: 88 },
     skills: ['市场调研', '数据分析', '营销策划'],
     status: 'pending',
@@ -103,7 +105,7 @@ const mockStudentsGrouped: Student[] = (
     studentId: '2021005',
     major: '计算机科学',
     grade: '大三',
-    avatar: 'https://readdy.ai/api/search-image?query=professional%20asian%20male%20university%20student%20portrait%20with%20tech%20enthusiast%20expression%20in%20modern%20campus%20setting%2C%20clean%20bright%20background%20with%20soft%20lighting%2C%20professional%20headshot%20style&width=200&height=200&seq=stu-005&orientation=squarish',
+    avatarUrl: 'https://readdy.ai/api/search-image?query=professional%20asian%20male%20university%20student%20portrait%20with%20tech%20enthusiast%20expression%20in%20modern%20campus%20setting%2C%20clean%20bright%20background%20with%20soft%20lighting%2C%20professional%20headshot%20style&width=200&height=200&seq=stu-005&orientation=squarish',
     profile: { techGeek: 88, designAesthetic: 50, businessOperator: 55 },
     skills: ['后端开发', 'Java', '数据库'],
     status: 'pending',
@@ -114,7 +116,7 @@ const mockStudentsGrouped: Student[] = (
     studentId: '2021006',
     major: '视觉传达设计',
     grade: '大三',
-    avatar: 'https://readdy.ai/api/search-image?query=professional%20asian%20female%20university%20student%20portrait%20with%20artistic%20creative%20smile%20in%20modern%20campus%20setting%2C%20clean%20bright%20background%20with%20soft%20lighting%2C%20professional%20headshot%20style&width=200&height=200&seq=stu-006&orientation=squarish',
+    avatarUrl: 'https://readdy.ai/api/search-image?query=professional%20asian%20female%20university%20student%20portrait%20with%20artistic%20creative%20smile%20in%20modern%20campus%20setting%2C%20clean%20bright%20background%20with%20soft%20lighting%2C%20professional%20headshot%20style&width=200&height=200&seq=stu-006&orientation=squarish',
     profile: { techGeek: 45, designAesthetic: 90, businessOperator: 58 },
     skills: ['平面设计', 'Photoshop', '品牌设计'],
     status: 'pending',
@@ -125,7 +127,7 @@ const mockStudentsGrouped: Student[] = (
     studentId: '2021007',
     major: '工商管理',
     grade: '大三',
-    avatar: 'https://readdy.ai/api/search-image?query=professional%20asian%20male%20university%20student%20portrait%20with%20leadership%20confidence%20in%20modern%20campus%20setting%2C%20clean%20bright%20background%20with%20soft%20lighting%2C%20professional%20headshot%20style&width=200&height=200&seq=stu-007&orientation=squarish',
+    avatarUrl: 'https://readdy.ai/api/search-image?query=professional%20asian%20male%20university%20student%20portrait%20with%20leadership%20confidence%20in%20modern%20campus%20setting%2C%20clean%20bright%20background%20with%20soft%20lighting%2C%20professional%20headshot%20style&width=200&height=200&seq=stu-007&orientation=squarish',
     profile: { techGeek: 50, designAesthetic: 60, businessOperator: 85 },
     skills: ['商业模式', '财务分析', '团队管理'],
     status: 'pending',
@@ -136,7 +138,7 @@ const mockStudentsGrouped: Student[] = (
     studentId: '2021008',
     major: '软件工程',
     grade: '大三',
-    avatar: 'https://readdy.ai/api/search-image?query=professional%20asian%20female%20university%20student%20portrait%20with%20tech%20focused%20expression%20in%20modern%20campus%20setting%2C%20clean%20bright%20background%20with%20soft%20lighting%2C%20professional%20headshot%20style&width=200&height=200&seq=stu-008&orientation=squarish',
+    avatarUrl: 'https://readdy.ai/api/search-image?query=professional%20asian%20female%20university%20student%20portrait%20with%20tech%20focused%20expression%20in%20modern%20campus%20setting%2C%20clean%20bright%20background%20with%20soft%20lighting%2C%20professional%20headshot%20style&width=200&height=200&seq=stu-008&orientation=squarish',
     profile: { techGeek: 90, designAesthetic: 48, businessOperator: 52 },
     skills: ['全栈开发', 'Node.js', 'MongoDB'],
     status: 'pending',
@@ -147,7 +149,7 @@ const mockStudentsGrouped: Student[] = (
     studentId: '2021009',
     major: '市场营销',
     grade: '大三',
-    avatar: 'https://readdy.ai/api/search-image?query=professional%20asian%20male%20university%20student%20portrait%20with%20business%20marketing%20smile%20in%20modern%20campus%20setting%2C%20clean%20bright%20background%20with%20soft%20lighting%2C%20professional%20headshot%20style&width=200&height=200&seq=stu-009&orientation=squarish',
+    avatarUrl: 'https://readdy.ai/api/search-image?query=professional%20asian%20male%20university%20student%20portrait%20with%20business%20marketing%20smile%20in%20modern%20campus%20setting%2C%20clean%20bright%20background%20with%20soft%20lighting%2C%20professional%20headshot%20style&width=200&height=200&seq=stu-009&orientation=squarish',
     profile: { techGeek: 48, designAesthetic: 55, businessOperator: 82 },
     skills: ['市场推广', '社交媒体', '内容营销'],
     status: 'pending',
@@ -158,7 +160,7 @@ const mockStudentsGrouped: Student[] = (
     studentId: '2021010',
     major: '视觉传达设计',
     grade: '大三',
-    avatar: 'https://readdy.ai/api/search-image?query=professional%20asian%20male%20university%20student%20portrait%20with%20design%20creative%20expression%20in%20modern%20campus%20setting%2C%20clean%20bright%20background%20with%20soft%20lighting%2C%20professional%20headshot%20style&width=200&height=200&seq=stu-010&orientation=squarish',
+    avatarUrl: 'https://readdy.ai/api/search-image?query=professional%20asian%20male%20university%20student%20portrait%20with%20design%20creative%20expression%20in%20modern%20campus%20setting%2C%20clean%20bright%20background%20with%20soft%20lighting%2C%20professional%20headshot%20style&width=200&height=200&seq=stu-010&orientation=squarish',
     profile: { techGeek: 52, designAesthetic: 88, businessOperator: 60 },
     skills: ['交互设计', 'Sketch', '原型设计'],
     status: 'pending',
@@ -169,7 +171,7 @@ const mockStudentsGrouped: Student[] = (
     studentId: '2021011',
     major: '计算机科学',
     grade: '大三',
-    avatar: 'https://readdy.ai/api/search-image?query=professional%20asian%20female%20university%20student%20portrait%20with%20tech%20confident%20smile%20in%20modern%20campus%20setting%2C%20clean%20bright%20background%20with%20soft%20lighting%2C%20professional%20headshot%20style&width=200&height=200&seq=stu-011&orientation=squarish',
+    avatarUrl: 'https://readdy.ai/api/search-image?query=professional%20asian%20female%20university%20student%20portrait%20with%20tech%20confident%20smile%20in%20modern%20campus%20setting%2C%20clean%20bright%20background%20with%20soft%20lighting%2C%20professional%20headshot%20style&width=200&height=200&seq=stu-011&orientation=squarish',
     profile: { techGeek: 86, designAesthetic: 58, businessOperator: 50 },
     skills: ['算法', 'C++', '数据结构'],
     status: 'pending',
@@ -180,7 +182,7 @@ const mockStudentsGrouped: Student[] = (
     studentId: '2021012',
     major: '工商管理',
     grade: '大三',
-    avatar: 'https://readdy.ai/api/search-image?query=professional%20asian%20male%20university%20student%20portrait%20with%20business%20professional%20expression%20in%20modern%20campus%20setting%2C%20clean%20bright%20background%20with%20soft%20lighting%2C%20professional%20headshot%20style&width=200&height=200&seq=stu-012&orientation=squarish',
+    avatarUrl: 'https://readdy.ai/api/search-image?query=professional%20asian%20male%20university%20student%20portrait%20with%20business%20professional%20expression%20in%20modern%20campus%20setting%2C%20clean%20bright%20background%20with%20soft%20lighting%2C%20professional%20headshot%20style&width=200&height=200&seq=stu-012&orientation=squarish',
     profile: { techGeek: 55, designAesthetic: 62, businessOperator: 80 },
     skills: ['战略规划', '运营管理', '项目协调'],
     status: 'pending',
@@ -217,7 +219,8 @@ function mapGroupingToUi(data: TeacherGroupingState): { students: Student[]; tea
     studentId: s.studentId,
     major: '',
     grade: '',
-    avatar: '',
+    avatarUrl: s.avatarUrl || '',
+    hasIntroVideo: Boolean(s.hasIntroVideo),
     profile: normalizeTeamDimensionProfile(s.profile),
     skills: [] as string[],
     status: 'pending' as const,
@@ -231,7 +234,8 @@ function mapGroupingToUi(data: TeacherGroupingState): { students: Student[]; tea
       studentId: m.studentId,
       major: '',
       grade: '',
-      avatar: '',
+      avatarUrl: m.avatarUrl || '',
+      hasIntroVideo: Boolean(m.hasIntroVideo),
       profile: normalizeTeamDimensionProfile(m.profile),
       skills: [] as string[],
       status: (t.groupingStatus === 'confirmed' ? 'confirmed' : 'grouped') as 'grouped' | 'confirmed',
@@ -299,6 +303,31 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [filterStatus, setFilterStatus] = useState<'all' | 'pending' | 'grouped'>('all');
   const [searchKeyword, setSearchKeyword] = useState('');
+  const [introStudent, setIntroStudent] = useState<Student | null>(null);
+  const [introVideoUrl, setIntroVideoUrl] = useState<string | null>(null);
+  const [introVideoLoading, setIntroVideoLoading] = useState(false);
+
+  useEffect(() => {
+    if (!introStudent?.hasIntroVideo) {
+      setIntroVideoUrl(null);
+      return undefined;
+    }
+    let objectUrl: string | null = null;
+    setIntroVideoLoading(true);
+    void loadTeamIntroVideoObjectUrl('teacher', personalClass.id, introStudent.id)
+      .then((url) => {
+        objectUrl = url;
+        setIntroVideoUrl(url);
+      })
+      .catch((e) => {
+        showToast(e instanceof Error ? e.message : '加载视频失败', 'error');
+        setIntroStudent(null);
+      })
+      .finally(() => setIntroVideoLoading(false));
+    return () => {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [introStudent, personalClass.id]);
 
   // 计算能力互补得分
   const calculateComplementScore = (members: Student[]): number => {
@@ -638,6 +667,11 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
                   {filteredStudents.filter(s => s.status === 'pending').length}
                 </span>
               </h3>
+              {!hasExistingTeams && pendingCount < MIN_PENDING_FOR_AI ? (
+                <p className="text-xs text-amber-700 mt-2">
+                  待组队满 {MIN_PENDING_FOR_AI} 人后可启用 AI 组队（当前 {pendingCount} 人）
+                </p>
+              ) : null}
             </div>
             <div className="p-4 max-h-[calc(100vh-300px)] overflow-y-auto space-y-2">
               {filteredStudents.filter(s => s.status === 'pending').length === 0 ? (
@@ -653,6 +687,19 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
                     onDragStart={() => handleDragStart(student)}
                     className="relative bg-gray-50 border border-gray-200 rounded-xl p-3 hover:border-teal-300 hover:bg-teal-50/30 transition-all cursor-move"
                   >
+                    <div className="absolute top-2 right-2 z-10 flex items-center gap-1">
+                      {student.hasIntroVideo ? (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setIntroStudent(student);
+                          }}
+                          className="px-2 py-0.5 text-[10px] font-medium bg-white border border-gray-200 text-gray-700 rounded-md hover:bg-gray-50 cursor-pointer"
+                        >
+                          个人介绍
+                        </button>
+                      ) : null}
                     {editableTeams.length > 0 && (
                       <Popover
                         trigger="click"
@@ -700,14 +747,15 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
                             setJoinTeamStudentId(student.id);
                             setJoinTeamTargetId(editableTeams[0]?.id ?? null);
                           }}
-                          className="absolute top-2 right-2 z-10 px-2 py-0.5 text-[10px] font-medium bg-teal-600 text-white rounded-md hover:bg-teal-700 cursor-pointer"
+                          className="px-2 py-0.5 text-[10px] font-medium bg-teal-600 text-white rounded-md hover:bg-teal-700 cursor-pointer"
                         >
                           加入团队
                         </button>
                       </Popover>
                     )}
+                    </div>
                     <div className="flex items-start gap-3">
-                      <UserAvatar name={student.name || '?'} size="lg" />
+                      <UserAvatar name={student.name || '?'} avatarUrl={student.avatarUrl} size="lg" />
                       <div className="flex-1 min-w-0">
                         <h4 className="text-sm font-bold text-gray-900 leading-snug mb-1">{student.name}</h4>
                         <div className="flex gap-1 mb-1.5">
@@ -754,7 +802,14 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
                   <i className="ri-team-line text-4xl text-gray-400"></i>
                 </div>
                 <h3 className="text-lg font-bold text-gray-900 mb-2">还没有组建团队</h3>
-                <p className="text-sm text-gray-500 mb-5">点击"AI 智能组队"自动分组 </p>
+                <p className="text-sm text-gray-500 mb-2">点击「AI 智能组队」自动分组</p>
+                {!hasExistingTeams && pendingCount < MIN_PENDING_FOR_AI ? (
+                  <p className="text-sm text-amber-700 mb-4">
+                    待组队学生需满 {MIN_PENDING_FOR_AI} 人方可启用 AI 组队（当前 {pendingCount} 人）
+                  </p>
+                ) : (
+                  <p className="mb-4" />
+                )}
                 <button
                   type="button"
                   onClick={() => void handleAutoGroup()}
@@ -819,12 +874,7 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
                       {team.members.map(member => (
                         <div key={member.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl hover:bg-teal-50/30 transition-colors">
                           <div className="flex items-center gap-3">
-                            <div
-                              className="w-10 h-10 rounded-full flex-shrink-0 bg-teal-600 text-white flex items-center justify-center text-sm font-bold"
-                              aria-hidden
-                            >
-                              {[...(member.name || '?').trim()][0] || '?'}
-                            </div>
+                            <UserAvatar name={member.name || '?'} avatarUrl={member.avatarUrl} size="md" />
                             <div>
                               <div className="flex items-center gap-2 mb-0.5 flex-wrap">
                                 <span className="text-sm font-bold text-gray-900">{member.name}</span>
@@ -947,6 +997,29 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
           </div>
         </div>
       )}
+
+      <Modal
+        title={introStudent ? `${introStudent.name} · 个人介绍` : '个人介绍'}
+        open={Boolean(introStudent)}
+        onCancel={() => {
+          if (introVideoUrl) URL.revokeObjectURL(introVideoUrl);
+          setIntroVideoUrl(null);
+          setIntroStudent(null);
+        }}
+        footer={null}
+        width={720}
+        destroyOnClose
+      >
+        {introVideoLoading ? (
+          <div className="py-16 flex justify-center">
+            <Spin tip="加载视频…" />
+          </div>
+        ) : introVideoUrl ? (
+          <video src={introVideoUrl} controls className="w-full max-h-[70vh] rounded-lg bg-black" playsInline />
+        ) : (
+          <p className="text-sm text-gray-500 py-8 text-center">暂无视频</p>
+        )}
+      </Modal>
 
     </div>
   );

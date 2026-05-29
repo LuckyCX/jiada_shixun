@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Button, Card, Input, message, Select, Space, Spin, Statistic, Table, Tag } from 'antd';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Button, Card, Cascader, Input, message, Select, Space, Spin, Statistic, Table, Tag } from 'antd';
 import type { TableProps } from 'antd';
 import { User, UserRole, UserStatus } from './types';
 import { useCollegeDictOptions } from './useCollegeDictOptions';
@@ -18,6 +18,8 @@ import {
   postAdminUsersBatch,
   updateAdminUser,
 } from './adminUsersApi';
+import { useMajorOptions } from './useMajorOptions';
+import UserAvatar from '../../../../components/UserAvatar';
 
 export type AdminUsersPanelScope = 'all' | 'college-teachers' | 'class-students';
 
@@ -40,7 +42,7 @@ const emptyStats: AdminUserStats = {
 };
 
 export default function AdminUsersPanel({ scope, collegeId = '', classId = '', subtitle, onBack }: AdminUsersPanelProps) {
-  const { labelByValue: deptLabel } = useCollegeDictOptions(true);
+  const { options: collegeFilterOptions, labelByValue: deptLabel } = useCollegeDictOptions(true);
   const [users, setUsers] = useState<User[]>([]);
   const [stats, setStats] = useState<AdminUserStats>(emptyStats);
   const [loading, setLoading] = useState(true);
@@ -51,6 +53,8 @@ export default function AdminUsersPanel({ scope, collegeId = '', classId = '', s
   const [debouncedQ, setDebouncedQ] = useState('');
   const [roleFilter, setRoleFilter] = useState<UserRole | 'all'>('all');
   const [statusFilter, setStatusFilter] = useState<UserStatus | 'all'>('all');
+  const [collegeFilter, setCollegeFilter] = useState('');
+  const [majorFilter, setMajorFilter] = useState('');
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isBatchImportOpen, setIsBatchImportOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -67,7 +71,29 @@ export default function AdminUsersPanel({ scope, collegeId = '', classId = '', s
 
   useEffect(() => {
     setPage(1);
-  }, [debouncedQ, roleFilter, statusFilter, scope, collegeId, classId]);
+  }, [debouncedQ, roleFilter, statusFilter, collegeFilter, majorFilter, scope, collegeId, classId]);
+
+  const filterCollegeId = scope === 'college-teachers' ? collegeId : collegeFilter;
+  const { rows: filterMajors, options: majorFilterOptions, loading: majorFilterLoading } = useMajorOptions(
+    scope === 'all' || scope === 'college-teachers',
+    filterCollegeId || undefined
+  );
+
+  const collegeMajorCascaderOptions = useMemo(
+    () =>
+      collegeFilterOptions.map((c) => ({
+        value: c.value,
+        label: c.label,
+        children: filterMajors
+          .filter((m) => m.collegeId === c.value)
+          .map((m) => ({ value: m.id, label: m.name })),
+      })),
+    [collegeFilterOptions, filterMajors]
+  );
+
+  useEffect(() => {
+    setMajorFilter('');
+  }, [collegeFilter, collegeId, scope]);
 
   const loadUsers = useCallback(async () => {
     setLoading(true);
@@ -78,7 +104,13 @@ export default function AdminUsersPanel({ scope, collegeId = '', classId = '', s
         q: debouncedQ,
         role: fixedRole ?? roleFilter,
         status: statusFilter,
-        collegeId: scope === 'college-teachers' ? collegeId : undefined,
+        collegeId:
+          scope === 'college-teachers'
+            ? collegeId
+            : scope === 'all' && collegeFilter
+              ? collegeFilter
+              : undefined,
+        majorId: majorFilter || undefined,
         classId: scope === 'class-students' ? classId : undefined,
       });
       setUsers(data.list);
@@ -89,7 +121,7 @@ export default function AdminUsersPanel({ scope, collegeId = '', classId = '', s
     } finally {
       setLoading(false);
     }
-  }, [page, pageSize, debouncedQ, roleFilter, statusFilter, scope, collegeId, classId, fixedRole]);
+  }, [page, pageSize, debouncedQ, roleFilter, statusFilter, collegeFilter, majorFilter, scope, collegeId, classId, fixedRole]);
 
   useEffect(() => {
     void loadUsers();
@@ -101,6 +133,7 @@ export default function AdminUsersPanel({ scope, collegeId = '', classId = '', s
     idNumber: string;
     email?: string;
     department: string;
+    majorId?: string;
     password: string;
   }) => {
     try {
@@ -110,6 +143,9 @@ export default function AdminUsersPanel({ scope, collegeId = '', classId = '', s
         idNumber: userData.idNumber,
         department: userData.department,
         password: userData.password,
+        ...(userData.majorId?.trim() && (userData.role === 'student' || userData.role === 'teacher')
+          ? { majorId: userData.majorId.trim() }
+          : {}),
         ...(userData.email?.trim() ? { email: userData.email.trim() } : {}),
       });
       if (scope === 'class-students' && userData.role === 'student' && classId) {
@@ -132,6 +168,9 @@ export default function AdminUsersPanel({ scope, collegeId = '', classId = '', s
         role: userData.role as User['role'],
         idNumber: String(userData.idNumber ?? '').trim(),
         ...(userData.role === 'student' ? { classId: String(userData.classId ?? '') } : {}),
+        ...(userData.role === 'student' || userData.role === 'teacher'
+          ? { majorId: String(userData.majorId ?? '') }
+          : {}),
       });
       message.success('用户信息已更新');
       setIsEditModalOpen(false);
@@ -188,6 +227,7 @@ export default function AdminUsersPanel({ scope, collegeId = '', classId = '', s
 
   const showRoleCol = scope === 'all';
   const showDeptCol = scope !== 'college-teachers';
+  const showMajorCol = scope === 'all' || scope === 'class-students' || scope === 'college-teachers';
   const showClassCol = scope === 'all';
   const actionColWidth = scope === 'all' ? 220 : 260;
 
@@ -195,21 +235,20 @@ export default function AdminUsersPanel({ scope, collegeId = '', classId = '', s
         {
           title: '姓名',
           key: 'name',
-          width: 200,
-          render: (_, u) => (
-            <div className="flex items-center gap-3">
-              <div className="w-9 h-9 shrink-0 bg-gradient-to-br from-teal-400 to-blue-500 rounded-full flex items-center justify-center text-white text-sm font-semibold">
-                {u.name.charAt(0)}
+          width: 240,
+          ellipsis: true,
+          render: (_, u) => {
+            const idNo = (u.studentId || u.employeeId || u.username || '').trim();
+            return (
+              <div className="flex items-center gap-3 min-w-0">
+                <UserAvatar name={u.name} avatarUrl={u.avatarUrl} size="sm" className="shrink-0" />
+                <span className="text-sm font-medium text-gray-900 truncate">
+                  {u.name}
+                  {idNo ? `（${idNo}）` : ''}
+                </span>
               </div>
-              <span className="text-sm font-medium text-gray-900">{u.name}</span>
-            </div>
-          ),
-        },
-        {
-          title: '学号/工号',
-          key: 'id',
-          width: 140,
-          render: (_, u) => <span className="text-sm text-gray-600">{u.studentId || u.employeeId || '—'}</span>,
+            );
+          },
         },
         {
           title: '邮箱',
@@ -225,7 +264,21 @@ export default function AdminUsersPanel({ scope, collegeId = '', classId = '', s
                 key: 'department',
                 ellipsis: true,
                 render: (_: unknown, u: User) => (
-                  <span className="text-sm text-gray-600">{deptLabel(u.department)}</span>
+                  <span className="text-sm text-gray-600">
+                    {u.collegeName || ( /^\d+$/.test(String(u.department || '').trim()) ? deptLabel(u.department) : u.department ) || '—'}
+                  </span>
+                ),
+              } as const,
+            ]
+          : []),
+        ...(showMajorCol
+          ? [
+              {
+                title: '专业',
+                key: 'majorName',
+                ellipsis: true,
+                render: (_: unknown, u: User) => (
+                  <span className="text-sm text-gray-600">{u.majorName || '—'}</span>
                 ),
               } as const,
             ]
@@ -325,7 +378,14 @@ export default function AdminUsersPanel({ scope, collegeId = '', classId = '', s
       {scope !== 'all' && (
         <div className="flex flex-wrap items-center gap-3">
           {onBack ? (
-            <Button onClick={onBack}>返回</Button>
+            <button
+              type="button"
+              onClick={onBack}
+              className="flex items-center gap-1 px-2 py-1 text-sm text-teal-600 hover:bg-teal-50 rounded-lg transition-colors cursor-pointer whitespace-nowrap flex-shrink-0"
+            >
+              <i className="ri-arrow-left-line" />
+              返回
+            </button>
           ) : null}
           <div>
             <h2 className="text-lg font-semibold text-gray-900">{pageTitle}</h2>
@@ -379,15 +439,53 @@ export default function AdminUsersPanel({ scope, collegeId = '', classId = '', s
             onChange={(e) => setQInput(e.target.value)}
           />
           {scope === 'all' ? (
-            <Select<UserRole | 'all'>
-              className="w-40"
-              value={roleFilter}
-              onChange={(v) => setRoleFilter(v)}
-              options={[
-                { value: 'all', label: '全部角色' },
-                { value: 'student', label: '学生' },
-                { value: 'teacher', label: '教师' },
-              ]}
+            <>
+              <Select<UserRole | 'all'>
+                className="w-40"
+                value={roleFilter}
+                onChange={(v) => setRoleFilter(v)}
+                options={[
+                  { value: 'all', label: '全部角色' },
+                  { value: 'student', label: '学生' },
+                  { value: 'teacher', label: '教师' },
+                ]}
+              />
+              <Cascader
+                allowClear
+                changeOnSelect
+                className="min-w-[280px]"
+                placeholder="学院 / 专业"
+                options={collegeMajorCascaderOptions}
+                value={
+                  collegeFilter && majorFilter
+                    ? [collegeFilter, majorFilter]
+                    : collegeFilter
+                      ? [collegeFilter]
+                      : undefined
+                }
+                onChange={(v) => {
+                  const arr = (v as string[] | undefined) ?? [];
+                  setCollegeFilter(arr[0] ?? '');
+                  setMajorFilter(arr[1] ?? '');
+                }}
+                showSearch={{
+                  filter: (input, path) =>
+                    path.some((opt) => String(opt.label ?? '').toLowerCase().includes(input.toLowerCase())),
+                }}
+              />
+            </>
+          ) : null}
+          {scope === 'college-teachers' ? (
+            <Select
+              allowClear
+              className="min-w-[200px]"
+              placeholder="全部专业"
+              loading={majorFilterLoading}
+              value={majorFilter || undefined}
+              onChange={(v) => setMajorFilter(v ?? '')}
+              options={majorFilterOptions}
+              showSearch
+              optionFilterProp="label"
             />
           ) : null}
           <Select<UserStatus | 'all'>
@@ -417,7 +515,7 @@ export default function AdminUsersPanel({ scope, collegeId = '', classId = '', s
             rowKey="id"
             columns={columns}
             dataSource={users}
-            scroll={{ x: scope === 'all' ? 1100 : 900 }}
+            scroll={{ x: scope === 'all' ? 1180 : 920 }}
             locale={{ emptyText: '暂无用户数据' }}
             pagination={{
               current: page,

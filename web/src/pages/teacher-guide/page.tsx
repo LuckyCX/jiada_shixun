@@ -1,6 +1,7 @@
 
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
+import { USER_GUIDE_PATH } from '../../lib/appPaths';
 
 interface GuideSection {
   id: string;
@@ -269,7 +270,7 @@ export default function TeacherGuidePage() {
                     </div>
                     <span className="text-xs font-medium text-gray-700 group-hover:text-violet-600 transition-colors">管理后台</span>
                   </Link>
-                  <Link to="/user-guide" className="flex items-center gap-2 p-3 rounded-xl bg-white border border-slate-200 hover:border-orange-400 hover:shadow-sm transition-all group cursor-pointer">
+                  <Link to={USER_GUIDE_PATH} className="flex items-center gap-2 p-3 rounded-xl bg-white border border-slate-200 hover:border-orange-400 hover:shadow-sm transition-all group cursor-pointer">
                     <div className="w-7 h-7 flex items-center justify-center rounded-lg bg-gradient-to-br from-orange-500 to-amber-500">
                       <i className="ri-book-open-line text-white text-xs"></i>
                     </div>

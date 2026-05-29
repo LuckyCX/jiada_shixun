@@ -118,8 +118,15 @@ router.get('/student/me', requireAuth(), requireStudent(), async (req, res) => {
     const { rows } = await getPool().query(
       `SELECT u.id, u.username, u.real_name AS "realName", u.student_no AS "studentNo", u.email, u.avatar_url AS "avatarUrl",
               cls.id AS "classId", cls.name AS "className",
-              col.id AS "collegeId", col.name AS "collegeName"
+              COALESCE(col_u.id, col_c.id) AS "collegeId",
+              COALESCE(col_u.name, col_c.name) AS "collegeName",
+              mj.name AS "majorName"
        FROM users u
+       LEFT JOIN colleges col_u ON col_u.id = CASE
+           WHEN trim(COALESCE(u.department, '')) ~ '^[0-9]+$' THEN trim(u.department)::bigint
+           ELSE NULL
+         END
+       LEFT JOIN majors mj ON mj.id = u.major_id
        LEFT JOIN LATERAL (
          SELECT c.id, c.name, c.college_id
          FROM class_students cs
@@ -128,7 +135,7 @@ router.get('/student/me', requireAuth(), requireStudent(), async (req, res) => {
          ORDER BY cs.joined_at DESC, cs.id DESC
          LIMIT 1
        ) cls ON (true)
-       LEFT JOIN colleges col ON col.id = cls.college_id
+       LEFT JOIN colleges col_c ON col_c.id = cls.college_id
        WHERE u.id = $1 AND u.role = 'student'`,
       [sid]
     );
@@ -145,6 +152,7 @@ router.get('/student/me', requireAuth(), requireStudent(), async (req, res) => {
       className: r.className || '',
       collegeId: r.collegeId != null ? String(r.collegeId) : '',
       collegeName: r.collegeName || '',
+      majorName: r.majorName || '',
     });
   } catch (e) {
     logError(`GET /api/student/me traceId=${req.traceId}`, e);

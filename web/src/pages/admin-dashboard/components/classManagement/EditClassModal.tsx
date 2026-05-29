@@ -1,54 +1,52 @@
-import { useState, useEffect } from 'react';
-import { Select } from 'antd';
+import { useEffect, useState } from 'react';
+import { Button, Form, Input, Select } from 'antd';
 import { Class } from './types';
 import { useCollegeDictOptions } from '../userManagement/useCollegeDictOptions';
-import { usePublicDictOptions } from './usePublicDictOptions';
+import { useMajorOptions } from '../userManagement/useMajorOptions';
 
 interface EditClassModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onConfirm: (data: {
-    name: string;
-    code: string;
-    collegeId: string;
-    academicYear: string;
-    semester: string;
-  }) => void | Promise<void>;
+  onConfirm: (data: { name: string; code: string; collegeId: string; majorId: string }) => void | Promise<void>;
   classData: Class | null;
 }
 
 export default function EditClassModal({ isOpen, onClose, onConfirm, classData }: EditClassModalProps) {
-  const [formData, setFormData] = useState({
-    name: '',
-    code: '',
-    collegeId: '',
-    academicYear: '',
-    semester: '',
-  });
+  const [form] = Form.useForm<{ name: string; code: string; collegeId: string; majorId: string }>();
+  const [submitting, setSubmitting] = useState(false);
+  const collegeId = Form.useWatch('collegeId', form);
 
   const { options: collegeOptions, loading: collegeLoading } = useCollegeDictOptions(isOpen && !!classData);
-  const { options: semesterOptions, loading: semesterLoading } = usePublicDictOptions('semester', isOpen && !!classData);
+  const { options: majorOptions, loading: majorLoading } = useMajorOptions(isOpen && !!classData, collegeId);
 
   useEffect(() => {
     if (classData) {
-      setFormData({
+      form.setFieldsValue({
         name: classData.name,
         code: classData.code,
         collegeId: classData.collegeId,
-        academicYear: classData.academicYear,
-        semester: classData.semester,
+        majorId: classData.majorId || undefined,
       });
     }
-  }, [classData]);
+  }, [classData, form]);
+
+  useEffect(() => {
+    if (!classData || !collegeId || collegeId === classData.collegeId) return;
+    form.setFieldValue('majorId', undefined);
+  }, [collegeId, classData, form]);
 
   if (!isOpen || !classData) return null;
 
-  const handleSubmit = () => {
-    if (!formData.name || !formData.code || !formData.collegeId || !formData.academicYear || !formData.semester) {
-      alert('请填写完整信息');
-      return;
+  const handleSubmit = async () => {
+    try {
+      const values = await form.validateFields();
+      setSubmitting(true);
+      await Promise.resolve(onConfirm(values));
+    } catch (e: unknown) {
+      if (e && typeof e === 'object' && 'errorFields' in (e as object)) return;
+    } finally {
+      setSubmitting(false);
     }
-    void onConfirm(formData);
   };
 
   return (
@@ -61,76 +59,42 @@ export default function EditClassModal({ isOpen, onClose, onConfirm, classData }
           </button>
         </div>
 
-        <div className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">班级名称</label>
-            <input
-              type="text"
-              value={formData.name}
-              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-              placeholder="例如：创新创业实践班（2024春）"
-              className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500"
-            />
-          </div>
-
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">所属学院</label>
+        <Form form={form} layout="vertical" className="space-y-1" requiredMark>
+          <Form.Item name="name" label="班级名称" rules={[{ required: true, message: '请输入班级名称' }]}>
+            <Input placeholder="班级名称" />
+          </Form.Item>
+          <Form.Item name="code" label="班级编码" rules={[{ required: true, message: '请输入班级编码' }]}>
+            <Input placeholder="班级编码" />
+          </Form.Item>
+          <Form.Item name="collegeId" label="所属学院" rules={[{ required: true, message: '请选择学院' }]}>
+            <Select loading={collegeLoading} options={collegeOptions} showSearch optionFilterProp="label" />
+          </Form.Item>
+          <Form.Item name="majorId" label="所属专业" rules={[{ required: true, message: '请选择专业' }]}>
             <Select
-              className="w-full"
-              placeholder="请选择学院"
-              loading={collegeLoading}
-              options={collegeOptions}
-              value={formData.collegeId || undefined}
-              onChange={(v) => setFormData({ ...formData, collegeId: v ?? '' })}
+              loading={majorLoading}
+              options={majorOptions}
               showSearch
               optionFilterProp="label"
+              disabled={!collegeId}
+              placeholder={collegeId ? '请选择专业' : '请先选择学院'}
             />
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">学年</label>
-              <input
-                type="text"
-                value={formData.academicYear}
-                onChange={(e) => setFormData({ ...formData, academicYear: e.target.value })}
-                placeholder="例如：2023-2024"
-                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">学期</label>
-              <Select
-                className="w-full"
-                placeholder="请选择学期"
-                loading={semesterLoading}
-                options={semesterOptions}
-                value={formData.semester || undefined}
-                onChange={(v) => setFormData({ ...formData, semester: v ?? '' })}
-              />
-            </div>
-          </div>
-
-          <p className="text-sm text-gray-500">任课教师请在列表中点击「指派教师」修改。</p>
-        </div>
+          </Form.Item>
+        </Form>
 
         <div className="flex gap-3 mt-6">
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex-1 px-4 py-2.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 whitespace-nowrap"
-          >
+          <Button block size="large" onClick={onClose}>
             取消
-          </button>
-          <button
-            type="button"
-            onClick={handleSubmit}
-            className="flex-1 px-4 py-2.5 bg-teal-600 text-white rounded-lg hover:bg-teal-700 whitespace-nowrap"
+          </Button>
+          <Button
+            type="primary"
+            block
+            size="large"
+            className="!bg-teal-600"
+            loading={submitting}
+            onClick={() => void handleSubmit()}
           >
-            保存修改
-          </button>
+            保存
+          </Button>
         </div>
       </div>
     </div>

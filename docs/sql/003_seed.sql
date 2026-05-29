@@ -76,14 +76,8 @@ INSERT INTO ai_scene_bindings (scene_code, model_id, is_enabled) VALUES
 INSERT INTO ai_prompt_templates (scene_code, template_name, template_content, version_no, is_enabled, created_by) VALUES
   ('default', 'system', '你是面向高校创新创业实训的助手，回答简洁、可执行。', '1.0', true, 1);
 
--- 学院（独立表；管理端「学院管理」维护，不再使用字典 college）
-INSERT INTO colleges (name, status) VALUES
-  ('计算机科学与技术学院', 'active'),
-  ('经济管理学院', 'active'),
-  ('外国语学院', 'active'),
-  ('数学与统计学院', 'active'),
-  ('教务处', 'active'),
-  ('学生处', 'active');
+-- 学院与专业（部署初始化数据，见 docs/sql/037_colleges_majors_seed.sql 可单独重导）
+\ir 037_colleges_majors_seed.sql
 
 -- 班级状态（管理端筛选、列表展示；公开接口 typeCode=class_status）
 INSERT INTO dict_type (name, code, status, remark) VALUES

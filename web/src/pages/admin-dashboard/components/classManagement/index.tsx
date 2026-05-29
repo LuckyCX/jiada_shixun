@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { Button, Input, Select, Space, message } from 'antd';
+import { Button, Cascader, Input, Select, Space, message } from 'antd';
 import { Class, Student } from './types';
 import type { User } from '../userManagement/types';
 import { useCollegeDictOptions } from '../userManagement/useCollegeDictOptions';
-import { usePublicDictOptions } from './usePublicDictOptions';
+import { useMajorOptions } from '../userManagement/useMajorOptions';
 import {
   createAdminClass,
   deleteAdminClass,
@@ -28,6 +28,8 @@ function mapClassRow(r: AdminClassListRow): Class {
     code: r.code,
     collegeId: cid,
     department: cid,
+    majorId: r.majorId || '',
+    majorName: r.majorName || '',
     academicYear: r.academicYear,
     semester: r.semester,
     studentCount: r.studentCount,
@@ -54,14 +56,31 @@ export default function ClassManagement() {
   const [detailStudents, setDetailStudents] = useState<Student[]>([]);
   const [listLoading, setListLoading] = useState(true);
 
-  const { options: collegeOptions, loading: collegeLoading, labelByValue: deptLabel } = useCollegeDictOptions(true);
-  const { options: classStatusOptions, loading: classStatusLoading, labelByValue: classStatusLabel } =
-    usePublicDictOptions('class_status', true);
-  const { labelByValue: semesterLabel } = usePublicDictOptions('semester', true);
-
   const [searchKeyword, setSearchKeyword] = useState('');
   const [collegeIdFilter, setCollegeIdFilter] = useState('');
-  const [statusFilter, setStatusFilter] = useState('');
+  const [majorFilter, setMajorFilter] = useState('');
+
+  const { options: collegeOptions, loading: collegeLoading, labelByValue: deptLabel } = useCollegeDictOptions(true);
+  const { rows: allMajors, loading: majorLoading } = useMajorOptions(true);
+
+  const collegeMajorCascaderOptions = useMemo(
+    () =>
+      collegeOptions.map((c) => ({
+        value: c.value,
+        label: c.label,
+        children: allMajors
+          .filter((m) => m.collegeId === c.value)
+          .map((m) => ({ value: m.id, label: m.name })),
+      })),
+    [collegeOptions, allMajors]
+  );
+
+  const collegeMajorCascaderValue =
+    collegeIdFilter && majorFilter
+      ? ([collegeIdFilter, majorFilter] as [string, string])
+      : collegeIdFilter
+        ? ([collegeIdFilter] as [string])
+        : undefined;
 
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
@@ -76,10 +95,17 @@ export default function ClassManagement() {
     setCollegeIdFilter(cid && /^\d+$/.test(cid) ? cid : '');
   }, [searchParams]);
 
+  useEffect(() => {
+    setMajorFilter('');
+  }, [collegeIdFilter]);
+
   const loadClasses = useCallback(async () => {
     setListLoading(true);
     try {
-      const rows = await fetchClassesList(collegeIdFilter || undefined);
+      const rows = await fetchClassesList({
+        collegeId: collegeIdFilter || undefined,
+        majorId: majorFilter || undefined,
+      });
       setClasses(rows.map(mapClassRow));
     } catch (e: unknown) {
       message.error(e instanceof Error ? e.message : '加载班级失败');
@@ -87,7 +113,7 @@ export default function ClassManagement() {
     } finally {
       setListLoading(false);
     }
-  }, [collegeIdFilter]);
+  }, [collegeIdFilter, majorFilter]);
 
   useEffect(() => {
     void loadClasses();
@@ -112,8 +138,8 @@ export default function ClassManagement() {
     const matchSearch =
       cls.name.includes(searchKeyword) || cls.code.includes(searchKeyword);
     const matchCollege = !collegeIdFilter || cls.collegeId === collegeIdFilter;
-    const matchStatus = !statusFilter || cls.status === statusFilter;
-    return matchSearch && matchCollege && matchStatus;
+    const matchMajor = !majorFilter || cls.majorId === majorFilter;
+    return matchSearch && matchCollege && matchMajor;
   });
 
   const totalClasses = classes.length;
@@ -129,9 +155,8 @@ export default function ClassManagement() {
     try {
       await createAdminClass({
         collegeId: data.collegeId,
+        majorId: data.majorId,
         name: data.name,
-        academicYear: data.academicYear,
-        semester: data.semester,
         status: '1',
       });
       setShowCreateModal(false);
@@ -147,8 +172,7 @@ export default function ClassManagement() {
     name: string;
     code: string;
     collegeId: string;
-    academicYear: string;
-    semester: string;
+    majorId: string;
   }) => {
     if (!selectedClass) return;
     try {
@@ -156,8 +180,7 @@ export default function ClassManagement() {
         name: data.name,
         code: data.code,
         collegeId: data.collegeId,
-        academicYear: data.academicYear,
-        semester: data.semester,
+        majorId: data.majorId,
       });
       setShowEditModal(false);
       setSelectedClass(null);
@@ -236,28 +259,24 @@ export default function ClassManagement() {
             value={searchKeyword}
             onChange={(e) => setSearchKeyword(e.target.value)}
           />
-          <Space wrap>
-            <Select
-              allowClear
-              placeholder="全部学院"
-              className="min-w-[200px]"
-              loading={collegeLoading}
-              options={collegeOptions}
-              value={collegeIdFilter || undefined}
-              onChange={(v) => setCollegeIdFilter(v ?? '')}
-              showSearch
-              optionFilterProp="label"
-            />
-            <Select
-              allowClear
-              placeholder="全部状态"
-              className="min-w-[180px]"
-              loading={classStatusLoading}
-              options={classStatusOptions}
-              value={statusFilter || undefined}
-              onChange={(v) => setStatusFilter(v ?? '')}
-            />
-          </Space>
+          <Cascader
+            allowClear
+            changeOnSelect
+            className="min-w-[280px]"
+            placeholder="学院 / 专业"
+            options={collegeMajorCascaderOptions}
+            value={collegeMajorCascaderValue}
+            loading={collegeLoading || majorLoading}
+            onChange={(v) => {
+              const arr = (v as string[] | undefined) ?? [];
+              setCollegeIdFilter(arr[0] ?? '');
+              setMajorFilter(arr[1] ?? '');
+            }}
+            showSearch={{
+              filter: (input, path) =>
+                path.some((opt) => String(opt.label ?? '').toLowerCase().includes(input.toLowerCase())),
+            }}
+          />
 
           <button
             type="button"
@@ -275,7 +294,7 @@ export default function ClassManagement() {
           <thead className="bg-gray-50 border-b border-gray-200">
             <tr>
               <th className="px-6 py-4 text-left text-sm font-semibold text-gray-900">班级名称</th>
-              <th className="px-6 py-4 text-left text-sm font-semibold text-gray-900">所属学院</th>
+              <th className="px-6 py-4 text-left text-sm font-semibold text-gray-900">学院 / 专业</th>
               <th className="px-6 py-4 text-left text-sm font-semibold text-gray-900">学生人数</th>
               <th className="px-6 py-4 text-left text-sm font-semibold text-gray-900">创建时间</th>
               <th className="px-6 py-4 text-left text-sm font-semibold text-gray-900">状态</th>
@@ -300,11 +319,11 @@ export default function ClassManagement() {
                 <tr key={cls.id} className="hover:bg-gray-50">
                   <td className="px-6 py-4">
                     <div className="font-medium text-gray-900">{cls.name}</div>
-                    <div className="text-sm text-gray-600">
-                      {cls.academicYear} {semesterLabel(cls.semester)}
-                    </div>
                   </td>
-                  <td className="px-6 py-4 text-gray-700 font-mono text-sm">{deptLabel(cls.collegeId)}</td>
+                  <td className="px-6 py-4 text-gray-700 text-sm">
+                    <div>{deptLabel(cls.collegeId)}</div>
+                    <div className="text-gray-500">{cls.majorName || '—'}</div>
+                  </td>
                   <td className="px-6 py-4">
                     <span className="text-teal-600 font-semibold">{cls.studentCount}</span>
                     <span className="text-gray-600"> 人</span>
@@ -320,7 +339,7 @@ export default function ClassManagement() {
                             : 'bg-gray-100 text-gray-700'
                       }`}
                     >
-                      {classStatusLabel(cls.status)}
+                      {cls.status === '0' ? '待开班' : cls.status === '2' ? '已结束' : '进行中'}
                     </span>
                   </td>
                   <td className="px-6 py-4">

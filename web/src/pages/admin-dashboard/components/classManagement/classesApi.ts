@@ -5,6 +5,8 @@ export type AdminClassListRow = {
   name: string;
   code: string;
   collegeId: string;
+  majorId: string;
+  majorName: string;
   academicYear: string;
   semester: string;
   department: string;
@@ -17,18 +19,20 @@ export type AdminClassListRow = {
   studentCount: number;
 };
 
-export async function fetchClassesList(collegeId?: string): Promise<AdminClassListRow[]> {
-  const q = collegeId ? `?collegeId=${encodeURIComponent(collegeId)}` : '';
-  return adminFetch(`/api/admin/classes${q}`);
+export async function fetchClassesList(params?: { collegeId?: string; majorId?: string }): Promise<AdminClassListRow[]> {
+  const q = new URLSearchParams();
+  if (params?.collegeId) q.set('collegeId', params.collegeId);
+  if (params?.majorId) q.set('majorId', params.majorId);
+  const qs = q.toString();
+  return adminFetch(`/api/admin/classes${qs ? `?${qs}` : ''}`);
 }
 
 export async function createAdminClass(body: {
   collegeId: string;
+  majorId: string;
   name: string;
   /** 不传则由服务端自动生成 */
   code?: string;
-  academicYear: string;
-  semester: string;
   teacherId?: string;
   status?: string;
 }): Promise<AdminClassListRow> {
@@ -41,8 +45,7 @@ export async function updateAdminClass(
     name: string;
     code: string;
     collegeId: string;
-    academicYear: string;
-    semester: string;
+    majorId: string;
     teacherId: string;
     status: string;
   }>

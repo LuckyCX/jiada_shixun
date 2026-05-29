@@ -117,10 +117,35 @@ function validateQuestionsPayload(questions) {
   return null;
 }
 
+function absPathFromVideoStorageKey(storageKey) {
+  const key = String(storageKey || '').trim();
+  if (!key) return null;
+  const abs = path.isAbsolute(key) ? key : path.join(NODE_ROOT, key);
+  const normalized = path.normalize(abs);
+  const uploadsRoot = path.normalize(path.join(NODE_ROOT, 'uploads'));
+  if (!normalized.startsWith(uploadsRoot)) return null;
+  return normalized;
+}
+
+function sendIntroVideoFile(res, storageKey) {
+  const abs = absPathFromVideoStorageKey(storageKey);
+  if (!abs || !fs.existsSync(abs)) {
+    res.status(404).json({ code: 40404, message: '视频不存在' });
+    return false;
+  }
+  const ext = path.extname(abs).toLowerCase();
+  const type =
+    ext === '.webm' ? 'video/webm' : ext === '.mp4' ? 'video/mp4' : 'application/octet-stream';
+  res.setHeader('Content-Type', type);
+  res.sendFile(abs);
+  return true;
+}
+
 async function listPendingStudentsForClass(pool, classId) {
   const { rows } = await pool.query(
-    `SELECT u.id, u.real_name AS name, u.student_no AS "studentNo", u.email,
+    `SELECT u.id, u.real_name AS name, u.student_no AS "studentNo", u.email, u.avatar_url,
             s.ai_matched_role AS "aiMatchedRole", s.ai_analysis_raw AS "aiAnalysisRaw",
+            s.video_storage_key AS "videoStorageKey",
             s.status AS submission_status
      FROM student_team_formation_submissions s
      JOIN users u ON u.id = s.student_id
@@ -136,6 +161,8 @@ async function listPendingStudentsForClass(pool, classId) {
       studentId: r.studentNo || '',
       studentNo: r.studentNo || '',
       email: r.email || '',
+      avatarUrl: r.avatar_url || '',
+      hasIntroVideo: Boolean(r.videoStorageKey),
       aiMatchedRole: r.aiMatchedRole || '',
       aiMatchedRoleLabel: TEAM_ROLE_LABELS[r.aiMatchedRole] || r.aiMatchedRole || '',
       status: 'pending',
@@ -285,12 +312,15 @@ async function loadTeamsWithMembers(pool, classId, statuses = ['draft', 'confirm
   const { rows: memRows } = await pool.query(
     `SELECT m.team_id AS "teamId", m.student_id AS "studentId", m.ai_matched_role AS "aiMatchedRole",
             m.dimension_profile AS "dimensionProfile",
-            u.real_name AS name, u.student_no AS "studentNo", u.email
+            u.real_name AS name, u.student_no AS "studentNo", u.email, u.avatar_url,
+            sub.video_storage_key AS "videoStorageKey"
      FROM teacher_personal_class_team_members m
      JOIN users u ON u.id = m.student_id
+     LEFT JOIN student_team_formation_submissions sub
+       ON sub.student_id = m.student_id AND sub.teacher_personal_class_id = $2
      WHERE m.team_id = ANY($1::bigint[])
      ORDER BY m.team_id, m.id ASC`,
-    [teamIds]
+    [teamIds, classId]
   );
   const byTeam = new Map(teamIds.map((id) => [String(id), []]));
   for (const m of memRows) {
@@ -300,6 +330,8 @@ async function loadTeamsWithMembers(pool, classId, statuses = ['draft', 'confirm
       id: String(m.studentId),
       name: m.name || m.email || '',
       studentId: m.studentNo || '',
+      avatarUrl: m.avatar_url || '',
+      hasIntroVideo: Boolean(m.videoStorageKey),
       aiMatchedRole: m.aiMatchedRole || '',
       aiMatchedRoleLabel: TEAM_ROLE_LABELS[m.aiMatchedRole] || m.aiMatchedRole || '',
       profile,
@@ -413,8 +445,12 @@ const uploadVideo = multer({
   storage,
   limits: { fileSize: MAX_VIDEO_BYTES },
   fileFilter(_req, file, cb) {
-    if (file.mimetype && file.mimetype.startsWith('video/')) cb(null, true);
-    else cb(new Error('仅支持视频文件'));
+    const mime = String(file.mimetype || '').toLowerCase();
+    const ext = path.extname(file.originalname || '').toLowerCase();
+    const okMime = mime === 'video/mp4' || mime === 'video/webm';
+    const okExt = ext === '.mp4' || ext === '.webm';
+    if (okMime || okExt) cb(null, true);
+    else cb(new Error('仅支持 MP4、WebM 格式（浏览器可在线预览）'));
   },
 });
 
@@ -666,6 +702,61 @@ router.put('/student/team-formation/answers', requireAuth(), requireStudent(), a
   }
 });
 
+router.get('/student/team-formation/video', requireAuth(), requireStudent(), async (req, res) => {
+  try {
+    const sid = studentIdFromReq(req);
+    const classId = parseClassId(req.query.classId);
+    if (!sid || !classId) return bad(req, res, 400, 40003, '参数无效');
+    const pool = getPool();
+    if (!(await studentEnrolledInClass(pool, sid, classId))) {
+      return bad(req, res, 403, 40301, '未加入该班级');
+    }
+    const { rows } = await pool.query(
+      `SELECT video_storage_key FROM student_team_formation_submissions
+       WHERE teacher_personal_class_id = $1 AND student_id = $2`,
+      [classId, sid]
+    );
+    const key = rows[0]?.video_storage_key;
+    if (!key) return bad(req, res, 404, 40404, '暂无视频');
+    if (!sendIntroVideoFile(res, key)) return;
+  } catch (e) {
+    logError(`GET student video traceId=${req.traceId}`, e);
+    return bad(req, res, 500, 50000, e.message);
+  }
+});
+
+router.get(
+  '/teacher/personal-classes/:classId/team-formation/students/:studentId/intro-video',
+  requireAuth(),
+  requireTeacher(),
+  async (req, res) => {
+    try {
+      const tid = teacherIdFromReq(req);
+      const classId = parseClassId(req.params.classId);
+      const studentId = parseClassId(req.params.studentId);
+      if (!tid || !classId || !studentId) return bad(req, res, 400, 40003, '参数无效');
+      const pool = getPool();
+      if (!(await ownsPersonalClass(pool, tid, classId))) {
+        return bad(req, res, 404, 40402, '班级不存在或无权操作');
+      }
+      const { rows } = await pool.query(
+        `SELECT s.video_storage_key
+         FROM student_team_formation_submissions s
+         JOIN teacher_personal_class_students m
+           ON m.student_id = s.student_id AND m.teacher_personal_class_id = s.teacher_personal_class_id
+         WHERE s.teacher_personal_class_id = $1 AND s.student_id = $2`,
+        [classId, studentId]
+      );
+      const key = rows[0]?.video_storage_key;
+      if (!key) return bad(req, res, 404, 40404, '暂无个人介绍视频');
+      if (!sendIntroVideoFile(res, key)) return;
+    } catch (e) {
+      logError(`GET teacher intro-video traceId=${req.traceId}`, e);
+      return bad(req, res, 500, 50000, e.message);
+    }
+  }
+);
+
 router.post(
   '/student/team-formation/video',
   requireAuth(),
@@ -775,7 +866,7 @@ ${DIMENSION_SCORING_PROMPT}
 
     const userMsg = `【问卷题目与作答】\n${qaText}`;
 
-    sseWrite(res, 'status', { message: '正在连接模型进行分析…' });
+    sseWrite(res, 'status', { message: '正在分析…' });
 
     let inThinkingTag = false;
     const onEvent = ({ kind, text }) => {

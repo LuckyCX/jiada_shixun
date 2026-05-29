@@ -30,10 +30,14 @@ function mapUserRow(r) {
     id: String(r.id),
     username: r.username,
     name: r.real_name || r.username,
+    avatarUrl: r.avatar_url || '',
     email: r.email || '',
     studentId: r.student_no || undefined,
     employeeId: r.employee_no || undefined,
     department: r.department || '',
+    collegeName: r.college_name || '',
+    majorId: r.major_id != null ? String(r.major_id) : '',
+    majorName: r.major_name || '',
     role: r.role,
     status: r.status,
     lastLogin: fmtLoginAt(r.last_login_at),
@@ -93,6 +97,12 @@ router.get('/admin/users', requireAuth(), requireAdmin(), async (req, res) => {
       params.push(collegeIdQ);
       i++;
     }
+    const majorIdQ = String(req.query.majorId || '').trim();
+    if (majorIdQ && /^\d+$/.test(majorIdQ)) {
+      where.push(`u.major_id = $${i}`);
+      params.push(Number(majorIdQ));
+      i++;
+    }
     const whereSql = where.join(' AND ');
 
     const { rows: statRows } = await getPool().query(
@@ -117,17 +127,31 @@ router.get('/admin/users', requireAuth(), requireAdmin(), async (req, res) => {
     const listParams = [...params, limit, offset];
     const { rows } = await getPool().query(
       `SELECT u.id, u.username, u.real_name, u.email, u.role, u.status, u.student_no, u.employee_no, u.department,
-              u.last_login_at, u.created_at,
+              COALESCE(u.avatar_url, '') AS avatar_url,
+              u.major_id, u.last_login_at, u.created_at,
+              COALESCE(col_u.name, col_cls.name) AS college_name,
+              COALESCE(mj.name, mj_cls.name) AS major_name,
               cls.class_id, cls.class_name
        FROM users u
+       LEFT JOIN colleges col_u ON (
+         (trim(COALESCE(u.department, '')) ~ '^[0-9]+$' AND col_u.id = trim(u.department)::bigint)
+         OR (
+           trim(COALESCE(u.department, '')) <> ''
+           AND trim(COALESCE(u.department, '')) !~ '^[0-9]+$'
+           AND col_u.name = trim(u.department)
+         )
+       )
+       LEFT JOIN majors mj ON mj.id = u.major_id
        LEFT JOIN LATERAL (
-         SELECT c.id AS class_id, c.name AS class_name
+         SELECT c.id AS class_id, c.name AS class_name, c.college_id, c.major_id
          FROM class_students cs
          JOIN classes c ON c.id = cs.class_id
          WHERE cs.student_id = u.id
          ORDER BY cs.joined_at DESC
          LIMIT 1
        ) cls ON (true)
+       LEFT JOIN colleges col_cls ON col_cls.id = cls.college_id
+       LEFT JOIN majors mj_cls ON mj_cls.id = cls.major_id
        WHERE ${whereSql}
        ORDER BY u.id DESC
        LIMIT $${i} OFFSET $${i + 1}`,
@@ -149,10 +173,12 @@ router.get('/admin/users', requireAuth(), requireAdmin(), async (req, res) => {
 
 router.post('/admin/users', requireAuth(), requireAdmin(), async (req, res) => {
   try {
-    const { name, role, idNumber, email, department, password } = req.body || {};
+    const { name, role, idNumber, email, department, majorId, password } = req.body || {};
     const rn = String(name || '').trim();
     const id = String(idNumber || '').trim();
     const dept = String(department || '').trim();
+    const majorIdNum =
+      majorId != null && String(majorId).trim() !== '' ? Number(String(majorId).trim()) : null;
     const em = email != null && String(email).trim() !== '' ? String(email).trim() : null;
     const pwd = String(password || '');
 
@@ -169,6 +195,21 @@ router.post('/admin/users', requireAuth(), requireAdmin(), async (req, res) => {
       [collegeIdNum]
     );
     if (!co.length) return bad(req, res, 400, 40007, '学院不存在或已停用');
+    let majorIdDb = null;
+    if (role === 'student' || role === 'teacher') {
+      if (!majorIdNum || !Number.isFinite(majorIdNum) || majorIdNum <= 0) {
+        return bad(req, res, 400, 40009, '请选择专业');
+      }
+      const { rows: mj } = await getPool().query(
+        `SELECT id, college_id FROM majors WHERE id = $1 AND status = 'active'`,
+        [majorIdNum]
+      );
+      if (!mj.length) return bad(req, res, 400, 40010, '专业不存在或已停用');
+      if (Number(mj[0].college_id) !== collegeIdNum) {
+        return bad(req, res, 400, 40011, '专业须属于所选学院');
+      }
+      majorIdDb = majorIdNum;
+    }
     if (!pwd) return bad(req, res, 400, 40005, '缺少初始密码');
     if (em && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) {
       return bad(req, res, 400, 40006, '邮箱格式错误');
@@ -182,10 +223,10 @@ router.post('/admin/users', requireAuth(), requireAdmin(), async (req, res) => {
     const employee_no = role === 'teacher' ? id : null;
 
     const { rows } = await getPool().query(
-      `INSERT INTO users (username, password_hash, real_name, email, role, status, student_no, employee_no, department)
-       VALUES ($1, $2, $3, $4, $5, 'active', $6, $7, $8)
-       RETURNING id, username, real_name, email, role, status, student_no, employee_no, department, last_login_at, created_at`,
-      [id, password_hash, rn, em, role, student_no, employee_no, dept]
+      `INSERT INTO users (username, password_hash, real_name, email, role, status, student_no, employee_no, department, major_id)
+       VALUES ($1, $2, $3, $4, $5, 'active', $6, $7, $8, $9)
+       RETURNING id, username, real_name, email, role, status, student_no, employee_no, department, major_id, last_login_at, created_at`,
+      [id, password_hash, rn, em, role, student_no, employee_no, dept, majorIdDb]
     );
     const u = rows[0];
     return ok(req, res, mapUserRow({ ...u, class_id: null, class_name: null }));
@@ -200,7 +241,7 @@ router.patch('/admin/users/:id', requireAuth(), requireAdmin(), async (req, res)
     const id = Number(req.params.id);
     if (!Number.isFinite(id) || id <= 0) return bad(req, res, 400, 40001, '无效用户 id');
 
-    const { name, email, department, role, idNumber, classId } = req.body || {};
+    const { name, email, department, majorId, role, idNumber, classId } = req.body || {};
     const sets = [];
     const params = [];
     let pi = 1;
@@ -233,6 +274,28 @@ router.patch('/admin/users/:id', requireAuth(), requireAdmin(), async (req, res)
       if (!co.length) return bad(req, res, 400, 40008, '学院不存在或已停用');
       sets.push(`department = $${pi++}`);
       params.push(v);
+    }
+    if (majorId !== undefined) {
+      const { rows: ur0 } = await getPool().query(`SELECT role, department FROM users WHERE id = $1`, [id]);
+      if (!ur0.length) return bad(req, res, 404, 40401, '用户不存在');
+      const effRole = role !== undefined ? String(role).trim() : ur0[0].role;
+      if (effRole !== 'student' && effRole !== 'teacher') return bad(req, res, 400, 40012, '仅学生或教师可设置专业');
+      const mid =
+        majorId === '' || majorId == null ? null : Number(String(majorId).trim());
+      if (!mid || !Number.isFinite(mid)) return bad(req, res, 400, 40009, '请选择专业');
+      const deptForMajor =
+        department !== undefined ? String(department).trim() : String(ur0[0].department || '').trim();
+      const collegeIdNum = Number(deptForMajor);
+      const { rows: mj } = await getPool().query(
+        `SELECT id, college_id FROM majors WHERE id = $1 AND status = 'active'`,
+        [mid]
+      );
+      if (!mj.length) return bad(req, res, 400, 40010, '专业不存在或已停用');
+      if (Number.isFinite(collegeIdNum) && collegeIdNum > 0 && Number(mj[0].college_id) !== collegeIdNum) {
+        return bad(req, res, 400, 40011, '专业须属于所选学院');
+      }
+      sets.push(`major_id = $${pi++}`);
+      params.push(mid);
     }
 
     let newUsername;
@@ -291,17 +354,31 @@ router.patch('/admin/users/:id', requireAuth(), requireAdmin(), async (req, res)
 
     const { rows } = await getPool().query(
       `SELECT u.id, u.username, u.real_name, u.email, u.role, u.status, u.student_no, u.employee_no, u.department,
-              u.last_login_at, u.created_at,
+              COALESCE(u.avatar_url, '') AS avatar_url,
+              u.major_id, u.last_login_at, u.created_at,
+              COALESCE(col_u.name, col_cls.name) AS college_name,
+              COALESCE(mj.name, mj_cls.name) AS major_name,
               cls.class_id, cls.class_name
        FROM users u
+       LEFT JOIN colleges col_u ON (
+         (trim(COALESCE(u.department, '')) ~ '^[0-9]+$' AND col_u.id = trim(u.department)::bigint)
+         OR (
+           trim(COALESCE(u.department, '')) <> ''
+           AND trim(COALESCE(u.department, '')) !~ '^[0-9]+$'
+           AND col_u.name = trim(u.department)
+         )
+       )
+       LEFT JOIN majors mj ON mj.id = u.major_id
        LEFT JOIN LATERAL (
-         SELECT c.id AS class_id, c.name AS class_name
+         SELECT c.id AS class_id, c.name AS class_name, c.college_id, c.major_id
          FROM class_students cs
          JOIN classes c ON c.id = cs.class_id
          WHERE cs.student_id = u.id
          ORDER BY cs.joined_at DESC
          LIMIT 1
        ) cls ON (true)
+       LEFT JOIN colleges col_cls ON col_cls.id = cls.college_id
+       LEFT JOIN majors mj_cls ON mj_cls.id = cls.major_id
        WHERE u.id = $1`,
       [id]
     );
@@ -388,8 +465,10 @@ router.post('/admin/users/batch', requireAuth(), requireAdmin(), async (req, res
       const emailRaw = row.email != null ? String(row.email).trim() : '';
       const email = emailRaw === '' ? null : emailRaw;
       const collegeIdRaw = row.collegeId != null ? String(row.collegeId).trim() : '';
+      const majorIdRaw = row.majorId != null ? String(row.majorId).trim() : '';
       const classIdRaw = row.classId != null ? String(row.classId).trim() : '';
       const collegeIdNum = collegeIdRaw ? Number(collegeIdRaw) : NaN;
+      const majorIdNum = majorIdRaw ? Number(majorIdRaw) : NaN;
       const classIdNum = classIdRaw ? Number(classIdRaw) : NaN;
 
       if (!name) {
@@ -407,6 +486,27 @@ router.post('/admin/users/batch', requireAuth(), requireAdmin(), async (req, res
       if (!collegeIdRaw || !Number.isFinite(collegeIdNum) || collegeIdNum <= 0) {
         errors.push({ row: rowNo, reason: '学院ID不能为空或无效' });
         continue;
+      }
+      if (
+        (role === 'student' || role === 'teacher') &&
+        (!majorIdRaw || !Number.isFinite(majorIdNum) || majorIdNum <= 0)
+      ) {
+        errors.push({ row: rowNo, reason: '须填写有效的专业ID' });
+        continue;
+      }
+      if (role === 'teacher') {
+        const { rows: mjT } = await getPool().query(
+          `SELECT id, college_id FROM majors WHERE id = $1 AND status = 'active'`,
+          [majorIdNum]
+        );
+        if (!mjT.length) {
+          errors.push({ row: rowNo, reason: '专业不存在或已停用' });
+          continue;
+        }
+        if (Number(mjT[0].college_id) !== collegeIdNum) {
+          errors.push({ row: rowNo, reason: '专业不属于所选学院' });
+          continue;
+        }
       }
       if (role === 'student' && (!classIdRaw || !Number.isFinite(classIdNum) || classIdNum <= 0)) {
         errors.push({ row: rowNo, reason: '学生须填写有效的班级ID' });
@@ -429,6 +529,18 @@ router.post('/admin/users/batch', requireAuth(), requireAdmin(), async (req, res
         }
 
         if (role === 'student') {
+          const { rows: mj } = await getPool().query(
+            `SELECT id, college_id FROM majors WHERE id = $1 AND status = 'active'`,
+            [majorIdNum]
+          );
+          if (!mj.length) {
+            errors.push({ row: rowNo, reason: '专业不存在或已停用' });
+            continue;
+          }
+          if (Number(mj[0].college_id) !== collegeIdNum) {
+            errors.push({ row: rowNo, reason: '专业不属于所选学院' });
+            continue;
+          }
           const { rows: cl } = await getPool().query(`SELECT id, college_id FROM classes WHERE id = $1`, [classIdNum]);
           if (!cl.length) {
             errors.push({ row: rowNo, reason: '班级不存在' });
@@ -449,11 +561,12 @@ router.post('/admin/users/batch', requireAuth(), requireAdmin(), async (req, res
         const student_no = role === 'student' ? idNumber : null;
         const employee_no = role === 'teacher' ? idNumber : null;
         const department = String(collegeIdNum);
+        const majorIdDb = role === 'student' || role === 'teacher' ? majorIdNum : null;
         const ins = await getPool().query(
-          `INSERT INTO users (username, password_hash, real_name, email, role, status, student_no, employee_no, department)
-           VALUES ($1, $2, $3, $4, $5, 'active', $6, $7, $8)
+          `INSERT INTO users (username, password_hash, real_name, email, role, status, student_no, employee_no, department, major_id)
+           VALUES ($1, $2, $3, $4, $5, 'active', $6, $7, $8, $9)
            RETURNING id`,
-          [idNumber, password_hash, name, email, role, student_no, employee_no, department]
+          [idNumber, password_hash, name, email, role, student_no, employee_no, department, majorIdDb]
         );
         const newUserId = ins.rows[0].id;
         if (role === 'student' && classIdNum) {

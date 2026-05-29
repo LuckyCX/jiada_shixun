@@ -273,7 +273,7 @@ export default function CourseSettingsPage({ embedded = false, personalClass = n
             <div className="flex items-center gap-2 bg-gray-100 rounded-xl p-1">
               {[
                 { key: 'deadline' as DetailTab, label: '截止时间配置', icon: 'ri-calendar-schedule-line' },
-                { key: 'scoring' as DetailTab, label: '评分标准设置', icon: 'ri-scales-3-line' },
+                // { key: 'scoring' as DetailTab, label: '评分标准设置', icon: 'ri-scales-3-line' },
                 ...(selectedStage.courseModuleKey
                   ? [{ key: 'content' as DetailTab, label: '课程资源', icon: 'ri-folder-settings-line' }]
                   : []),

@@ -17,6 +17,8 @@ export type TeacherProfile = {
   avatarUrl: string;
   departmentCollegeId: string;
   collegeName: string;
+  majorId: string;
+  majorName: string;
 };
 
 export type TeacherPersonalClassRow = {
@@ -58,11 +60,7 @@ export async function listTeacherPersonalClasses(): Promise<TeacherPersonalClass
   return teacherFetch('/api/teacher/personal-classes') as Promise<TeacherPersonalClassRow[]>;
 }
 
-export async function createTeacherPersonalClass(body: {
-  name: string;
-  academicYear: string;
-  semester: string;
-}): Promise<TeacherPersonalClassRow> {
+export async function createTeacherPersonalClass(body: { name: string }): Promise<TeacherPersonalClassRow> {
   return teacherFetch('/api/teacher/personal-classes', {
     method: 'POST',
     body: JSON.stringify(body),
@@ -83,6 +81,18 @@ export async function fetchPublicColleges(): Promise<{ id: string; name: string 
   return j.data as { id: string; name: string }[];
 }
 
+export type PublicMajorOption = { id: string; name: string; collegeId: string; collegeName: string };
+
+export async function fetchPublicMajors(collegeId?: string): Promise<PublicMajorOption[]> {
+  const q = collegeId ? `?collegeId=${encodeURIComponent(collegeId)}` : '';
+  const r = await fetch(`/api/public/majors${q}`);
+  const j = await r.json().catch(() => ({ code: -1, message: '无效 JSON' }));
+  if (!r.ok || j.code !== 0) {
+    throw new Error(typeof j.message === 'string' ? j.message : `HTTP ${r.status}`);
+  }
+  return j.data as PublicMajorOption[];
+}
+
 export type TeacherCatalogAdminClass = { id: string; name: string };
 
 export type TeacherPooledStudent = {
@@ -91,26 +101,29 @@ export type TeacherPooledStudent = {
   email: string;
   studentNo: string;
   collegeName: string;
-  /** 最近所在教务班级名 */
-  adminClassName: string;
+  majorName: string;
 };
 
 export type TeacherRosterStudent = {
   id: string;
   name: string;
   email: string;
+  avatarUrl?: string;
   studentNo: string;
   collegeName: string;
+  majorName: string;
 };
 
-export async function fetchTeacherAdminClasses(collegeId: string): Promise<TeacherCatalogAdminClass[]> {
-  const q = new URLSearchParams({ collegeId });
+export async function fetchTeacherAdminClasses(
+  collegeId: string,
+  majorId: string
+): Promise<TeacherCatalogAdminClass[]> {
+  const q = new URLSearchParams({ collegeId, majorId });
   return teacherFetch(`/api/teacher/catalog/admin-classes?${q}`) as Promise<TeacherCatalogAdminClass[]>;
 }
 
-export async function fetchTeacherStudentPool(collegeId: string, adminClassId?: string): Promise<TeacherPooledStudent[]> {
-  const q = new URLSearchParams({ collegeId });
-  if (adminClassId) q.set('adminClassId', adminClassId);
+export async function fetchTeacherStudentPoolByAdminClass(classId: string): Promise<TeacherPooledStudent[]> {
+  const q = new URLSearchParams({ classId });
   return teacherFetch(`/api/teacher/catalog/students-by-filter?${q}`) as Promise<TeacherPooledStudent[]>;
 }
 

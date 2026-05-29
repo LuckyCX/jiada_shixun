@@ -114,8 +114,9 @@ router.get('/teacher/me', requireAuth(), requireTeacher(), async (req, res) => {
     if (!tid) return bad(req, res, 400, 40001, '无效用户');
 
     const { rows } = await getPool().query(
-      `SELECT u.id, u.username, u.real_name AS "realName", u.email, u.department, u.avatar_url AS "avatarUrl",
-              col.name AS "collegeName"
+      `SELECT u.id, u.username, u.real_name AS "realName", u.email, u.department, u.major_id, u.avatar_url AS "avatarUrl",
+              col.name AS "collegeName",
+              mj.name AS "majorName"
        FROM users u
        LEFT JOIN colleges col
          ON col.id = CASE
@@ -123,6 +124,7 @@ router.get('/teacher/me', requireAuth(), requireTeacher(), async (req, res) => {
            THEN trim(u.department)::bigint
            ELSE NULL
          END
+       LEFT JOIN majors mj ON mj.id = u.major_id
        WHERE u.id = $1 AND u.role = 'teacher'`,
       [tid]
     );
@@ -136,6 +138,8 @@ router.get('/teacher/me', requireAuth(), requireTeacher(), async (req, res) => {
       avatarUrl: r.avatarUrl || '',
       departmentCollegeId: r.department != null ? String(r.department).trim() : '',
       collegeName: r.collegeName || '',
+      majorId: r.major_id != null ? String(r.major_id) : '',
+      majorName: r.majorName || '',
     });
   } catch (e) {
     logError(`GET /api/teacher/me traceId=${req.traceId}`, e);
@@ -373,15 +377,22 @@ router.get('/teacher/catalog/admin-classes', requireAuth(), requireTeacher(), as
     const collegeRaw = String(req.query.collegeId || '').trim();
     if (!/^\d+$/.test(collegeRaw)) return bad(req, res, 400, 40010, '请选择学院');
     const collegeId = Number(collegeRaw);
+    const majorRaw = String(req.query.majorId || '').trim();
+    const params = [collegeId];
+    let majorClause = '';
+    if (/^\d+$/.test(majorRaw)) {
+      params.push(Number(majorRaw));
+      majorClause = ` AND c.major_id = $${params.length}`;
+    }
 
     const { rows } = await getPool().query(
       `SELECT c.id, c.name
        FROM classes c
        JOIN colleges co ON co.id = c.college_id AND co.status = 'active'
-       WHERE c.college_id = $1
+       WHERE c.college_id = $1${majorClause}
        ORDER BY c.id DESC
        LIMIT 400`,
-      [collegeId]
+      params
     );
     return ok(
       req,
@@ -402,39 +413,61 @@ router.get('/teacher/catalog/admin-classes', requireAuth(), requireTeacher(), as
  */
 router.get('/teacher/catalog/students-by-filter', requireAuth(), requireTeacher(), async (req, res) => {
   try {
+    const classRaw = String(req.query.classId || '').trim();
+    if (/^\d+$/.test(classRaw)) {
+      const classId = Number(classRaw);
+      const { rows } = await getPool().query(
+        `SELECT u.id, u.real_name AS "name", u.email,
+                COALESCE(u.student_no, '') AS "studentNo",
+                col.name AS "collegeName",
+                mj.name AS "majorName"
+         FROM class_students cs
+         JOIN users u ON u.id = cs.student_id AND u.role = 'student' AND u.status = 'active'
+         JOIN classes c ON c.id = cs.class_id
+         LEFT JOIN colleges col ON col.id = c.college_id
+         LEFT JOIN majors mj ON mj.id = c.major_id
+         WHERE cs.class_id = $1
+         ORDER BY u.student_no ASC NULLS LAST, u.id ASC
+         LIMIT 800`,
+        [classId]
+      );
+      return ok(
+        req,
+        res,
+        rows.map((r) => ({
+          id: String(r.id),
+          name: r.name || r.email || '',
+          email: r.email || '',
+          studentNo: r.studentNo || '',
+          collegeName: r.collegeName || '',
+          majorName: r.majorName || '',
+        }))
+      );
+    }
+
     const collegeRaw = String(req.query.collegeId || '').trim();
     if (!/^\d+$/.test(collegeRaw)) return bad(req, res, 400, 40010, '请选择学院');
-    const adminClassRaw = String(req.query.adminClassId || '').trim();
-    let adminClassId = null;
-    if (adminClassRaw && /^\d+$/.test(adminClassRaw)) adminClassId = Number(adminClassRaw);
+    const majorRaw = String(req.query.majorId || '').trim();
+    if (!/^\d+$/.test(majorRaw)) return bad(req, res, 400, 40013, '请选择专业');
 
-    const params = [collegeRaw, adminClassId];
+    const params = [collegeRaw, Number(majorRaw)];
 
     const { rows } = await getPool().query(
       `SELECT u.id, u.real_name AS "name", u.email,
               COALESCE(u.student_no, '') AS "studentNo",
               col.name AS "collegeName",
-              lac.name AS "adminClassName"
+              mj.name AS "majorName"
        FROM users u
        LEFT JOIN colleges col ON col.id = CASE
            WHEN trim(COALESCE(u.department, '')) ~ '^[0-9]+$'
            THEN trim(u.department)::bigint
            ELSE NULL
          END
-       LEFT JOIN LATERAL (
-         SELECT c.name
-         FROM class_students cs
-         JOIN classes c ON c.id = cs.class_id
-         WHERE cs.student_id = u.id
-         ORDER BY cs.joined_at DESC
-         LIMIT 1
-       ) lac ON TRUE
+       LEFT JOIN majors mj ON mj.id = u.major_id
        WHERE u.role = 'student'
          AND u.status = 'active'
          AND trim(COALESCE(u.department, '')) = $1
-         AND ($2::bigint IS NULL OR EXISTS (
-           SELECT 1 FROM class_students cs2 WHERE cs2.student_id = u.id AND cs2.class_id = $2
-         ))
+         AND u.major_id = $2
        ORDER BY u.student_no ASC NULLS LAST, u.id ASC
        LIMIT 800`,
       params
@@ -448,7 +481,7 @@ router.get('/teacher/catalog/students-by-filter', requireAuth(), requireTeacher(
         email: r.email || '',
         studentNo: r.studentNo || '',
         collegeName: r.collegeName || '',
-        adminClassName: r.adminClassName || '',
+        majorName: r.majorName || '',
       }))
     );
   } catch (e) {
@@ -471,16 +504,27 @@ router.get('/teacher/personal-classes/:id/students', requireAuth(), requireTeach
     }
 
     const { rows } = await pool.query(
-      `SELECT u.id, u.real_name AS "name", u.email,
+      `SELECT u.id, u.real_name AS "name", u.email, COALESCE(u.avatar_url, '') AS "avatarUrl",
               COALESCE(u.student_no, '') AS "studentNo",
-              col.name AS "collegeName"
+              COALESCE(col_u.name, col_cls.name) AS "collegeName",
+              COALESCE(mj.name, mj_cls.name) AS "majorName"
        FROM teacher_personal_class_students tp
        JOIN users u ON u.id = tp.student_id
-       LEFT JOIN colleges col ON col.id = CASE
-           WHEN trim(COALESCE(u.department, '')) ~ '^[0-9]+$'
-           THEN trim(u.department)::bigint
-           ELSE NULL
-         END
+       LEFT JOIN colleges col_u ON (
+         trim(COALESCE(u.department, '')) ~ '^[0-9]+$'
+         AND col_u.id = trim(u.department)::bigint
+       )
+       LEFT JOIN majors mj ON mj.id = u.major_id
+       LEFT JOIN LATERAL (
+         SELECT c.college_id, c.major_id
+         FROM class_students cs
+         JOIN classes c ON c.id = cs.class_id
+         WHERE cs.student_id = u.id
+         ORDER BY cs.joined_at DESC
+         LIMIT 1
+       ) cls ON (true)
+       LEFT JOIN colleges col_cls ON col_cls.id = cls.college_id
+       LEFT JOIN majors mj_cls ON mj_cls.id = cls.major_id
        WHERE tp.teacher_personal_class_id = $1
        ORDER BY u.student_no ASC NULLS LAST, u.id ASC`,
       [classId]
@@ -492,8 +536,10 @@ router.get('/teacher/personal-classes/:id/students', requireAuth(), requireTeach
         id: String(r.id),
         name: r.name || r.email || '',
         email: r.email || '',
+        avatarUrl: r.avatarUrl || '',
         studentNo: r.studentNo || '',
         collegeName: r.collegeName || '',
+        majorName: r.majorName || '',
       }))
     );
   } catch (e) {

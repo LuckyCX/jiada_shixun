@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { Form, Input, Select, Button } from 'antd';
 import { UserRole } from './types';
 import { useCollegeDictOptions } from './useCollegeDictOptions';
+import { useMajorOptions } from './useMajorOptions';
 
 interface AddUserModalProps {
   isOpen: boolean;
@@ -21,10 +22,23 @@ export function initialPasswordFromIdNumber(idNumber: string): string {
 }
 
 export default function AddUserModal({ isOpen, onClose, onSubmit, fixedRole, fixedDepartmentId }: AddUserModalProps) {
-  const [form] = Form.useForm<{ name: string; role: UserRole; idNumber: string; email?: string; department: string }>();
+  const [form] = Form.useForm<{
+    name: string;
+    role: UserRole;
+    idNumber: string;
+    email?: string;
+    department: string;
+    majorId?: string;
+  }>();
   const role = Form.useWatch('role', form);
+  const department = Form.useWatch('department', form);
   const idNumber = Form.useWatch('idNumber', form) ?? '';
+  const effRole = (fixedRole ?? role) as UserRole;
   const { options: deptOptions, loading: deptLoading } = useCollegeDictOptions(isOpen);
+  const { options: majorOptions, loading: majorLoading } = useMajorOptions(
+    isOpen && (effRole === 'student' || effRole === 'teacher'),
+    fixedDepartmentId ?? department
+  );
 
   useEffect(() => {
     if (isOpen) {
@@ -35,6 +49,10 @@ export default function AddUserModal({ isOpen, onClose, onSubmit, fixedRole, fix
       if (Object.keys(init).length) form.setFieldsValue(init);
     }
   }, [isOpen, form, fixedRole, fixedDepartmentId]);
+
+  useEffect(() => {
+    if (effRole === 'student' || effRole === 'teacher') form.setFieldValue('majorId', undefined);
+  }, [department, fixedDepartmentId, effRole, form]);
 
   if (!isOpen) return null;
 
@@ -49,16 +67,19 @@ export default function AddUserModal({ isOpen, onClose, onSubmit, fixedRole, fix
     idNumber: string;
     email?: string;
     department: string;
+    majorId?: string;
   }) => {
     const id = values.idNumber.trim();
-    const effRole = (fixedRole ?? values.role) as UserRole;
+    const effRoleSubmit = (fixedRole ?? values.role) as UserRole;
     const effDept = fixedDepartmentId ?? values.department;
     try {
       await Promise.resolve(
         onSubmit({
           ...values,
-          role: effRole,
+          role: effRoleSubmit,
           department: effDept,
+          majorId:
+            effRoleSubmit === 'student' || effRoleSubmit === 'teacher' ? values.majorId : undefined,
           name: values.name.trim(),
           idNumber: id,
           email: values.email != null ? String(values.email).trim() : '',
@@ -183,6 +204,20 @@ export default function AddUserModal({ isOpen, onClose, onSubmit, fixedRole, fix
               />
             )}
           </Form.Item>
+
+          {effRole === 'student' || effRole === 'teacher' ? (
+            <Form.Item label="专业" name="majorId" rules={[{ required: true, message: '请选择专业' }]}>
+              <Select
+                className="h-[42px]"
+                placeholder={department || fixedDepartmentId ? '请选择专业' : '请先选择学院'}
+                loading={majorLoading}
+                options={majorOptions}
+                showSearch
+                optionFilterProp="label"
+                disabled={!(department || fixedDepartmentId)}
+              />
+            </Form.Item>
+          ) : null}
 
           <div className="mb-6">
             <div className="text-sm font-medium text-gray-700 mb-2">初始密码</div>

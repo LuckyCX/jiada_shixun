@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react';
-import { Button, message, Select, Space } from 'antd';
+import { useEffect, useMemo, useState } from 'react';
+import { Button, Cascader, message, Select, Space } from 'antd';
 import type { ImportResult } from './types';
 import type { BatchImportRow } from './adminUsersApi';
 import { fetchAdminClasses } from './adminUsersApi';
-import { fetchAdminColleges, type AdminCollegeRow } from '../collegeApi';
+import { fetchAdminColleges, fetchPublicMajors, type AdminCollegeRow } from '../collegeApi';
 
 interface BatchImportModalProps {
   isOpen: boolean;
@@ -90,8 +90,10 @@ export default function BatchImportModal({
 }: BatchImportModalProps) {
   const [colleges, setColleges] = useState<AdminCollegeRow[]>([]);
   const [tplCollegeId, setTplCollegeId] = useState('');
+  const [tplMajorId, setTplMajorId] = useState('');
   const [tplClassId, setTplClassId] = useState('');
   const [classOptions, setClassOptions] = useState<{ label: string; value: string }[]>([]);
+  const [allMajors, setAllMajors] = useState<{ id: string; name: string; collegeId: string }[]>([]);
 
   const [file, setFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -102,12 +104,17 @@ export default function BatchImportModal({
   useEffect(() => {
     if (!isOpen) return;
     let cancelled = false;
-    fetchAdminColleges()
-      .then((c) => {
-        if (!cancelled) setColleges(c.filter((x) => x.status === 'active'));
+    Promise.all([fetchAdminColleges(), fetchPublicMajors()])
+      .then(([c, m]) => {
+        if (cancelled) return;
+        setColleges(c.filter((x) => x.status === 'active'));
+        setAllMajors(m);
       })
       .catch(() => {
-        if (!cancelled) setColleges([]);
+        if (!cancelled) {
+          setColleges([]);
+          setAllMajors([]);
+        }
       });
     return () => {
       cancelled = true;
@@ -121,18 +128,38 @@ export default function BatchImportModal({
     if (lockedRole === 'teacher') setTplClassId('');
   }, [isOpen, lockedCollegeId, lockedClassId, lockedRole]);
 
+  const collegeMajorCascaderOptions = useMemo(
+    () =>
+      colleges.map((c) => ({
+        value: c.id,
+        label: `${c.name}（${c.id}）`,
+        children: allMajors
+          .filter((m) => m.collegeId === c.id)
+          .map((m) => ({ value: m.id, label: m.name })),
+      })),
+    [colleges, allMajors]
+  );
+
+  const majorOptionsForCollege = useMemo(
+    () =>
+      allMajors
+        .filter((m) => m.collegeId === tplCollegeId)
+        .map((m) => ({ label: m.name, value: m.id })),
+    [allMajors, tplCollegeId]
+  );
+
   useEffect(() => {
     if (lockedRole === 'teacher') {
       setClassOptions([]);
       return;
     }
-    if (!tplCollegeId) {
+    if (!tplCollegeId || !tplMajorId) {
       setClassOptions([]);
       setTplClassId('');
       return;
     }
     let cancelled = false;
-    fetchAdminClasses(tplCollegeId)
+    fetchAdminClasses(tplCollegeId, tplMajorId)
       .then((rows) => {
         if (cancelled) return;
         setClassOptions(rows.map((r) => ({ label: `${r.name}（${r.code}）`, value: r.id })));
@@ -143,7 +170,7 @@ export default function BatchImportModal({
     return () => {
       cancelled = true;
     };
-  }, [tplCollegeId, lockedRole]);
+  }, [tplCollegeId, tplMajorId, lockedRole]);
 
   if (!isOpen) return null;
 
@@ -152,12 +179,13 @@ export default function BatchImportModal({
 
   const preSelectTitle =
     lockedRole === 'teacher'
-      ? '导入前：选择学院'
+      ? '导入前：选择学院与专业'
       : lockedRole === 'student'
-        ? '导入前：选择学院与班级'
-        : '导入前：选择学院与班级';
+        ? '导入前：选择学院、专业与班级'
+        : '导入前：选择学院、专业与班级';
 
   const selectedCollege = colleges.find((c) => c.id === tplCollegeId);
+  const selectedMajor = allMajors.find((m) => m.id === tplMajorId);
   const selectedClassMeta = classOptions.find((o) => o.value === tplClassId);
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -202,9 +230,19 @@ export default function BatchImportModal({
         message.warning('请先在上方选择学院');
         return;
       }
+      if (!tplMajorId) {
+        message.warning('请先在上方选择专业');
+        return;
+      }
       const c = active.find((x) => x.id === tplCollegeId);
       if (!c) {
         message.error('学院数据已变化，请重新选择');
+        return;
+      }
+      const majors = await fetchPublicMajors(tplCollegeId);
+      const mj = majors.find((x) => x.id === tplMajorId);
+      if (!mj) {
+        message.error('专业数据已变化，请重新选择');
         return;
       }
 
@@ -214,12 +252,12 @@ export default function BatchImportModal({
       let filename: string;
 
       if (lockedRole === 'teacher') {
-        line1 = `# 学院,${c.name},id=${c.id}（数据行勿含学院列；无需「角色」列，将按本页教师批量导入）`;
+        line1 = `# 学院,${c.name},id=${c.id} | 专业,${mj.name},id=${mj.id}（数据行勿含学院/专业列；无需「角色」列，将按本页教师批量导入）`;
         header = '姓名,学号或工号,邮箱';
         bodyLines = '李老师,T2021001,li@example.com';
         filename = '教师导入模板.csv';
       } else if (lockedRole === 'student') {
-        const cls = await fetchAdminClasses(tplCollegeId);
+        const cls = await fetchAdminClasses(tplCollegeId, tplMajorId);
         if (!cls.length) {
           message.warning(`${c.name}下没有班级，请先在学院下创建班级`);
           return;
@@ -233,14 +271,14 @@ export default function BatchImportModal({
           message.error('班级数据已变化，请重新选择');
           return;
         }
-        line1 = `# 学院,${c.name},id=${c.id} | 班级,${cl.name},id=${cl.id}（数据行勿含学院/班级列；无需「角色」列，将按本页学生批量导入）`;
+        line1 = `# 学院,${c.name},id=${c.id} | 专业,${mj.name},id=${mj.id} | 班级,${cl.name},id=${cl.id}（数据行勿含学院/专业/班级列；无需「角色」列，将按本页学生批量导入）`;
         header = '姓名,学号或工号,邮箱';
         bodyLines = '张三,2021001001,';
         filename = '学生导入模板.csv';
       } else {
-        const cls = await fetchAdminClasses(tplCollegeId);
+        const cls = await fetchAdminClasses(tplCollegeId, tplMajorId);
         if (!cls.length) {
-          message.warning(`${c.name}下没有班级，请先在学院下创建班级`);
+          message.warning(`${c.name} / ${mj.name} 下没有班级，请先创建班级`);
           return;
         }
         if (!tplClassId) {
@@ -252,7 +290,7 @@ export default function BatchImportModal({
           message.error('学院或班级数据已变化，请重新选择');
           return;
         }
-        line1 = `# 学院,${c.name},id=${c.id} | 班级,${cl.name},id=${cl.id}（以下数据行勿含学院/班级列，导入时使用上方所选学院与班级）`;
+        line1 = `# 学院,${c.name},id=${c.id} | 专业,${mj.name},id=${mj.id} | 班级,${cl.name},id=${cl.id}（以下数据行勿含学院/专业/班级列，导入时使用上方所选）`;
         header = '姓名,角色,学号或工号,邮箱';
         bodyLines = '张三,学生,2021001001,\n李老师,教师,T2021001,li@example.com';
         filename = '用户导入模板.csv';
@@ -289,6 +327,9 @@ export default function BatchImportModal({
       if (!tplCollegeId.trim()) {
         throw new Error('请先在上方选择学院，再开始导入');
       }
+      if (!tplMajorId.trim()) {
+        throw new Error('请先在上方选择专业，再开始导入');
+      }
       let hasStudent = lockedRole === 'student';
       if (!lockedRole) {
         for (const p of parsed) {
@@ -307,6 +348,7 @@ export default function BatchImportModal({
           role: rl === '学生' ? '学生' : rl === '教师' ? '教师' : p.role.trim(),
           idNumber: p.idNumber.trim(),
           collegeId: tplCollegeId.trim(),
+          majorId: tplMajorId.trim(),
           ...(rl === '学生' && tplClassId.trim() ? { classId: tplClassId.trim() } : {}),
           ...(p.email?.trim() ? { email: p.email.trim() } : {}),
         });
@@ -332,6 +374,7 @@ export default function BatchImportModal({
     setUploadProgress(0);
     setImportResult(null);
     if (!lockedCollegeId) setTplCollegeId('');
+    setTplMajorId('');
     if (!lockedClassId) setTplClassId('');
     onClose();
   };
@@ -355,25 +398,57 @@ export default function BatchImportModal({
             <>
               <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
                 <div className="text-sm font-medium text-gray-800 mb-2">{preSelectTitle}</div>
-                <Space wrap className="w-full">
-                  <Select
-                    className="min-w-[220px]"
-                    placeholder="选择学院"
-                    value={tplCollegeId || undefined}
-                    onChange={(v) => {
-                      setTplCollegeId(v);
-                      if (!lockedClassId) setTplClassId('');
-                    }}
-                    disabled={!!lockedCollegeId}
-                    options={colleges.map((c) => ({ label: `${c.name}（${c.id}）`, value: c.id }))}
-                    showSearch
-                    optionFilterProp="label"
-                  />
+                <Space wrap className="w-full" direction="vertical" size="middle" style={{ width: '100%' }}>
+                  {lockedCollegeId ? (
+                    <>
+                      <Select
+                        className="min-w-[220px]"
+                        disabled
+                        value={tplCollegeId || undefined}
+                        options={colleges.map((c) => ({ label: `${c.name}（${c.id}）`, value: c.id }))}
+                      />
+                      <Select
+                        className="min-w-[260px]"
+                        placeholder="选择专业"
+                        value={tplMajorId || undefined}
+                        onChange={(v) => {
+                          setTplMajorId(v ?? '');
+                          if (!lockedClassId) setTplClassId('');
+                        }}
+                        options={majorOptionsForCollege}
+                        showSearch
+                        optionFilterProp="label"
+                      />
+                    </>
+                  ) : (
+                    <Cascader
+                      className="min-w-[320px]"
+                      placeholder="学院 / 专业"
+                      options={collegeMajorCascaderOptions}
+                      value={
+                        tplCollegeId && tplMajorId
+                          ? [tplCollegeId, tplMajorId]
+                          : tplCollegeId
+                            ? [tplCollegeId]
+                            : undefined
+                      }
+                      onChange={(v) => {
+                        const arr = (v as string[] | undefined) ?? [];
+                        setTplCollegeId(arr[0] ?? '');
+                        setTplMajorId(arr[1] ?? '');
+                        if (!lockedClassId) setTplClassId('');
+                      }}
+                      showSearch={{
+                        filter: (input, path) =>
+                          path.some((opt) => String(opt.label ?? '').toLowerCase().includes(input.toLowerCase())),
+                      }}
+                    />
+                  )}
                   {lockedRole !== 'teacher' && (
                     <Select
                       className="min-w-[260px]"
                       placeholder="选择班级"
-                      disabled={!tplCollegeId || !!lockedClassId}
+                      disabled={!tplCollegeId || !tplMajorId || !!lockedClassId}
                       value={tplClassId || undefined}
                       onChange={(v) => setTplClassId(v ?? '')}
                       options={classOptions}
@@ -382,18 +457,17 @@ export default function BatchImportModal({
                     />
                   )}
                 </Space>
-                {lockedRole === 'teacher' && selectedCollege ? (
+                {lockedRole === 'teacher' && selectedCollege && selectedMajor ? (
                   <p className="text-xs text-gray-600 mt-3 leading-relaxed">
-                    下载模板首行为说明。<strong>数据列：姓名、学号或工号、邮箱</strong>（无需「角色」列，将按教师导入）；教师仅归属所选学院、不与班级绑定；实际学院以本页上方所选为准。
+                    下载模板首行为说明（含学院、专业 id 供核对）。<strong>数据列：姓名、学号或工号、邮箱</strong>（无需「角色」列）；教师归属所选学院与专业，不与班级绑定。
                   </p>
-                ) : lockedRole === 'student' && selectedCollege && tplClassId && selectedClassMeta ? (
+                ) : lockedRole === 'student' && selectedCollege && selectedMajor && tplClassId && selectedClassMeta ? (
                   <p className="text-xs text-gray-600 mt-3 leading-relaxed">
-                    下载模板首行为说明（含学院、班级 id 供核对）。<strong>数据列：姓名、学号或工号、邮箱</strong>（无需「角色」列，将按学生导入）；学院与班级以本页上方所选为准。
+                    下载模板首行为说明（含学院、专业、班级 id 供核对）。<strong>数据列：姓名、学号或工号、邮箱</strong>（无需「角色」列）；学院、专业与班级以本页上方所选为准。
                   </p>
-                ) : !lockedRole && selectedCollege && tplClassId && selectedClassMeta ? (
+                ) : !lockedRole && selectedCollege && selectedMajor && tplClassId && selectedClassMeta ? (
                   <p className="text-xs text-gray-600 mt-3 leading-relaxed">
-                    下载模板首行为说明（含学院、班级 id 供核对）。<strong>数据行含姓名、角色、学号或工号、邮箱</strong>
-                    ；实际导入的学院与班级以本页上方选择为准。
+                    下载模板首行为说明（含学院、专业、班级 id 供核对）。<strong>数据行含姓名、角色、学号或工号、邮箱</strong>；导入的学院、专业与班级以本页上方选择为准。
                   </p>
                 ) : null}
               </div>
@@ -411,14 +485,14 @@ export default function BatchImportModal({
                         <>
                           <li>• 每行一名教师：「学号或工号」列填写<strong>工号</strong>（与登录账号一致）</li>
                           <li>• 表头须含：<strong>姓名、学号或工号</strong>；<strong>邮箱</strong>列可整列省略；<strong>无需「角色」列</strong>，身份按本页「教师」自动写入</li>
-                          <li>• 学院不在 CSV 中：须先在本页上方<strong>选择学院</strong>；导入的教师归属该学院，<strong>不与班级绑定</strong>，本页无需选择班级</li>
+                          <li>• 学院、专业不在 CSV 中：须先选择<strong>学院与专业</strong>；导入的教师归属该学院与专业，<strong>不与班级绑定</strong></li>
                           <li>• 初始密码为工号<strong>后 6 位</strong>（与单个新增教师一致）</li>
                         </>
                       ) : lockedRole === 'student' ? (
                         <>
                           <li>• 每行一名学生：「学号或工号」列填写<strong>学号</strong></li>
                           <li>• 表头须含：<strong>姓名、学号或工号</strong>；<strong>邮箱</strong>可整列省略；<strong>无需「角色」列</strong>，身份按本页「学生」自动写入</li>
-                          <li>• 学院、班级不在 CSV 中：须先在本页上方<strong>选择学院与班级</strong>；学生将入所选班级</li>
+                          <li>• 学院、专业、班级不在 CSV 中：须先选择<strong>学院、专业与班级</strong>；学生将入所选班级</li>
                           <li>• 初始密码为学号<strong>后 6 位</strong>（与单个新增学生一致）</li>
                         </>
                       ) : (

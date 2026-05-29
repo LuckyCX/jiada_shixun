@@ -28,6 +28,7 @@ import {
   type StudentNotificationRow,
 } from '../../lib/teamFormationApi';
 import StudentClassSwitcher from './components/StudentClassSwitcher';
+import { UserGuideContent } from '../user-guide/UserGuideContent';
 import TeamFormationModule from './components/TeamFormationModule';
 import IdeationModule, { type IdeationLearningResource, type IdeationModuleTab } from './components/IdeationModule';
 import MarketResearchModule from './components/MarketResearchModule';
@@ -113,6 +114,7 @@ type TabType =
   | 'ability'
   | 'archive'
   | 'knowledge'
+  | 'guide'
   | 'notifications'
   | 'module-team'
   | 'module-ideation'
@@ -1004,6 +1006,7 @@ export default function StudentCenterPage() {
     { key: 'knowledge' as TabType, label: '实践课程', icon: 'ri-book-2-line' },
     // { key: 'ability' as TabType, label: '能力点管理', icon: 'ri-medal-line' },
     { key: 'archive' as TabType, label: '学习档案', icon: 'ri-folder-line' },
+    { key: 'guide' as TabType, label: '实训指南', icon: 'ri-book-open-line' },
     // { key: 'notifications' as TabType, label: '消息通知', icon: 'ri-notification-line' },
   ];
 
@@ -2025,6 +2028,8 @@ export default function StudentCenterPage() {
                     <div className="text-sm text-gray-500">
                       {studentProfile?.collegeName ? `学院：${studentProfile.collegeName}` : '学院：'}
                       <br/>
+                      {studentProfile?.majorName ? `专业：${studentProfile.majorName}` : '专业：'}
+                      <br/>
                       {studentProfile?.className ? `班级：${studentProfile.className}` : '班级：'}
                     </div>
                   </div>
@@ -2834,6 +2839,12 @@ export default function StudentCenterPage() {
           )}
 
           {/* 学习档案 */}
+          {activeTab === 'guide' && (
+            <div className="max-h-[calc(100vh-10rem)] overflow-y-auto rounded-2xl border border-slate-100 bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 px-4 py-3">
+              <UserGuideContent embedded />
+            </div>
+          )}
+
           {activeTab === 'archive' && (
             <div className="space-y-6">
               <div><h2 className="text-2xl font-bold text-gray-900 mb-1">学习档案</h2><p className="text-sm text-gray-500">全流程学习记录，支持筛选与导出</p></div>

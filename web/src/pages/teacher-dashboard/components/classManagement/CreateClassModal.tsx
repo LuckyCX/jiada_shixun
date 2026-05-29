@@ -1,7 +1,6 @@
 import { useEffect } from 'react';
-import { Form, Input, message, Modal, Select, Typography } from 'antd';
+import { Form, Input, message, Modal, Typography } from 'antd';
 import { useTranslation } from 'react-i18next';
-import { usePublicDictOptions } from '../../../admin-dashboard/components/classManagement/usePublicDictOptions';
 import { createTeacherPersonalClass } from '../../teacherPortalApi';
 import type { TeacherPersonalClassRow, TeacherProfile } from '../../teacherPortalApi';
 
@@ -12,42 +11,23 @@ interface CreateClassModalProps {
   onCreated: (created: TeacherPersonalClassRow) => void;
 }
 
-const ACADEMIC_YEARS = [
-  { label: '2025-2026', value: '2025-2026' },
-  { label: '2026-2027', value: '2026-2027' },
-  { label: '2027-2028', value: '2027-2028' },
-];
-
 export default function CreateClassModal({ open, onClose, profile, onCreated }: CreateClassModalProps) {
   const { t } = useTranslation();
-  const [form] = Form.useForm<{ name: string; academicYear: string; semester: string }>();
-  const { options: semesterOptions, loading: semesterLoading } = usePublicDictOptions('semester', open);
+  const [form] = Form.useForm<{ name: string }>();
 
   useEffect(() => {
     if (!open) return;
-    form.setFieldsValue({
-      name: '',
-      academicYear: ACADEMIC_YEARS[0]?.value ?? '',
-    });
+    form.setFieldsValue({ name: '' });
   }, [open, form]);
 
-  useEffect(() => {
-    if (!open || semesterOptions.length === 0) return;
-    const cur = form.getFieldValue('semester');
-    if (!cur || !semesterOptions.some((o) => o.value === cur)) {
-      form.setFieldValue('semester', semesterOptions[0].value);
-    }
-  }, [open, semesterOptions, form]);
-
   const collegeLabel = profile?.collegeName?.trim() ? profile.collegeName.trim() : t('teacher_class.create.collegeunset');
+  const majorLabel = profile?.majorName?.trim() ? profile.majorName.trim() : t('teacher_class.create.majorunset');
 
   const handleOk = async () => {
     try {
       const v = await form.validateFields();
       const created = await createTeacherPersonalClass({
         name: v.name.trim(),
-        academicYear: v.academicYear,
-        semester: v.semester,
       });
       message.success(t('teacher_class.create.success'));
       onCreated(created);
@@ -63,13 +43,28 @@ export default function CreateClassModal({ open, onClose, profile, onCreated }: 
       title={t('teacher_class.create.title')}
       open={open}
       onCancel={onClose}
-      onOk={() => void handleOk()}
-      okText={t('teacher_class.create.ok')}
-      cancelText={t('teacher_class.create.cancel')}
       destroyOnHidden
       width={480}
+      footer={
+        <div className="flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer"
+          >
+            {t('teacher_class.create.cancel')}
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleOk()}
+            className="px-4 py-2 text-sm text-white bg-teal-600 rounded-lg hover:bg-teal-700 cursor-pointer"
+          >
+            {t('teacher_class.create.ok')}
+          </button>
+        </div>
+      }
     >
-      <Form form={form} layout="vertical" requiredMark="optional">
+      <Form form={form} layout="vertical" requiredMark>
         <Form.Item
           label={t('teacher_class.create.name_label')}
           name="name"
@@ -78,27 +73,13 @@ export default function CreateClassModal({ open, onClose, profile, onCreated }: 
           <Input placeholder={t('teacher_class.create.name_placeholder')} maxLength={128} showCount />
         </Form.Item>
 
-        <Form.Item label={t('teacher_class.create.college_label')}>
+        <Form.Item label={t('teacher_class.create.college_label')} required={false}>
           <Typography.Text type={profile?.collegeName?.trim() ? undefined : 'secondary'}>{collegeLabel}</Typography.Text>
         </Form.Item>
 
-        <div className="grid grid-cols-2 gap-4">
-          <Form.Item label={t('teacher_class.create.academic_year_label')} name="academicYear" rules={[{ required: true }]}>
-            <Select options={ACADEMIC_YEARS} placeholder={t('teacher_class.create.academic_year_placeholder')} />
-          </Form.Item>
-          <Form.Item
-            label={t('teacher_class.create.semester_label')}
-            name="semester"
-            rules={[{ required: true, message: t('teacher_class.create.semester_required') }]}
-          >
-            <Select
-              placeholder={t('teacher_class.create.semester_placeholder')}
-              loading={semesterLoading}
-              options={semesterOptions}
-              allowClear={false}
-            />
-          </Form.Item>
-        </div>
+        <Form.Item label={t('teacher_class.create.major_label')} required={false}>
+          <Typography.Text type={profile?.majorName?.trim() ? undefined : 'secondary'}>{majorLabel}</Typography.Text>
+        </Form.Item>
       </Form>
     </Modal>
   );

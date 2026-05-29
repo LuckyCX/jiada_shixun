@@ -1,5 +1,6 @@
 import { lazy } from 'react';
 import { RouteObject } from 'react-router-dom';
+import { USER_GUIDE_PATH } from '../lib/appPaths';
 import RequireRole from './RequireRole';
 import RequireStudentPersonalClass from './RequireStudentPersonalClass';
 
@@ -112,7 +113,7 @@ const routes: RouteObject[] = [
     element: <AdminLoginPage />,
   },
   {
-    path: '/user-guide',
+    path: USER_GUIDE_PATH,
     element: <UserGuidePage />,
   },
   {

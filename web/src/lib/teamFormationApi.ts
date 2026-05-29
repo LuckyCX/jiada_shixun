@@ -265,12 +265,38 @@ export type GroupingTeamMember = {
   name: string;
   studentId: string;
   avatarUrl?: string;
+  hasIntroVideo?: boolean;
   aiMatchedRole?: string;
   aiMatchedRoleLabel?: string;
   isTeamLeader?: boolean;
   profile: TeamDimensionProfile;
   status: string;
 };
+
+export async function loadTeamIntroVideoObjectUrl(
+  role: 'student' | 'teacher',
+  classId: string,
+  studentId?: string
+): Promise<string> {
+  const { getPortalToken, redirectStudentSessionExpired, redirectTeacherSessionExpired } = await import('./authApi');
+  const token = getPortalToken(role) || '';
+  const url =
+    role === 'student'
+      ? `/api/student/team-formation/video?classId=${encodeURIComponent(classId)}`
+      : `/api/teacher/personal-classes/${encodeURIComponent(classId)}/team-formation/students/${encodeURIComponent(studentId || '')}/intro-video`;
+  const r = await fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  if (r.status === 401) {
+    if (role === 'student') redirectStudentSessionExpired();
+    else redirectTeacherSessionExpired();
+    throw new Error('登录已失效');
+  }
+  if (!r.ok) {
+    const j = await r.json().catch(() => ({ message: '' }));
+    throw new Error((j as { message?: string }).message || `HTTP ${r.status}`);
+  }
+  const blob = await r.blob();
+  return URL.createObjectURL(blob);
+}
 
 export type GroupingTeam = {
   id: string;

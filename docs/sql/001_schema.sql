@@ -96,6 +96,27 @@ CREATE INDEX idx_colleges_status ON colleges (status);
 CREATE TRIGGER trg_colleges_updated_at BEFORE UPDATE ON colleges
   FOR EACH ROW EXECUTE PROCEDURE trg_set_updated_at();
 
+CREATE TABLE majors (
+  id          bigserial PRIMARY KEY,
+  college_id  bigint NOT NULL REFERENCES colleges (id) ON DELETE CASCADE,
+  name        varchar(128) NOT NULL,
+  status      varchar(32) NOT NULL DEFAULT 'active',
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  updated_at  timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (college_id, name)
+);
+
+CREATE INDEX idx_majors_college_id ON majors (college_id);
+CREATE INDEX idx_majors_status ON majors (status);
+
+CREATE TRIGGER trg_majors_updated_at BEFORE UPDATE ON majors
+  FOR EACH ROW EXECUTE PROCEDURE trg_set_updated_at();
+
+ALTER TABLE users
+  ADD COLUMN major_id bigint REFERENCES majors (id) ON DELETE SET NULL;
+
+CREATE INDEX idx_users_major_id ON users (major_id);
+
 CREATE TABLE classes (
   id            bigserial PRIMARY KEY,
   name          varchar(128) NOT NULL,
@@ -104,6 +125,7 @@ CREATE TABLE classes (
   semester      varchar(32),
   department    varchar(128),
   college_id    bigint REFERENCES colleges (id) ON DELETE SET NULL,
+  major_id      bigint REFERENCES majors (id) ON DELETE SET NULL,
   teacher_id    bigint REFERENCES users (id) ON DELETE SET NULL,
   status        varchar(32) NOT NULL DEFAULT 'active',
   created_at    timestamptz NOT NULL DEFAULT now(),
@@ -111,6 +133,7 @@ CREATE TABLE classes (
 );
 
 CREATE INDEX idx_classes_college_id ON classes (college_id);
+CREATE INDEX idx_classes_major_id ON classes (major_id);
 
 CREATE TRIGGER trg_classes_updated_at BEFORE UPDATE ON classes
   FOR EACH ROW EXECUTE PROCEDURE trg_set_updated_at();

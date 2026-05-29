@@ -1,14 +1,17 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Modal, Select, Space, Spin, Transfer, message } from 'antd';
+import { useCallback, useEffect, useMemo, useRef, useState, type Key } from 'react';
+import { Modal, Spin, Transfer, Tree, message } from 'antd';
+import type { DataNode } from 'antd/es/tree';
 import type { TransferItem } from 'antd/es/transfer';
 import { useTranslation } from 'react-i18next';
 
 import {
   fetchPublicColleges,
+  fetchPublicMajors,
   fetchTeacherAdminClasses,
-  fetchTeacherStudentPool,
+  fetchTeacherStudentPoolByAdminClass,
   listPersonalClassStudents,
   putPersonalClassStudents,
+  type PublicMajorOption,
   type TeacherPooledStudent,
   type TeacherRosterStudent,
 } from '../../teacherPortalApi';
@@ -21,8 +24,25 @@ interface AddStudentsTransferModalProps {
   onSaved: () => void;
 }
 
+type CatalogTreeNode = DataNode & {
+  nodeKind?: 'college' | 'major' | 'class';
+  collegeId?: string;
+  majorId?: string;
+  classId?: string;
+};
+
+function majorCacheKey(collegeId: string, majorId: string) {
+  return `${collegeId}:${majorId}`;
+}
+
+function parseMajorKey(key: string): { collegeId: string; majorId: string } | null {
+  const m = /^m-(\d+)-(\d+)$/.exec(key);
+  if (!m) return null;
+  return { collegeId: m[1], majorId: m[2] };
+}
+
 function pooledToTransferItem(row: TeacherPooledStudent): TransferItem {
-  const subtitle = [row.collegeName, row.adminClassName].filter(Boolean).join(' · ');
+  const subtitle = [row.collegeName, row.majorName].filter(Boolean).join(' · ');
   return {
     key: row.id,
     title: `${row.name}（${row.studentNo || '-'}）`,
@@ -39,7 +59,6 @@ function rosterToTransferItem(row: TeacherRosterStudent): TransferItem {
   };
 }
 
-/** 同名 key：后者覆盖前者 */
 function mergePreferOverlay(base: TransferItem[], overlay: TransferItem[]): TransferItem[] {
   const m = new Map<string, TransferItem>();
   base.forEach((x) => m.set(String(x.key), x));
@@ -60,12 +79,17 @@ export default function AddStudentsTransferModal({
 
   const [submitting, setSubmitting] = useState(false);
   const [colleges, setColleges] = useState<{ label: string; value: string }[]>([]);
-  const [adminClasses, setAdminClasses] = useState<{ label: string; value: string }[]>([]);
+  const [majors, setMajors] = useState<PublicMajorOption[]>([]);
 
-  const [collegeId, setCollegeId] = useState<string | undefined>();
   const [adminClassId, setAdminClassId] = useState<string | undefined>();
+  const [classesByMajor, setClassesByMajor] = useState<Record<string, { id: string; name: string }[]>>({});
+  const [loadingMajorKeys, setLoadingMajorKeys] = useState<Record<string, boolean>>({});
+  const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
+  const classesByMajorRef = useRef(classesByMajor);
+  classesByMajorRef.current = classesByMajor;
+  const loadingMajorRef = useRef(loadingMajorKeys);
+  loadingMajorRef.current = loadingMajorKeys;
 
-  const [adminClassesLoading, setAdminClassesLoading] = useState(false);
   const [poolLoading, setPoolLoading] = useState(false);
   const [initLoading, setInitLoading] = useState(false);
 
@@ -75,10 +99,103 @@ export default function AddStudentsTransferModal({
 
   const dataSource = useMemo(() => mergePreferOverlay(memberDs, poolDs), [memberDs, poolDs]);
 
+  const treeData = useMemo((): CatalogTreeNode[] => {
+    return colleges.map((c) => ({
+      key: `c-${c.value}`,
+      title: c.label,
+      nodeKind: 'college',
+      collegeId: c.value,
+      selectable: false,
+      children: majors
+        .filter((m) => m.collegeId === c.value)
+        .map((m) => {
+          const majorKey = `m-${c.value}-${m.id}`;
+          const cacheKey = majorCacheKey(c.value, m.id);
+          const loaded = classesByMajor[cacheKey];
+          const loading = !!loadingMajorKeys[majorKey];
+          const classChildren: CatalogTreeNode[] | undefined =
+            loaded === undefined
+              ? loading
+                ? [
+                    {
+                      key: `${majorKey}-loading`,
+                      title: t('teacher_class.add_students.catalog_loading'),
+                      selectable: false,
+                      disabled: true,
+                      isLeaf: true,
+                    },
+                  ]
+                : undefined
+              : loaded.length === 0
+                ? [
+                    {
+                      key: `${majorKey}-empty`,
+                      title: t('teacher_class.add_students.catalog_empty_class'),
+                      selectable: false,
+                      disabled: true,
+                      isLeaf: true,
+                    },
+                  ]
+                : loaded.map((cl) => ({
+                    key: `cl-${cl.id}`,
+                    title: cl.name,
+                    nodeKind: 'class',
+                    classId: cl.id,
+                    collegeId: c.value,
+                    majorId: m.id,
+                    isLeaf: true,
+                  }));
+
+          return {
+            key: majorKey,
+            title: m.name,
+            nodeKind: 'major',
+            collegeId: c.value,
+            majorId: m.id,
+            selectable: false,
+            isLeaf: false,
+            children: classChildren,
+          };
+        }),
+    }));
+  }, [colleges, majors, classesByMajor, loadingMajorKeys, t]);
+
+  const selectedTreeKeys = adminClassId ? [`cl-${adminClassId}`] : [];
+
+  const loadClassesForMajor = useCallback(
+    async (majorKey: string) => {
+      const parsed = parseMajorKey(majorKey);
+      if (!parsed) return;
+      const { collegeId, majorId } = parsed;
+      const cacheKey = majorCacheKey(collegeId, majorId);
+      if (classesByMajorRef.current[cacheKey] !== undefined || loadingMajorRef.current[majorKey]) return;
+
+      setLoadingMajorKeys((prev) => ({ ...prev, [majorKey]: true }));
+      try {
+        const rows = await fetchTeacherAdminClasses(collegeId, majorId);
+        setClassesByMajor((prev) => ({
+          ...prev,
+          [cacheKey]: rows.map((r) => ({ id: r.id, name: r.name })),
+        }));
+      } catch (e: unknown) {
+        message.error(e instanceof Error ? e.message : t('teacher_class.add_students.pool_load_fail'));
+        setClassesByMajor((prev) => ({ ...prev, [cacheKey]: [] }));
+      } finally {
+        setLoadingMajorKeys((prev) => {
+          const next = { ...prev };
+          delete next[majorKey];
+          return next;
+        });
+      }
+    },
+    [t]
+  );
+
   const resetLocalFilters = useCallback(() => {
-    setCollegeId(undefined);
     setAdminClassId(undefined);
-    setAdminClasses([]);
+    setClassesByMajor({});
+    setLoadingMajorKeys({});
+    setExpandedKeys([]);
     setMemberDs([]);
     setPoolDs([]);
     setTargetKeys([]);
@@ -93,10 +210,11 @@ export default function AddStudentsTransferModal({
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    fetchPublicColleges()
-      .then((rows) => {
+    Promise.all([fetchPublicColleges(), fetchPublicMajors()])
+      .then(([colRows, majorRows]) => {
         if (cancelled) return;
-        setColleges(rows.map((c) => ({ label: c.name, value: c.id })));
+        setColleges(colRows.map((c) => ({ label: c.name, value: c.id })));
+        setMajors(majorRows);
       })
       .catch((e: unknown) =>
         message.error(e instanceof Error ? e.message : t('teacher_class.add_students.colleges_load_fail'))
@@ -128,35 +246,13 @@ export default function AddStudentsTransferModal({
   }, [open, personalClassId, t]);
 
   useEffect(() => {
-    if (!open || !collegeId) {
-      setAdminClasses([]);
-      return;
-    }
-    let cancelled = false;
-    setAdminClassesLoading(true);
-    fetchTeacherAdminClasses(collegeId)
-      .then((rows) => {
-        if (cancelled) return;
-        setAdminClasses(rows.map((c) => ({ label: c.name, value: c.id })));
-      })
-      .catch(() => setAdminClasses([]))
-      .finally(() => {
-        if (!cancelled) setAdminClassesLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [open, collegeId]);
-
-  /** 仅在选择教务班级后加载学生池（仅选院系不加载） */
-  useEffect(() => {
-    if (!open || !collegeId || !adminClassId) {
+    if (!open || !adminClassId) {
       setPoolDs([]);
       return;
     }
     let cancelled = false;
     setPoolLoading(true);
-    fetchTeacherStudentPool(collegeId, adminClassId)
+    fetchTeacherStudentPoolByAdminClass(adminClassId)
       .then((rows) => {
         if (cancelled) return;
         setPoolDs(rows.map(pooledToTransferItem));
@@ -173,7 +269,7 @@ export default function AddStudentsTransferModal({
     return () => {
       cancelled = true;
     };
-  }, [open, collegeId, adminClassId, t]);
+  }, [open, adminClassId, t]);
 
   const handleSave = async () => {
     setSubmitting(true);
@@ -194,6 +290,13 @@ export default function AddStudentsTransferModal({
     onClose();
   };
 
+  const handleTreeExpand = (keys: Key[], info: { expanded: boolean; node: CatalogTreeNode }) => {
+    setExpandedKeys(keys.map(String));
+    if (info.expanded && info.node.nodeKind === 'major') {
+      void loadClassesForMajor(String(info.node.key));
+    }
+  };
+
   const modalTitle =
     groupName != null && groupName !== ''
       ? `${t('teacher_class.add_students.title_prefix')}${t('teacher_class.add_students.title_join')}${groupName}`
@@ -204,62 +307,72 @@ export default function AddStudentsTransferModal({
       title={modalTitle}
       open={open}
       onCancel={handleWrapClose}
-      width={860}
+      width={1040}
       destroyOnHidden
       okText={t('teacher_class.add_students.ok')}
       confirmLoading={submitting}
       onOk={() => void handleSave()}
       cancelText={t('teacher_class.add_students.cancel')}
     >
+      <div className="flex gap-4">
+        <aside className="flex w-[220px] shrink-0 flex-col rounded-xl border border-slate-200/90 bg-gradient-to-b from-slate-50 to-white shadow-sm">
+          <div className="border-b border-slate-100 px-3 py-2.5 text-xs font-semibold tracking-wide text-slate-500">
+            {t('teacher_class.add_students.catalog_tree_title')}
+          </div>
+          <div className="min-h-0 flex-1 overflow-auto px-1 py-2">
+            <Tree
+              className="add-students-catalog-tree bg-transparent text-[13px] leading-snug [&_.ant-tree-indent-unit]:w-3 [&_.ant-tree-node-content-wrapper]:min-h-[30px] [&_.ant-tree-node-content-wrapper]:rounded-lg [&_.ant-tree-node-content-wrapper]:px-2 [&_.ant-tree-node-content-wrapper]:py-1 [&_.ant-tree-node-content-wrapper:hover]:bg-slate-100/90 [&_.ant-tree-node-selected]:!bg-teal-50 [&_.ant-tree-node-selected]:!text-teal-800 [&_.ant-tree-switcher]:flex [&_.ant-tree-switcher]:items-center [&_.ant-tree-treenode]:mb-0.5 [&_.ant-tree-treenode]:py-0.5"
+              blockNode
+              expandAction="click"
+              treeData={treeData}
+              expandedKeys={expandedKeys}
+              selectedKeys={selectedTreeKeys}
+              onExpand={handleTreeExpand}
+              onSelect={(keys, info) => {
+                const node = info.node as CatalogTreeNode;
+                if (node.nodeKind !== 'class' || !node.classId) {
+                  setAdminClassId(undefined);
+                  return;
+                }
+                setAdminClassId(node.classId);
+              }}
+              height={368}
+              showLine={{ showLeafIcon: false }}
+            />
+          </div>
+        </aside>
 
-      <Space wrap className="mb-4 w-full" size="middle">
-        <Select
-          placeholder={t('teacher_class.add_students.college_placeholder')}
-          style={{ width: 220 }}
-          allowClear
-          options={colleges}
-          value={collegeId}
-          onChange={(v) => {
-            setCollegeId(v);
-            setAdminClassId(undefined);
-          }}
-        />
-        <Select
-          placeholder={t('teacher_class.add_students.admin_class_placeholder')}
-          style={{ minWidth: 260 }}
-          allowClear
-          options={adminClasses}
-          loading={adminClassesLoading}
-          disabled={!collegeId}
-          value={adminClassId}
-          onChange={setAdminClassId}
-          showSearch
-          optionFilterProp="label"
-        />
-      </Space>
-
-      <Spin spinning={initLoading || poolLoading}>
-        <Transfer
-          dataSource={dataSource}
-          targetKeys={targetKeys}
-          titles={[t('teacher_class.add_students.transfer_titles_0'), t('teacher_class.add_students.transfer_titles_1')]}
-          operations={[t('teacher_class.add_students.transfer_operations_0'), t('teacher_class.add_students.transfer_operations_1')]}
-          showSearch={{ placeholder: t('teacher_class.add_students.search_placeholder') }}
-          filterOption={(input, item) => {
-            const s = `${item.title || ''}${item.description || ''}`;
-            return s.toLowerCase().includes(input.toLowerCase());
-          }}
-          render={(item) => (
-            <span className="text-sm">
-              <div className="font-medium">{item.title}</div>
-              {item.description && <div className="text-xs text-gray-400">{item.description}</div>}
-            </span>
-          )}
-          listStyle={{ width: 360, height: 360 }}
-          onChange={(keys) => setTargetKeys(keys.map(String))}
-          disabled={submitting || initLoading || poolLoading}
-        />
-      </Spin>
+        <div className="min-w-0 flex-1">
+          <Spin spinning={initLoading || poolLoading}>
+            <Transfer
+              dataSource={dataSource}
+              targetKeys={targetKeys}
+              titles={[
+                t('teacher_class.add_students.transfer_titles_0'),
+                t('teacher_class.add_students.transfer_titles_1'),
+              ]}
+              operations={[
+                t('teacher_class.add_students.transfer_operations_0'),
+                t('teacher_class.add_students.transfer_operations_1'),
+              ]}
+              showSearch={{ placeholder: t('teacher_class.add_students.search_placeholder') }}
+              filterOption={(input, item) => {
+                const s = `${item.title || ''}${item.description || ''}`;
+                return s.toLowerCase().includes(input.toLowerCase());
+              }}
+              render={(item) => (
+                <span className="text-sm">
+                  <div className="font-medium">{item.title}</div>
+                  {item.description && <div className="text-xs text-gray-400">{item.description}</div>}
+                </span>
+              )}
+              listStyle={{ width: 340, height: 360 }}
+              onChange={(keys) => setTargetKeys(keys.map(String))}
+              disabled={submitting || initLoading || poolLoading}
+            />
+          </Spin>
+        </div>
+      </div>
     </Modal>
   );
 }

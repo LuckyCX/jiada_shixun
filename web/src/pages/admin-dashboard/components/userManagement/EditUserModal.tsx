@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Button, Form, Input, Select } from 'antd';
 import { User, UserRole } from './types';
 import { useCollegeDictOptions } from './useCollegeDictOptions';
+import { useMajorOptions } from './useMajorOptions';
 import { fetchAdminClasses, type AdminClassOption } from './adminUsersApi';
 
 interface EditUserModalProps {
@@ -22,6 +23,7 @@ type EditFormValues = {
   idNumber: string;
   email?: string;
   department: string;
+  majorId?: string;
   role: UserRole;
   classId?: string;
 };
@@ -37,7 +39,12 @@ export default function EditUserModal({
 }: EditUserModalProps) {
   const [form] = Form.useForm<EditFormValues>();
   const role = Form.useWatch('role', form);
+  const department = Form.useWatch('department', form);
   const { options: deptOptions, loading: deptLoading } = useCollegeDictOptions(isOpen && !!user);
+  const { options: majorOptions, loading: majorLoading } = useMajorOptions(
+    isOpen && !!user && (role === 'student' || role === 'teacher'),
+    lockDepartmentId ?? department
+  );
   const [classOptions, setClassOptions] = useState<AdminClassOption[]>([]);
   const [classesLoading, setClassesLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -70,6 +77,7 @@ export default function EditUserModal({
       idNumber: user.studentId || user.employeeId || user.username || '',
       email: user.email || '',
       department: user.department,
+      majorId: user.majorId || undefined,
       role: user.role,
       classId: user.classId || undefined,
     });
@@ -116,6 +124,7 @@ export default function EditUserModal({
           department: (lockDepartmentId ?? String(values.department)).trim(),
           role: lockRole ?? (isAdmin ? user.role : values.role),
           classId: lockClassId !== undefined ? lockClassId : (values.classId ?? ''),
+          ...(role === 'student' || role === 'teacher' ? { majorId: String(values.majorId ?? '') } : {}),
         })
       );
     } finally {
@@ -238,6 +247,20 @@ export default function EditUserModal({
               />
             )}
           </Form.Item>
+
+          {(role === 'student' || role === 'teacher') && !isAdmin ? (
+            <Form.Item label="专业" name="majorId" rules={[{ required: true, message: '请选择专业' }]}>
+              <Select
+                className="h-[42px]"
+                placeholder={department || lockDepartmentId ? '请选择专业' : '请先选择学院'}
+                loading={majorLoading}
+                options={majorOptions}
+                showSearch
+                optionFilterProp="label"
+                disabled={!(department || lockDepartmentId)}
+              />
+            </Form.Item>
+          ) : null}
 
           {role === 'student' && !isAdmin && lockClassId === undefined && (
             <Form.Item label="班级分配" name="classId">

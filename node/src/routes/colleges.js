@@ -42,6 +42,40 @@ async function allocateUniqueClassCode(pool, collegeId) {
   throw new Error('无法生成唯一班级编码');
 }
 
+/** 公开：专业下拉（可按学院筛选） */
+router.get('/public/majors', async (req, res) => {
+  try {
+    const collegeIdRaw = String(req.query.collegeId || '').trim();
+    const params = [];
+    let where = `m.status = 'active' AND c.status = 'active'`;
+    if (collegeIdRaw && /^\d+$/.test(collegeIdRaw)) {
+      where += ` AND m.college_id = $1`;
+      params.push(Number(collegeIdRaw));
+    }
+    const { rows } = await getPool().query(
+      `SELECT m.id, m.name, m.college_id AS "collegeId", c.name AS "collegeName"
+       FROM majors m
+       JOIN colleges c ON c.id = m.college_id
+       WHERE ${where}
+       ORDER BY c.id ASC, m.id ASC`,
+      params
+    );
+    return ok(
+      req,
+      res,
+      rows.map((r) => ({
+        id: String(r.id),
+        name: r.name,
+        collegeId: String(r.collegeId),
+        collegeName: r.collegeName,
+      }))
+    );
+  } catch (e) {
+    logError(`GET /api/public/majors traceId=${req.traceId}`, e);
+    return bad(req, res, 500, 50000, e.message);
+  }
+});
+
 /** 公开：学院下拉 */
 router.get('/public/colleges', async (req, res) => {
   try {
@@ -63,7 +97,12 @@ router.get('/admin/colleges', requireAuth(), requireAdmin(), async (req, res) =>
   try {
     const { rows } = await getPool().query(
       `SELECT c.id, c.name, c.status, c.created_at AS "createdAt", c.updated_at AS "updatedAt",
-              COUNT(cl.id)::int AS "classCount"
+              COUNT(cl.id)::int AS "classCount",
+              (
+                SELECT COUNT(*)::int FROM users u
+                WHERE u.role = 'teacher'
+                  AND TRIM(COALESCE(u.department, '')) = c.id::text
+              ) AS "teacherCount"
        FROM colleges c
        LEFT JOIN classes cl ON cl.college_id = c.id
        GROUP BY c.id
@@ -77,6 +116,7 @@ router.get('/admin/colleges', requireAuth(), requireAdmin(), async (req, res) =>
         name: r.name,
         status: r.status,
         classCount: r.classCount,
+        teacherCount: r.teacherCount ?? 0,
         createdAt: r.createdAt,
         updatedAt: r.updatedAt,
       }))
@@ -190,18 +230,31 @@ router.get('/admin/classes', requireAuth(), requireAdmin(), async (req, res) => 
       collegeIdRaw != null && String(collegeIdRaw).trim() !== ''
         ? Number(String(collegeIdRaw).trim())
         : null;
+    const majorIdRaw = req.query.majorId;
+    const majorId =
+      majorIdRaw != null && String(majorIdRaw).trim() !== ''
+        ? Number(String(majorIdRaw).trim())
+        : null;
     const params = [];
-    let where = '1=1';
+    const wheres = ['1=1'];
+    let pi = 1;
     if (collegeId != null && Number.isFinite(collegeId) && collegeId > 0) {
-      where = 'c.college_id = $1';
+      wheres.push(`c.college_id = $${pi++}`);
       params.push(collegeId);
     }
+    if (majorId != null && Number.isFinite(majorId) && majorId > 0) {
+      wheres.push(`c.major_id = $${pi++}`);
+      params.push(majorId);
+    }
+    const where = wheres.join(' AND ');
     const { rows } = await getPool().query(
-      `SELECT c.id, c.name, c.code, c.college_id, c.academic_year AS "academicYear", c.semester,
+      `SELECT c.id, c.name, c.code, c.college_id, c.major_id, c.academic_year AS "academicYear", c.semester,
               c.department, c.status, c.created_at AS "createdAt", c.teacher_id,
+              m.name AS "majorName",
               u.real_name AS "teacherName", u.email AS "teacherEmail",
               (SELECT COUNT(*)::int FROM class_students cs WHERE cs.class_id = c.id) AS "studentCount"
        FROM classes c
+       LEFT JOIN majors m ON m.id = c.major_id
        LEFT JOIN users u ON u.id = c.teacher_id
        WHERE ${where}
        ORDER BY c.id DESC
@@ -216,6 +269,8 @@ router.get('/admin/classes', requireAuth(), requireAdmin(), async (req, res) => 
         name: r.name,
         code: r.code,
         collegeId: r.college_id != null ? String(r.college_id) : '',
+        majorId: r.major_id != null ? String(r.major_id) : '',
+        majorName: r.majorName || '',
         academicYear: r.academicYear || '',
         semester: r.semester != null ? String(r.semester) : '',
         department: r.department != null ? String(r.department) : '',
@@ -236,27 +291,37 @@ router.get('/admin/classes', requireAuth(), requireAdmin(), async (req, res) => 
 router.post('/admin/classes', requireAuth(), requireAdmin(), async (req, res) => {
   try {
     const collegeId = Number(req.body?.collegeId);
+    const majorId = Number(req.body?.majorId);
     const name = String(req.body?.name || '').trim();
     let code = String(req.body?.code || '').trim();
-    const academicYear = String(req.body?.academicYear || '').trim() || null;
-    const semester = req.body?.semester != null && String(req.body.semester).trim() !== '' ? String(req.body.semester).trim() : null;
     const teacherIdRaw = req.body?.teacherId;
     const teacherId =
       teacherIdRaw != null && String(teacherIdRaw).trim() !== '' ? Number(String(teacherIdRaw).trim()) : null;
     const statusUi = uiStatusToDb(req.body?.status);
 
-    if (!Number.isFinite(collegeId) || collegeId <= 0) return bad(req, res, 400, 40001, '请选择学院');
+    if (!Number.isFinite(majorId) || majorId <= 0) return bad(req, res, 400, 40008, '请选择专业');
     if (!name) return bad(req, res, 400, 40002, '班级名称不能为空');
+
+    const { rows: mj } = await getPool().query(
+      `SELECT m.id, m.college_id FROM majors m
+       JOIN colleges c ON c.id = m.college_id AND c.status = 'active'
+       WHERE m.id = $1 AND m.status = 'active'`,
+      [majorId]
+    );
+    if (!mj.length) return bad(req, res, 400, 40009, '专业不存在或已停用');
+    const resolvedCollegeId = Number(mj[0].college_id);
+    if (Number.isFinite(collegeId) && collegeId > 0 && collegeId !== resolvedCollegeId) {
+      return bad(req, res, 400, 40010, '学院与专业不匹配');
+    }
+    const effCollegeId = resolvedCollegeId;
+
     if (!code) {
       try {
-        code = await allocateUniqueClassCode(getPool(), collegeId);
+        code = await allocateUniqueClassCode(getPool(), effCollegeId);
       } catch (e) {
         return bad(req, res, 500, 50001, e.message || '生成班级编码失败');
       }
     }
-
-    const { rows: col } = await getPool().query(`SELECT id FROM colleges WHERE id = $1 AND status = 'active'`, [collegeId]);
-    if (!col.length) return bad(req, res, 400, 40004, '学院不存在或已停用');
 
     if (teacherId != null && Number.isFinite(teacherId) && teacherId > 0) {
       const { rows: tr } = await getPool().query(`SELECT id, role FROM users WHERE id = $1`, [teacherId]);
@@ -264,12 +329,12 @@ router.post('/admin/classes', requireAuth(), requireAdmin(), async (req, res) =>
       if (tr[0].role !== 'teacher') return bad(req, res, 400, 40006, '指派用户须为教师角色');
     }
 
-    const deptStr = String(collegeId);
+    const deptStr = String(effCollegeId);
     const { rows } = await getPool().query(
-      `INSERT INTO classes (name, code, academic_year, semester, department, college_id, teacher_id, status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       RETURNING id, name, code, college_id, academic_year AS "academicYear", semester, department, status, created_at AS "createdAt", teacher_id`,
-      [name, code, academicYear, semester, deptStr, collegeId, teacherId && teacherId > 0 ? teacherId : null, statusUi]
+      `INSERT INTO classes (name, code, academic_year, semester, department, college_id, major_id, teacher_id, status)
+       VALUES ($1, $2, NULL, NULL, $3, $4, $5, $6, $7)
+       RETURNING id, name, code, college_id, major_id, academic_year AS "academicYear", semester, department, status, created_at AS "createdAt", teacher_id`,
+      [name, code, deptStr, effCollegeId, majorId, teacherId && teacherId > 0 ? teacherId : null, statusUi]
     );
     const r = rows[0];
     let teacherName = '';
@@ -281,11 +346,18 @@ router.post('/admin/classes', requireAuth(), requireAdmin(), async (req, res) =>
         teacherEmail = ur[0].email || '';
       }
     }
+    let majorName = '';
+    if (r.major_id) {
+      const { rows: mn } = await getPool().query(`SELECT name FROM majors WHERE id = $1`, [r.major_id]);
+      majorName = mn[0]?.name || '';
+    }
     const out = {
       id: String(r.id),
       name: r.name,
       code: r.code,
       collegeId: String(r.college_id),
+      majorId: r.major_id != null ? String(r.major_id) : '',
+      majorName,
       academicYear: r.academicYear || '',
       semester: r.semester != null ? String(r.semester) : '',
       department: r.department || '',
@@ -335,6 +407,9 @@ router.patch('/admin/classes/:id', requireAuth(), requireAdmin(), async (req, re
       collegeIdRaw !== undefined
         ? Number(String(collegeIdRaw || '').trim()) || null
         : undefined;
+    const majorIdRaw = req.body?.majorId;
+    const majorId =
+      majorIdRaw !== undefined ? Number(String(majorIdRaw || '').trim()) || null : undefined;
     const teacherIdRaw = req.body?.teacherId;
     const teacherId =
       teacherIdRaw !== undefined
@@ -367,7 +442,26 @@ router.patch('/admin/classes/:id', requireAuth(), requireAdmin(), async (req, re
       sets.push(`semester = $${pi++}`);
       params.push(semester);
     }
-    if (collegeId !== undefined) {
+    if (majorId !== undefined) {
+      if (!majorId || !Number.isFinite(majorId)) return bad(req, res, 400, 40008, '请选择专业');
+      const { rows: mj } = await getPool().query(
+        `SELECT m.id, m.college_id FROM majors m
+         JOIN colleges c ON c.id = m.college_id AND c.status = 'active'
+         WHERE m.id = $1 AND m.status = 'active'`,
+        [majorId]
+      );
+      if (!mj.length) return bad(req, res, 400, 40009, '专业不存在或已停用');
+      const cid = Number(mj[0].college_id);
+      if (collegeId !== undefined && collegeId && collegeId !== cid) {
+        return bad(req, res, 400, 40010, '学院与专业不匹配');
+      }
+      sets.push(`major_id = $${pi++}`);
+      params.push(majorId);
+      sets.push(`college_id = $${pi++}`);
+      params.push(cid);
+      sets.push(`department = $${pi++}`);
+      params.push(String(cid));
+    } else if (collegeId !== undefined) {
       if (!collegeId || !Number.isFinite(collegeId)) return bad(req, res, 400, 40004, '请选择学院');
       const { rows: col } = await getPool().query(`SELECT id FROM colleges WHERE id = $1 AND status = 'active'`, [collegeId]);
       if (!col.length) return bad(req, res, 400, 40005, '学院不存在或已停用');
@@ -396,11 +490,13 @@ router.patch('/admin/classes/:id', requireAuth(), requireAdmin(), async (req, re
     }
 
     const { rows } = await getPool().query(
-      `SELECT c.id, c.name, c.code, c.college_id, c.academic_year AS "academicYear", c.semester,
+      `SELECT c.id, c.name, c.code, c.college_id, c.major_id, c.academic_year AS "academicYear", c.semester,
               c.department, c.status, c.created_at AS "createdAt", c.teacher_id,
+              m.name AS "majorName",
               u.real_name AS "teacherName", u.email AS "teacherEmail",
               (SELECT COUNT(*)::int FROM class_students cs WHERE cs.class_id = c.id) AS "studentCount"
        FROM classes c
+       LEFT JOIN majors m ON m.id = c.major_id
        LEFT JOIN users u ON u.id = c.teacher_id
        WHERE c.id = $1`,
       [id]
@@ -411,6 +507,8 @@ router.patch('/admin/classes/:id', requireAuth(), requireAdmin(), async (req, re
       name: r.name,
       code: r.code,
       collegeId: r.college_id != null ? String(r.college_id) : '',
+      majorId: r.major_id != null ? String(r.major_id) : '',
+      majorName: r.majorName || '',
       academicYear: r.academicYear || '',
       semester: r.semester != null ? String(r.semester) : '',
       department: r.department != null ? String(r.department) : '',

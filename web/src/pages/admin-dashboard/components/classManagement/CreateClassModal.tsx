@@ -1,13 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Form, Input, Modal, Select } from 'antd';
 import { useCollegeDictOptions } from '../userManagement/useCollegeDictOptions';
-import { usePublicDictOptions } from './usePublicDictOptions';
+import { useMajorOptions } from '../userManagement/useMajorOptions';
 
 export type CreateClassFormValues = {
   name: string;
   collegeId: string;
-  academicYear: string;
-  semester: string;
+  majorId: string;
 };
 
 interface CreateClassModalProps {
@@ -19,15 +18,20 @@ interface CreateClassModalProps {
 export default function CreateClassModal({ isOpen, onClose, onConfirm }: CreateClassModalProps) {
   const [form] = Form.useForm<CreateClassFormValues>();
   const [submitting, setSubmitting] = useState(false);
+  const collegeId = Form.useWatch('collegeId', form);
 
   const { options: collegeOptions, loading: collegeLoading } = useCollegeDictOptions(isOpen);
-  const { options: semesterOptions, loading: semesterLoading } = usePublicDictOptions('semester', isOpen);
+  const { options: majorOptions, loading: majorLoading } = useMajorOptions(isOpen, collegeId);
 
   useEffect(() => {
     if (isOpen) {
       form.resetFields();
     }
   }, [isOpen, form]);
+
+  useEffect(() => {
+    form.setFieldValue('majorId', undefined);
+  }, [collegeId, form]);
 
   const handleSubmit = async () => {
     try {
@@ -64,7 +68,7 @@ export default function CreateClassModal({ isOpen, onClose, onConfirm }: CreateC
             { whitespace: true, message: '班级名称不能为空' },
           ]}
         >
-          <Input placeholder="例如：创新创业实践班（2024春）" maxLength={128} />
+          <Input placeholder="例如：2024级金融学1班" maxLength={128} />
         </Form.Item>
 
         <Form.Item name="collegeId" label="所属学院" rules={[{ required: true, message: '请选择学院' }]}>
@@ -78,23 +82,17 @@ export default function CreateClassModal({ isOpen, onClose, onConfirm }: CreateC
           />
         </Form.Item>
 
-        <div className="grid grid-cols-2 gap-4">
-          <Form.Item
-            name="academicYear"
-            label="学年"
-            rules={[
-              { required: true, message: '请输入学年' },
-              { whitespace: true, message: '学年不能为空' },
-            ]}
-          >
-            <Input placeholder="例如：2023-2024" maxLength={32} />
-          </Form.Item>
-
-          <Form.Item name="semester" label="学期" rules={[{ required: true, message: '请选择学期' }]}>
-            <Select placeholder="请选择学期" loading={semesterLoading} options={semesterOptions} allowClear={false} />
-          </Form.Item>
-        </div>
-
+        <Form.Item name="majorId" label="所属专业" rules={[{ required: true, message: '请选择专业' }]}>
+          <Select
+            placeholder={collegeId ? '请选择专业' : '请先选择学院'}
+            loading={majorLoading}
+            options={majorOptions}
+            showSearch
+            optionFilterProp="label"
+            disabled={!collegeId}
+            allowClear={false}
+          />
+        </Form.Item>
       </Form>
     </Modal>
   );
