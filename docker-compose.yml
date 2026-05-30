@@ -1,5 +1,6 @@
-# 一键编排：网关(静态+反代) :3000、Node API、PostgreSQL、Redis
-# 宿主调试：`postgres` 映射 15433:5432，`redis` 映射 16380:6379（与 npm run dev:local 一致）
+# 一键编排：网关(静态+反代)、Node API、PostgreSQL、Redis
+# 服务器宿主机映射 PG 15434（避免与同机其他项目的 15433 冲突）；容器内 node 仍用 postgres:5432
+# 本地 dev 端口 15433：docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d postgres redis
 # 不使用仓库 .env；连接信息仅写在本文件 environment 中。业务配置在库表 system_config。
 
 services:
@@ -13,7 +14,7 @@ services:
       - jiada_shixun:/var/lib/postgresql/data
       - ./docs/sql/init:/docker-entrypoint-initdb.d:ro
     ports:
-      - "15433:5432"
+      - "15434:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U jiada_shixun -d jiada_shixun"]
       interval: 5s
@@ -25,8 +26,6 @@ services:
     command: redis-server --appendonly yes
     volumes:
       - redisdata:/data
-    ports:
-      - "16380:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -37,6 +36,8 @@ services:
     build:
       context: ./node
       dockerfile: Dockerfile
+      args:
+        NODE_IMAGE: ${NODE_IMAGE:-docker.1ms.run/library/node:20-bookworm-slim}
     environment:
       DB_HOST: postgres
       REDIS_HOST: redis
@@ -58,7 +59,7 @@ services:
       context: .
       dockerfile: Dockerfile.gateway
     ports:
-      - "18081:80"
+      - "${GATEWAY_PORT:-18081}:80"
     depends_on:
       - node
 

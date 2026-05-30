@@ -29,8 +29,12 @@ export type AdminUsersPanelProps = {
   collegeId?: string;
   /** class-students 必填 */
   classId?: string;
+  /** class-students：班级所属专业 */
+  majorId?: string;
   /** 副标题（如班级名） */
   subtitle?: string;
+  /** class-students：专业名称展示 */
+  majorName?: string;
   onBack?: () => void;
 };
 
@@ -41,7 +45,7 @@ const emptyStats: AdminUserStats = {
   activeUsers: 0,
 };
 
-export default function AdminUsersPanel({ scope, collegeId = '', classId = '', subtitle, onBack }: AdminUsersPanelProps) {
+export default function AdminUsersPanel({ scope, collegeId = '', classId = '', majorId = '', subtitle, majorName = '', onBack }: AdminUsersPanelProps) {
   const { options: collegeFilterOptions, labelByValue: deptLabel } = useCollegeDictOptions(true);
   const [users, setUsers] = useState<User[]>([]);
   const [stats, setStats] = useState<AdminUserStats>(emptyStats);
@@ -547,10 +551,13 @@ export default function AdminUsersPanel({ scope, collegeId = '', classId = '', s
         onClose={() => setIsBatchImportOpen(false)}
         lockedCollegeId={scope === 'college-teachers' || scope === 'class-students' ? collegeId : undefined}
         lockedClassId={scope === 'class-students' ? classId : undefined}
+        lockedClassLabel={scope === 'class-students' ? subtitle : undefined}
+        lockedMajorId={scope === 'class-students' ? majorId : undefined}
+        lockedMajorLabel={scope === 'class-students' ? majorName : undefined}
         lockedRole={fixedRole}
         onImport={async (rows) => {
           const result = await postAdminUsersBatch(rows);
-          await loadUsers();
+          void loadUsers();
           return result;
         }}
       />

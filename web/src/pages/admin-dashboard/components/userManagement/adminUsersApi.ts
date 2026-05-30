@@ -17,7 +17,7 @@ export type AdminUsersPage = {
   stats: AdminUserStats;
 };
 
-export type AdminClassOption = { id: string; name: string; code: string; collegeId?: string };
+export type AdminClassOption = { id: string; name: string; code: string; collegeId?: string; majorId?: string };
 
 export type BatchImportRow = {
   name: string;
@@ -28,6 +28,8 @@ export type BatchImportRow = {
   majorId: string;
   /** 学生必填；教师可省略 */
   classId?: string;
+  /** CSV 文件中的行号（1 起），用于导入结果报错定位 */
+  sourceLine?: number;
 };
 
 export async function fetchAdminUsers(params: {
@@ -63,8 +65,15 @@ export async function fetchAdminClasses(collegeId?: string, majorId?: string): P
     name: string;
     code: string;
     collegeId: string;
+    majorId?: string;
   }>;
-  return rows.map((r) => ({ id: r.id, name: r.name, code: r.code, collegeId: r.collegeId }));
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    code: r.code,
+    collegeId: r.collegeId,
+    majorId: r.majorId,
+  }));
 }
 
 export async function createAdminUser(body: {
@@ -116,5 +125,18 @@ export async function deleteAdminUser(userId: string): Promise<void> {
 }
 
 export async function postAdminUsersBatch(rows: BatchImportRow[]): Promise<ImportResult> {
-  return adminFetch('/api/admin/users/batch', { method: 'POST', body: JSON.stringify({ rows }) });
+  const data = (await adminFetch('/api/admin/users/batch', {
+    method: 'POST',
+    body: JSON.stringify({ rows }),
+  })) as Partial<ImportResult> | null;
+  return {
+    success: Number(data?.success ?? 0),
+    failed: Number(data?.failed ?? 0),
+    errors: Array.isArray(data?.errors)
+      ? data.errors.map((e) => ({
+          row: Number(e?.row ?? 0),
+          reason: String(e?.reason ?? '未知错误'),
+        }))
+      : [],
+  };
 }

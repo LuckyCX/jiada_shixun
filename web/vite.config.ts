@@ -7,7 +7,9 @@ import { codeInspectorPlugin } from 'code-inspector-plugin';
 const base = process.env.BASE_PATH || "/";
 const isPreview = process.env.IS_PREVIEW ? true : false;
 // https://vite.dev/config/
-export default defineConfig({
+export default defineConfig(({ mode }) => {
+  const isProd = mode === "production";
+  return {
   define: {
     __BASE_PATH__: JSON.stringify(base),
     __IS_PREVIEW__: JSON.stringify(isPreview),
@@ -17,9 +19,13 @@ export default defineConfig({
   },
   plugins: [
     react(),
-    codeInspectorPlugin({
-      bundler: 'vite',
-    }),
+    ...(isProd
+      ? []
+      : [
+          codeInspectorPlugin({
+            bundler: "vite",
+          }),
+        ]),
     AutoImport({
       imports: [
         {
@@ -72,8 +78,20 @@ export default defineConfig({
   ],
   base,
   build: {
-    sourcemap: true,
+    sourcemap: false,
+    reportCompressedSize: false,
     outDir: "out",
+    rollupOptions: {
+      output: {
+        assetFileNames: (assetInfo) => {
+          const base = assetInfo.names?.[0] ?? assetInfo.name ?? "";
+          if (base.includes("pdf.worker")) {
+            return "assets/pdf.worker-[hash].js";
+          }
+          return "assets/[name]-[hash][extname]";
+        },
+      },
+    },
   },
   resolve: {
     alias: {
@@ -94,4 +112,5 @@ export default defineConfig({
       },
     },
   },
+  };
 });

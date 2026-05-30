@@ -13,6 +13,11 @@ interface BatchImportModalProps {
   lockedCollegeId?: string;
   /** 锁定班级 id（学生行入班）；教师批量时可不设 */
   lockedClassId?: string;
+  /** 与 lockedClassId 同场景展示用（如班级学生管理页 subtitle） */
+  lockedClassLabel?: string;
+  /** 班级学生管理：锁定专业 */
+  lockedMajorId?: string;
+  lockedMajorLabel?: string;
   /** 锁定导入角色：教师/学生页不写 CSV「角色」列，由本页场景自动写入身份 */
   lockedRole?: 'student' | 'teacher';
 }
@@ -21,17 +26,20 @@ interface BatchImportModalProps {
 function parseCsvToRows(
   text: string,
   fixedRole?: 'student' | 'teacher'
-): { name: string; role: string; idNumber: string; email?: string }[] {
+): { name: string; role: string; idNumber: string; email?: string; csvLine: number }[] {
   const raw = text.replace(/^\ufeff/, '');
-  const lines = raw
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter(Boolean);
-  const contentLines = lines.filter((l) => !l.startsWith('#'));
+  const fileLines = raw.split(/\r?\n/);
+  const contentLines: { lineNo: number; text: string }[] = [];
+  for (let i = 0; i < fileLines.length; i++) {
+    const textLine = fileLines[i].trim();
+    if (!textLine) continue;
+    if (textLine.startsWith('#')) continue;
+    contentLines.push({ lineNo: i + 1, text: textLine });
+  }
   if (contentLines.length < 2) {
     throw new Error('至少需要表头与一行数据');
   }
-  const header = contentLines[0].split(',').map((h) => h.trim());
+  const header = contentLines[0].text.split(',').map((h) => h.trim());
   const idx = (names: string[]) => {
     for (const n of names) {
       const i = header.indexOf(n);
@@ -56,9 +64,9 @@ function parseCsvToRows(
 
   const autoRole = fixedRole === 'teacher' ? '教师' : fixedRole === 'student' ? '学生' : '';
 
-  const rows: { name: string; role: string; idNumber: string; email?: string }[] = [];
+  const rows: { name: string; role: string; idNumber: string; email?: string; csvLine: number }[] = [];
   for (let r = 1; r < contentLines.length; r++) {
-    const cells = contentLines[r].split(',').map((c) => c.trim());
+    const cells = contentLines[r].text.split(',').map((c) => c.trim());
     const name = cells[iName] ?? '';
     const role = fixedRole ? autoRole : (cells[iRole] ?? '');
     const idNumber = cells[iId] ?? '';
@@ -67,6 +75,7 @@ function parseCsvToRows(
       name,
       role,
       idNumber,
+      csvLine: contentLines[r].lineNo,
       ...(email ? { email } : {}),
     });
   }
@@ -86,6 +95,9 @@ export default function BatchImportModal({
   onImport,
   lockedCollegeId,
   lockedClassId,
+  lockedClassLabel,
+  lockedMajorId,
+  lockedMajorLabel,
   lockedRole,
 }: BatchImportModalProps) {
   const [colleges, setColleges] = useState<AdminCollegeRow[]>([]);
@@ -124,9 +136,12 @@ export default function BatchImportModal({
   useEffect(() => {
     if (!isOpen) return;
     if (lockedCollegeId) setTplCollegeId(lockedCollegeId);
+    if (lockedMajorId) setTplMajorId(lockedMajorId);
     if (lockedClassId) setTplClassId(lockedClassId);
     if (lockedRole === 'teacher') setTplClassId('');
-  }, [isOpen, lockedCollegeId, lockedClassId, lockedRole]);
+  }, [isOpen, lockedCollegeId, lockedMajorId, lockedClassId, lockedRole]);
+
+  const classImportLocked = Boolean(lockedCollegeId && lockedClassId);
 
   const collegeMajorCascaderOptions = useMemo(
     () =>
@@ -155,7 +170,7 @@ export default function BatchImportModal({
     }
     if (!tplCollegeId || !tplMajorId) {
       setClassOptions([]);
-      setTplClassId('');
+      if (!lockedClassId) setTplClassId('');
       return;
     }
     let cancelled = false;
@@ -170,22 +185,25 @@ export default function BatchImportModal({
     return () => {
       cancelled = true;
     };
-  }, [tplCollegeId, tplMajorId, lockedRole]);
+  }, [tplCollegeId, tplMajorId, lockedRole, lockedClassId]);
 
   if (!isOpen) return null;
 
   const modalTitle =
     lockedRole === 'teacher' ? '批量导入教师' : lockedRole === 'student' ? '批量导入学生' : '批量导入用户';
 
-  const preSelectTitle =
-    lockedRole === 'teacher'
+  const preSelectTitle = classImportLocked
+    ? '导入目标'
+    : lockedRole === 'teacher'
       ? '导入前：选择学院与专业'
       : lockedRole === 'student'
         ? '导入前：选择学院、专业与班级'
         : '导入前：选择学院、专业与班级';
 
   const selectedCollege = colleges.find((c) => c.id === tplCollegeId);
-  const selectedMajor = allMajors.find((m) => m.id === tplMajorId);
+  const selectedMajor =
+    allMajors.find((m) => m.id === tplMajorId) ||
+    (lockedMajorLabel && tplMajorId ? { id: tplMajorId, name: lockedMajorLabel, collegeId: tplCollegeId } : undefined);
   const selectedClassMeta = classOptions.find((o) => o.value === tplClassId);
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -230,17 +248,18 @@ export default function BatchImportModal({
         message.warning('请先在上方选择学院');
         return;
       }
-      if (!tplMajorId) {
+      if (!tplMajorId && !lockedMajorId) {
         message.warning('请先在上方选择专业');
         return;
       }
+      const majorIdResolved = tplMajorId || lockedMajorId || '';
       const c = active.find((x) => x.id === tplCollegeId);
       if (!c) {
         message.error('学院数据已变化，请重新选择');
         return;
       }
       const majors = await fetchPublicMajors(tplCollegeId);
-      const mj = majors.find((x) => x.id === tplMajorId);
+      const mj = majors.find((x) => x.id === majorIdResolved);
       if (!mj) {
         message.error('专业数据已变化，请重新选择');
         return;
@@ -257,26 +276,38 @@ export default function BatchImportModal({
         bodyLines = '李老师,T2021001,li@example.com';
         filename = '教师导入模板.csv';
       } else if (lockedRole === 'student') {
-        const cls = await fetchAdminClasses(tplCollegeId, tplMajorId);
-        if (!cls.length) {
-          message.warning(`${c.name}下没有班级，请先在学院下创建班级`);
-          return;
-        }
-        if (!tplClassId) {
-          message.warning('请选择班级');
-          return;
-        }
-        const cl = cls.find((x) => x.id === tplClassId);
-        if (!cl) {
-          message.error('班级数据已变化，请重新选择');
-          return;
+        let cl: { id: string; name: string };
+        if (lockedClassId) {
+          const fromApi = (await fetchAdminClasses(tplCollegeId)).find((x) => x.id === lockedClassId);
+          const name = lockedClassLabel || fromApi?.name;
+          if (!name) {
+            message.error('无法识别当前班级，请从班级管理重新进入本页');
+            return;
+          }
+          cl = { id: lockedClassId, name };
+        } else {
+          const cls = await fetchAdminClasses(tplCollegeId, majorIdResolved);
+          if (!cls.length) {
+            message.warning(`${c.name} / ${mj.name} 下没有班级，请先创建班级`);
+            return;
+          }
+          if (!tplClassId) {
+            message.warning('请选择班级');
+            return;
+          }
+          const found = cls.find((x) => x.id === tplClassId);
+          if (!found) {
+            message.error('班级数据已变化，请重新选择');
+            return;
+          }
+          cl = found;
         }
         line1 = `# 学院,${c.name},id=${c.id} | 专业,${mj.name},id=${mj.id} | 班级,${cl.name},id=${cl.id}（数据行勿含学院/专业/班级列；无需「角色」列，将按本页学生批量导入）`;
         header = '姓名,学号或工号,邮箱';
         bodyLines = '张三,2021001001,';
         filename = '学生导入模板.csv';
       } else {
-        const cls = await fetchAdminClasses(tplCollegeId, tplMajorId);
+        const cls = await fetchAdminClasses(tplCollegeId, majorIdResolved);
         if (!cls.length) {
           message.warning(`${c.name} / ${mj.name} 下没有班级，请先创建班级`);
           return;
@@ -313,23 +344,19 @@ export default function BatchImportModal({
     setIsUploading(true);
     setUploadProgress(0);
     let progressInterval: ReturnType<typeof setInterval> | undefined;
+    let importOk = false;
     try {
-      progressInterval = window.setInterval(() => {
-        setUploadProgress((prev) => {
-          if (prev >= 90) return 90;
-          return prev + 10;
-        });
-      }, 200);
-
       const text = await file.text();
+      setUploadProgress(8);
       const parsed = parseCsvToRows(text, lockedRole);
 
       if (!tplCollegeId.trim()) {
         throw new Error('请先在上方选择学院，再开始导入');
       }
-      if (!tplMajorId.trim()) {
+      if (!tplMajorId.trim() && !lockedMajorId?.trim()) {
         throw new Error('请先在上方选择专业，再开始导入');
       }
+      const majorIdResolved = (tplMajorId || lockedMajorId || '').trim();
       let hasStudent = lockedRole === 'student';
       if (!lockedRole) {
         for (const p of parsed) {
@@ -342,21 +369,38 @@ export default function BatchImportModal({
 
       const rows: BatchImportRow[] = [];
       for (const p of parsed) {
-        const rl = normalizeRoleLabel(p.role);
+        if (!p.name.trim() && !p.idNumber.trim()) continue;
+        const rl = lockedRole === 'teacher' ? '教师' : lockedRole === 'student' ? '学生' : normalizeRoleLabel(p.role);
+        if (!lockedRole && !rl) {
+          throw new Error(`第 ${p.csvLine} 行：角色须为「学生」或「教师」`);
+        }
+        const roleLabel = rl === '学生' ? '学生' : rl === '教师' ? '教师' : p.role.trim();
         rows.push({
           name: p.name.trim(),
-          role: rl === '学生' ? '学生' : rl === '教师' ? '教师' : p.role.trim(),
+          role: roleLabel,
           idNumber: p.idNumber.trim(),
           collegeId: tplCollegeId.trim(),
-          majorId: tplMajorId.trim(),
-          ...(rl === '学生' && tplClassId.trim() ? { classId: tplClassId.trim() } : {}),
+          majorId: majorIdResolved,
+          sourceLine: p.csvLine,
+          ...(roleLabel === '学生' && tplClassId.trim() ? { classId: tplClassId.trim() } : {}),
           ...(p.email?.trim() ? { email: p.email.trim() } : {}),
         });
       }
       if (!rows.length) {
         throw new Error('没有可导入的数据行');
       }
+
+      setUploadProgress(15);
+      progressInterval = window.setInterval(() => {
+        setUploadProgress((prev) => (prev >= 92 ? 92 : prev + 1));
+      }, 350);
+
       const result = await onImport(rows);
+      importOk = true;
+      if (progressInterval) {
+        window.clearInterval(progressInterval);
+        progressInterval = undefined;
+      }
       setUploadProgress(100);
       setImportResult(result);
     } catch (error: unknown) {
@@ -364,7 +408,7 @@ export default function BatchImportModal({
     } finally {
       if (progressInterval) window.clearInterval(progressInterval);
       setIsUploading(false);
-      setUploadProgress(0);
+      if (!importOk) setUploadProgress(0);
     }
   };
 
@@ -374,7 +418,7 @@ export default function BatchImportModal({
     setUploadProgress(0);
     setImportResult(null);
     if (!lockedCollegeId) setTplCollegeId('');
-    setTplMajorId('');
+    if (!lockedMajorId) setTplMajorId('');
     if (!lockedClassId) setTplClassId('');
     onClose();
   };
@@ -399,7 +443,28 @@ export default function BatchImportModal({
               <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
                 <div className="text-sm font-medium text-gray-800 mb-2">{preSelectTitle}</div>
                 <Space wrap className="w-full" direction="vertical" size="middle" style={{ width: '100%' }}>
-                  {lockedCollegeId ? (
+                  {classImportLocked ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div className="rounded-lg border border-gray-200 bg-white px-4 py-3">
+                        <div className="text-xs text-gray-500 mb-1">学院</div>
+                        <div className="text-sm font-medium text-gray-900 leading-snug">
+                          {selectedCollege?.name ?? '—'}
+                        </div>
+                      </div>
+                      <div className="rounded-lg border border-gray-200 bg-white px-4 py-3">
+                        <div className="text-xs text-gray-500 mb-1">专业</div>
+                        <div className="text-sm font-medium text-gray-900 leading-snug">
+                          {selectedMajor?.name ?? lockedMajorLabel ?? '—'}
+                        </div>
+                      </div>
+                      <div className="rounded-lg border border-gray-200 bg-white px-4 py-3">
+                        <div className="text-xs text-gray-500 mb-1">班级</div>
+                        <div className="text-sm font-medium text-gray-900 leading-snug">
+                          {lockedClassLabel ?? `ID ${lockedClassId}`}
+                        </div>
+                      </div>
+                    </div>
+                  ) : lockedCollegeId ? (
                     <>
                       <Select
                         className="min-w-[220px]"
@@ -444,11 +509,11 @@ export default function BatchImportModal({
                       }}
                     />
                   )}
-                  {lockedRole !== 'teacher' && (
+                  {lockedRole !== 'teacher' && !lockedClassId && (
                     <Select
                       className="min-w-[260px]"
                       placeholder="选择班级"
-                      disabled={!tplCollegeId || !tplMajorId || !!lockedClassId}
+                      disabled={!tplCollegeId || !tplMajorId}
                       value={tplClassId || undefined}
                       onChange={(v) => setTplClassId(v ?? '')}
                       options={classOptions}
@@ -461,7 +526,11 @@ export default function BatchImportModal({
                   <p className="text-xs text-gray-600 mt-3 leading-relaxed">
                     下载模板首行为说明（含学院、专业 id 供核对）。<strong>数据列：姓名、学号或工号、邮箱</strong>（无需「角色」列）；教师归属所选学院与专业，不与班级绑定。
                   </p>
-                ) : lockedRole === 'student' && selectedCollege && selectedMajor && tplClassId && selectedClassMeta ? (
+                ) : lockedRole === 'student' &&
+                  selectedCollege &&
+                  selectedMajor &&
+                  tplClassId &&
+                  (classImportLocked || selectedClassMeta) ? (
                   <p className="text-xs text-gray-600 mt-3 leading-relaxed">
                     下载模板首行为说明（含学院、专业、班级 id 供核对）。<strong>数据列：姓名、学号或工号、邮箱</strong>（无需「角色」列）；学院、专业与班级以本页上方所选为准。
                   </p>
@@ -561,7 +630,9 @@ export default function BatchImportModal({
               {isUploading && (
                 <div className="space-y-2">
                   <div className="flex items-center justify-between text-sm">
-                    <span className="text-gray-600">正在导入...</span>
+                    <span className="text-gray-600">
+                      {uploadProgress >= 15 ? '正在提交并处理，请勿关闭…' : '正在读取文件…'}
+                    </span>
                     <span className="text-teal-600 font-medium">{uploadProgress}%</span>
                   </div>
                   <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
@@ -601,15 +672,22 @@ export default function BatchImportModal({
                   />
                 </div>
                 <h4 className="text-lg font-semibold text-gray-900 mb-2">导入完成</h4>
-                <p className="text-sm text-gray-600">
-                  成功导入 <span className="text-green-600 font-semibold">{importResult.success}</span> 条，失败{' '}
-                  <span className="text-red-600 font-semibold">{importResult.failed}</span> 条
+                <div className="inline-flex flex-wrap items-center justify-center gap-4 text-sm text-gray-700">
+                  <span>
+                    成功 <span className="text-green-600 font-semibold text-base">{importResult.success}</span> 条
+                  </span>
+                  <span>
+                    失败 <span className="text-red-600 font-semibold text-base">{importResult.failed}</span> 条
+                  </span>
+                </div>
+                <p className="text-xs text-gray-500 mt-2">
+                  失败行号为 CSV 文件中的实际行号；使用下载模板时，数据从第 3 行开始填写。
                 </p>
               </div>
 
               {importResult.errors.length > 0 && (
                 <div className="bg-red-50 border border-red-200 rounded-lg p-4 max-h-60 overflow-y-auto">
-                  <h5 className="text-sm font-medium text-red-900 mb-2">失败记录详情</h5>
+                  <h5 className="text-sm font-medium text-red-900 mb-2">失败明细（CSV 行号）</h5>
                   <div className="space-y-2">
                     {importResult.errors.map((error, index) => (
                       <div key={index} className="text-sm text-red-700">

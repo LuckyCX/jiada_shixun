@@ -456,9 +456,61 @@ router.post('/admin/users/batch', requireAuth(), requireAdmin(), async (req, res
     const errors = [];
     let success = 0;
 
+    const usernames = [
+      ...new Set(
+        rows.map((row) => String(row?.idNumber || '').trim()).filter(Boolean)
+      ),
+    ];
+    const existingUsernames = new Set();
+    if (usernames.length) {
+      const { rows: dupRows } = await getPool().query(
+        `SELECT username FROM users WHERE username = ANY($1::text[])`,
+        [usernames]
+      );
+      for (const d of dupRows) existingUsernames.add(d.username);
+    }
+
+    const collegeActiveCache = new Map();
+    const majorCollegeCache = new Map();
+    const classCollegeCache = new Map();
+
+    async function collegeIsActive(collegeIdNum) {
+      if (collegeActiveCache.has(collegeIdNum)) return collegeActiveCache.get(collegeIdNum);
+      const { rows: co } = await getPool().query(
+        `SELECT id FROM colleges WHERE id = $1 AND status = 'active'`,
+        [collegeIdNum]
+      );
+      const ok = co.length > 0;
+      collegeActiveCache.set(collegeIdNum, ok);
+      return ok;
+    }
+
+    async function majorCollegeId(majorIdNum) {
+      if (majorCollegeCache.has(majorIdNum)) return majorCollegeCache.get(majorIdNum);
+      const { rows: mj } = await getPool().query(
+        `SELECT id, college_id FROM majors WHERE id = $1 AND status = 'active'`,
+        [majorIdNum]
+      );
+      const cid = mj.length ? Number(mj[0].college_id) : null;
+      majorCollegeCache.set(majorIdNum, cid);
+      return cid;
+    }
+
+    async function classCollegeId(classIdNum) {
+      if (classCollegeCache.has(classIdNum)) return classCollegeCache.get(classIdNum);
+      const { rows: cl } = await getPool().query(`SELECT id, college_id FROM classes WHERE id = $1`, [
+        classIdNum,
+      ]);
+      const cid = cl.length ? Number(cl[0].college_id) : null;
+      classCollegeCache.set(classIdNum, cid);
+      return cid;
+    }
+
     for (let idx = 0; idx < rows.length; idx++) {
       const row = rows[idx] || {};
-      const rowNo = idx + 2;
+      const sourceLine = Number(row.sourceLine);
+      const rowNo =
+        Number.isFinite(sourceLine) && sourceLine > 0 ? Math.floor(sourceLine) : idx + 2;
       const name = String(row.name || '').trim();
       const role = normalizeRole(row.role);
       const idNumber = String(row.idNumber || '').trim();
@@ -495,15 +547,12 @@ router.post('/admin/users/batch', requireAuth(), requireAdmin(), async (req, res
         continue;
       }
       if (role === 'teacher') {
-        const { rows: mjT } = await getPool().query(
-          `SELECT id, college_id FROM majors WHERE id = $1 AND status = 'active'`,
-          [majorIdNum]
-        );
-        if (!mjT.length) {
+        const mjCollege = await majorCollegeId(majorIdNum);
+        if (mjCollege == null) {
           errors.push({ row: rowNo, reason: '专业不存在或已停用' });
           continue;
         }
-        if (Number(mjT[0].college_id) !== collegeIdNum) {
+        if (mjCollege !== collegeIdNum) {
           errors.push({ row: rowNo, reason: '专业不属于所选学院' });
           continue;
         }
@@ -519,41 +568,33 @@ router.post('/admin/users/batch', requireAuth(), requireAdmin(), async (req, res
 
       const pwd = idNumber.slice(-6) || idNumber;
       try {
-        const { rows: co } = await getPool().query(
-          `SELECT id FROM colleges WHERE id = $1 AND status = 'active'`,
-          [collegeIdNum]
-        );
-        if (!co.length) {
+        if (!(await collegeIsActive(collegeIdNum))) {
           errors.push({ row: rowNo, reason: '学院不存在或已停用' });
           continue;
         }
 
         if (role === 'student') {
-          const { rows: mj } = await getPool().query(
-            `SELECT id, college_id FROM majors WHERE id = $1 AND status = 'active'`,
-            [majorIdNum]
-          );
-          if (!mj.length) {
+          const mjCollege = await majorCollegeId(majorIdNum);
+          if (mjCollege == null) {
             errors.push({ row: rowNo, reason: '专业不存在或已停用' });
             continue;
           }
-          if (Number(mj[0].college_id) !== collegeIdNum) {
+          if (mjCollege !== collegeIdNum) {
             errors.push({ row: rowNo, reason: '专业不属于所选学院' });
             continue;
           }
-          const { rows: cl } = await getPool().query(`SELECT id, college_id FROM classes WHERE id = $1`, [classIdNum]);
-          if (!cl.length) {
+          const clCollege = await classCollegeId(classIdNum);
+          if (clCollege == null) {
             errors.push({ row: rowNo, reason: '班级不存在' });
             continue;
           }
-          if (Number(cl[0].college_id) !== collegeIdNum) {
+          if (clCollege !== collegeIdNum) {
             errors.push({ row: rowNo, reason: '班级不属于所选学院' });
             continue;
           }
         }
 
-        const { rows: dup } = await getPool().query(`SELECT id FROM users WHERE username = $1`, [idNumber]);
-        if (dup.length) {
+        if (existingUsernames.has(idNumber)) {
           errors.push({ row: rowNo, reason: '学号/工号已存在' });
           continue;
         }
@@ -575,6 +616,7 @@ router.post('/admin/users/batch', requireAuth(), requireAdmin(), async (req, res
             [classIdNum, newUserId]
           );
         }
+        existingUsernames.add(idNumber);
         success++;
       } catch (e) {
         errors.push({ row: rowNo, reason: e.message || '写入失败' });

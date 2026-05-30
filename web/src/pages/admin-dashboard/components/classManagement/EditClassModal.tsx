@@ -63,15 +63,12 @@ export default function EditClassModal({ isOpen, onClose, onConfirm, classData }
           <Form.Item name="name" label="班级名称" rules={[{ required: true, message: '请输入班级名称' }]}>
             <Input placeholder="班级名称" />
           </Form.Item>
-          <Form.Item name="code" label="班级编码" rules={[{ required: true, message: '请输入班级编码' }]}>
-            <Input placeholder="班级编码" />
-          </Form.Item>
           <Form.Item name="collegeId" label="所属学院" rules={[{ required: true, message: '请选择学院' }]}>
             <Select loading={collegeLoading} options={collegeOptions} showSearch optionFilterProp="label" />
           </Form.Item>
           <Form.Item name="majorId" label="所属专业" rules={[{ required: true, message: '请选择专业' }]}>
             <Select
-              loading={majorLoading}
+              loading={majorLoading} 
               options={majorOptions}
               showSearch
               optionFilterProp="label"

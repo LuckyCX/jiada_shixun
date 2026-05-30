@@ -352,7 +352,9 @@ export default function ClassManagement() {
                           q.set('tab', 'class-students');
                           q.set('classId', cls.id);
                           q.set('collegeId', cls.collegeId);
-                          q.set('className', encodeURIComponent(cls.name));
+                          q.set('majorId', cls.majorId);
+                          if (cls.majorName) q.set('majorName', cls.majorName);
+                          q.set('className', cls.name);
                           navigate(`/admin-dashboard?${q.toString()}`);
                         }}
                       >

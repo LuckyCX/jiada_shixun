@@ -34,14 +34,11 @@ docker compose logs -f node gateway
 
 ### 3）接口验收（经网关，与浏览器同域）
 
-在宿主机执行（未改端口时**入口为 3000**）：
+在宿主机执行（gateway 默认映射 **18081**，与宝塔反代一致）：
 
 ```bash
-# 仅进程存活
-curl -sS http://localhost:3000/api/health/live
-
-# 依赖 PostgreSQL + Redis，成功表示库与缓存连通
-curl -sS http://localhost:3000/api/health/ready
+curl -sS http://127.0.0.1:18081/api/health/live
+curl -sS http://127.0.0.1:18081/api/health/ready
 ```
 
 期望返回 JSON 中含 `"code":0`（或业务约定的成功字段）。`ready` 若返回 503，多为数据库或 Redis 未连上，可看 `docker compose logs postgres redis node`。
@@ -49,7 +46,7 @@ curl -sS http://localhost:3000/api/health/ready
 **登录接口**（种子管理员，密码见 [`docs/sql/README.md`](../sql/README.md)）：
 
 ```bash
-curl -sS -X POST http://localhost:3000/api/auth/login \
+curl -sS -X POST http://127.0.0.1:18081/api/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"username":"admin","password":"jiuan@123"}'
 ```
@@ -58,8 +55,8 @@ curl -sS -X POST http://localhost:3000/api/auth/login \
 
 ### 4）浏览器验收
 
-- 打开 `http://localhost:3000`，应能加载前端首页。
-- 管理端示例：`http://localhost:3000/admin-dashboard?tab=system-config`（系统配置需在上面登录拿到 token 后由页面内使用；或直接先调 `/api/auth/login` 自测）。
+- 经域名访问需宝塔反代到 `127.0.0.1:18081`（见 [`docs/nginx/部署说明.md`](../nginx/部署说明.md) 与 [`baota-site.conf`](../nginx/baota-site.conf)），勿指到 4000/其他项目端口。
+- 直连网关自检：`http://服务器IP:18081`
 
 ### 5）停止与再次启动（不删数据）
 
@@ -70,16 +67,24 @@ docker compose start     # 再启动（沿用原卷）
 
 **不要**在需要保留数据时使用 `docker compose down -v`（`-v` 会删除命名卷，清空 PostgreSQL、Redis 与已上传课件文件）。
 
-### 6）宿主机直连 PG / Redis（本机跑 `npm run dev:local`）
+### 6）宿主机直连 PG / Redis
 
-`docker-compose.yml` 已将数据库与 Redis 映射到宿主端口（避免与机器上其它 5432/6379 冲突）：
+**服务器**（默认 `docker-compose.yml`）：PostgreSQL 映射 **`15434`** → 容器 5432（与同机其他项目占用的 15433 错开）。
 
-| 服务 | 宿主端口 | 容器内 |
-|------|----------|--------|
-| PostgreSQL | `15433` | `5432` |
-| Redis | `16380` | `6379` |
+**本地** `npm run dev:local`（15433 / 16380）：
 
-容器内 `node` 仍通过服务名 `postgres:5432`、`redis:6379` 连接，不受影响。在仓库 `node/` 下执行 `npm run dev:local` 已按上述宿主端口配置。
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d postgres redis
+```
+
+`docker-compose.dev.yml` 会把 PG 端口改回 **15433**。
+
+| 场景 | PostgreSQL 宿主端口 |
+|------|---------------------|
+| 服务器仅 compose | `15434` |
+| 本地 + dev 覆盖 | `15433` |
+
+容器内 `node` 始终用 `postgres:5432`、`redis:6379`。
 
 ---
 
@@ -90,7 +95,9 @@ docker compose start     # 再启动（沿用原卷）
 | `postgres` | 主库 | 命名卷 `jiada_shixun`（表结构 + 业务数据） |
 | `redis` | 缓存 / 会话等 | 命名卷 `redisdata`（AOF 等） |
 | `node` | API | 命名卷 `node_uploads`（课件、附件等上传文件） |
-| `gateway` | Nginx + 前端静态 | **无状态**；仅代码/构建产物镜像 |
+| `gateway` | Nginx + 前端静态 | **无状态**；镜像内会执行 `pnpm run build`（内存占用高） |
+
+**gateway 镜像构建**：前端约 4000+ 模块，Vite 在 `rendering chunks` 阶段峰值内存常超过 2GB。若 ECS 仅 2GB 且无 swap，会出现日志停在某一步、整机卡死（实为内存耗尽/OOM）。建议：构建前 `docker compose stop` 其它服务；为系统增加 **2GB swap**；或在本机/CI 构建后 `docker save`/`load` 再部署。仓库已在 `Dockerfile.gateway` 设置 `NODE_OPTIONS=--max-old-space-size=2048`，并在生产构建关闭 sourcemap 以减轻峰值。
 
 执行常见更新命令时：
 
@@ -108,6 +115,8 @@ LIBREOFFICE_BIN: /usr/bin/soffice
 ```
 
 如自定义后端镜像或基础系统，请确保该路径可执行，或在 `docker-compose.yml` 中调整 `LIBREOFFICE_BIN`。
+
+`node` 镜像在 [`node/Dockerfile`](../node/Dockerfile) 中一次性安装 LibreOffice；默认 `docker.1ms.run` 拉取 Node 基础镜像，apt 使用 **阿里云 Debian 源**（云服务器访问清华源易出现 403）。
 
 ---
 
@@ -189,7 +198,7 @@ docker compose up -d postgres
 ## 6. 与健康检查、联网相关
 
 - API：`GET /api/health/live`、`/api/health/ready`（依赖 PG + Redis）。
-- 入口：`gateway` 映射宿主 `3000:80`，静态站点与 `/api/` 反代见 `deploy/nginx/default.conf`。
+- 入口：`gateway` 映射宿主 **`18081:80`**（可用环境变量 `GATEWAY_PORT` 修改左侧端口）；宝塔整站反代见 `docs/nginx/部署说明.md`。
 
 ---
 

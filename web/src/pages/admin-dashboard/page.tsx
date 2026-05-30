@@ -183,6 +183,8 @@ export default function AdminDashboard() {
   const collegeTeachersId = searchParams.get('collegeId') || '';
   const classStudentsId = searchParams.get('classId') || '';
   const classStudentsCollegeId = searchParams.get('collegeId') || '';
+  const classStudentsMajorId = searchParams.get('majorId') || '';
+  const classStudentsMajorName = searchParams.get('majorName') || '';
 
   return (
     <div className="h-dvh max-h-dvh min-h-0 flex overflow-hidden bg-gray-50">
@@ -335,6 +337,8 @@ export default function AdminDashboard() {
                 scope="class-students"
                 collegeId={classStudentsCollegeId}
                 classId={classStudentsId}
+                majorId={classStudentsMajorId}
+                majorName={classStudentsMajorName}
                 subtitle={
                   searchParams.get('className')
                     ? decodeURIComponent(searchParams.get('className') || '')

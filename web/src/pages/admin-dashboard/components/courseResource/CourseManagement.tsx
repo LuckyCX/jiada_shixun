@@ -268,7 +268,9 @@ export default function CourseManagement({ selectedModule: selectedModuleProp, h
         parentId: addNodeState.parentId,
         title: newNodeTitle.trim(),
       });
-      await updateCourseResourceNodeStatus(node.id, 'published');
+      if (node.level === 3) {
+        await updateCourseResourceNodeStatus(node.id, 'published');
+      }
       setAddNodeState(null);
       await loadData();
       showToast('已添加');

@@ -361,16 +361,28 @@ export default function Overview() {
                 })}
               </svg>
             </div>
-            {/* X轴标签 */}
-            <div className="absolute left-14 right-0 bottom-0 h-8 flex justify-between items-center text-xs text-gray-500">
-              {currentTrends.map((point, index) => (
-                <span
-                  key={index}
-                  className={`transition-colors ${activePointIdx === index ? 'text-teal-600 font-semibold' : ''}`}
-                >
-                  {point.date}
-                </span>
-              ))}
+            {/* X轴标签：近7天每天一个，近30天每3天一个 */}
+            <div className="absolute left-14 right-0 bottom-0 h-8 text-xs text-gray-500">
+              {currentTrends.map((point, index) => {
+                const lastIdx = currentTrends.length - 1;
+                if (timeRange === '30days') {
+                  const showEvery3 = index % 3 === 0;
+                  const showLast = index === lastIdx && lastIdx % 3 !== 0;
+                  if (!showEvery3 && !showLast) return null;
+                }
+                const xPct = lastIdx <= 0 ? 0 : (index / lastIdx) * 100;
+                return (
+                  <span
+                    key={index}
+                    className={`absolute bottom-0 -translate-x-1/2 whitespace-nowrap transition-colors ${
+                      activePointIdx === index ? 'text-teal-600 font-semibold' : ''
+                    }`}
+                    style={{ left: `${xPct}%` }}
+                  >
+                    {point.date}
+                  </span>
+                );
+              })}
             </div>
             {/* Tooltip */}
             {tooltip.visible && (

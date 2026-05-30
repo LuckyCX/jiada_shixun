@@ -849,11 +849,11 @@ export default function StudentCenterPage() {
       moduleId: string,
       taskModuleLabel: string
     ) => {
-      node.knowledgePoints.forEach((point) => {
+      (node.knowledgePoints || []).forEach((point) => {
         const completed = completedKnowledgeIds.has(point.id);
         const locked = getSidebarModuleUi(moduleId).locked;
         const existing = byId.get(point.id);
-        const resources = node.resources.map((resource) => {
+        const resources = (node.resources || []).map((resource) => {
           const meta = resource as typeof resource & Partial<LearningDetailResource>;
           return {
             id: resource.id,
@@ -1270,7 +1270,7 @@ export default function StudentCenterPage() {
     const byId = new Map<string, LearningDetailResource>();
     const ingestNode = (node: TaskResourceNode) => {
       if (!selectedChapterLeafIds.has(node.id)) return;
-      node.resources.forEach((resource) => {
+      (node.resources || []).forEach((resource) => {
         const meta = resource as typeof resource & Partial<LearningDetailResource>;
         byId.set(resource.id, {
           id: resource.id,
@@ -1351,7 +1351,7 @@ export default function StudentCenterPage() {
       (task.resourceNodes || []).forEach((node) => {
         const moduleId = node.moduleKey || task.moduleId || '';
         if (moduleId !== 'ideation') return;
-        node.resources.forEach((resource) => {
+        (node.resources || []).forEach((resource) => {
           const progress = normalizeResourceProgress(
             mergeResourceProgress(resource.progress, resourceProgressOverrides[resource.id])
           ).progressPercent;
@@ -1398,7 +1398,11 @@ export default function StudentCenterPage() {
   const openIdeationLearningResource = (item: IdeationLearningResource) => {
     const task = studentTodoTasks.find((row) =>
       (row.moduleId || '') === 'ideation' &&
-      row.resourceNodes.some((node) => node.id === item.nodeId && node.resources.some((resource) => resource.id === item.id))
+      row.resourceNodes.some(
+        (node) =>
+          node.id === item.nodeId &&
+          (node.resources || []).some((resource) => resource.id === item.id)
+      )
     );
     const node = task?.resourceNodes.find((row) => row.id === item.nodeId);
     if (!task || !node) return;
@@ -1532,7 +1536,11 @@ export default function StudentCenterPage() {
   };
 
   const getTaskKnowledgePointIds = (task: StudentTodoTask) => [
-    ...new Set((task.resourceNodes || []).flatMap((node) => node.knowledgePoints.map((point) => point.id))),
+    ...new Set(
+      (task.resourceNodes || []).flatMap((node) =>
+        (node.knowledgePoints || []).map((point) => point.id)
+      )
+    ),
   ];
   const getCatalogLeavesWithProgress = useCallback((moduleId: string) => {
     const leaves = catalogResourceNodesByModule[moduleId] || [];
@@ -1693,36 +1701,6 @@ export default function StudentCenterPage() {
     );
   };
 
-  if (activeLearningKnowledge) {
-    return (
-      <LearningDetail
-        knowledgeTitle={activeLearningKnowledge.name}
-        knowledgeDescription={activeLearningKnowledge.description}
-        moduleName={activeLearningKnowledge.moduleName}
-        resources={activeLearningKnowledge.resources}
-        knowledgePoints={activeLearningKnowledge.knowledgePoints}
-        onResourceProgressChange={(resourceId, progress) => {
-          setResourceProgressOverrides((prev) => ({
-            ...prev,
-            [resourceId]: mergeResourceProgress(prev[resourceId], progress),
-          }));
-        }}
-        onBack={() => {
-          closingLearningRef.current = true;
-          const params = new URLSearchParams(searchParams);
-          params.delete('learning');
-          params.delete('learningModule');
-          params.delete('learningChapter');
-          params.delete('resource');
-          setSearchParams(params);
-          setActiveTab('knowledge');
-          setKnowledgeSubTab('knowledge');
-          setActiveLearningKnowledge(null);
-        }}
-      />
-    );
-  }
-
   const handleModuleClick = (moduleKey: TabType) => {
     const moduleId = TAB_TO_MODULE_ID[moduleKey];
     if (!moduleId) {
@@ -1796,6 +1774,36 @@ export default function StudentCenterPage() {
     }
     setPendingTaskOpen(null);
   }, [pendingTaskOpen, overviewTaskList, selectedClassId]);
+
+  if (activeLearningKnowledge) {
+    return (
+      <LearningDetail
+        knowledgeTitle={activeLearningKnowledge.name}
+        knowledgeDescription={activeLearningKnowledge.description}
+        moduleName={activeLearningKnowledge.moduleName}
+        resources={activeLearningKnowledge.resources}
+        knowledgePoints={activeLearningKnowledge.knowledgePoints}
+        onResourceProgressChange={(resourceId, progress) => {
+          setResourceProgressOverrides((prev) => ({
+            ...prev,
+            [resourceId]: mergeResourceProgress(prev[resourceId], progress),
+          }));
+        }}
+        onBack={() => {
+          closingLearningRef.current = true;
+          const params = new URLSearchParams(searchParams);
+          params.delete('learning');
+          params.delete('learningModule');
+          params.delete('learningChapter');
+          params.delete('resource');
+          setSearchParams(params);
+          setActiveTab('knowledge');
+          setKnowledgeSubTab('knowledge');
+          setActiveLearningKnowledge(null);
+        }}
+      />
+    );
+  }
 
   const goToTaskFromNotificationDetail = () => {
     if (!notificationDetail) return;

@@ -5,6 +5,8 @@ COPY web/package.json web/pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY web/ .
 ENV BASE_PATH=/
+# 小内存 VPS 上 Vite 打包易在 rendering chunks 阶段 OOM；限制堆并关闭压缩体积统计（见 vite.config）
+ENV NODE_OPTIONS=--max-old-space-size=2048
 RUN pnpm run build
 
 FROM nginx:1.27-alpine

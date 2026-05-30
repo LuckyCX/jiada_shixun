@@ -208,19 +208,77 @@ export default function Home() {
     userInfo?.role === 'admin' ? '管理后台' :
     '学生中心';
 
-  // 实训模块配置：link 为学生端路径，teacherLink 为教师端路径（可选）
-  const trainingModules = [
-    { icon: 'ri-team-line', title: '组队与团队管理', desc: '智能匹配，组建团队', link: '/student-center?module=team-formation', color: 'from-teal-500 to-cyan-500' },
-    { icon: 'ri-book-open-line', title: '实践课程', desc: '学习→实践→评价→能力获取，可视化学习进度', link: '/knowledge-system', color: 'from-indigo-500 to-purple-500' },
-    { icon: 'ri-lightbulb-line', title: '创新思维与创意生成', desc: '运用SCAMPER、头脑风暴等方法，激发创新思维', link: '/student-center?module=ideation', color: 'from-orange-500 to-amber-500' },
-    { icon: 'ri-bar-chart-line', title: '市场调研与用户画像', desc: '数据驱动决策，精准定位目标用户群体', link: '/student-center?module=market-research', color: 'from-purple-500 to-pink-500' },
-    { icon: 'ri-pencil-ruler-2-line', title: '产品设计与原型', desc: '从功能设计到原型绘制，将创意转化为产品', link: '/student-center?module=product-design', color: 'from-orange-500 to-amber-500' },
-    { icon: 'ri-briefcase-line', title: '商业模式画布', desc: '构建完整商业模式，SWOT分析与营销策略', link: '/student-center?module=business-model', color: 'from-green-500 to-emerald-500' },
-    { icon: 'ri-robot-line', title: 'AI角色推荐', desc: '基于项目特征与成员能力，智能推荐团队角色', link: '/student-center?module=role-simulation', color: 'from-red-500 to-rose-500' },
-    { icon: 'ri-file-text-line', title: '商业计划书', desc: '整合所有成果，生成专业商业计划书与路演PPT', link: '/student-center?module=business-plan', color: 'from-violet-500 to-purple-500' },
-    { icon: 'ri-star-line', title: '教学评价', desc: '双维评价体系，评价智能体全周期采集数据，科学评估学习成果', link: '/teacher-dashboard', color: 'from-yellow-500 to-orange-500', isTeacher: true },
-    { icon: 'ri-refresh-line', title: '迭代优化与数据看板', desc: '构建-衡量-学习循环，数据驱动持续优化', link: '/iteration-optimization', color: 'from-teal-500 to-emerald-500' },
+  type HomeModuleCard = {
+    icon: string;
+    title: string;
+    desc: string;
+    link: string;
+    color: string;
+    isTeacher?: boolean;
+  };
+
+  const studentCourseModule: HomeModuleCard = {
+    icon: 'ri-book-open-line',
+    title: '实践课程',
+    desc: '按章节学习教师配置的资源，进度达标后可参加知识点检测，常作为实训与待办的前置。',
+    link: '/student-center?tab=knowledge',
+    color: 'from-indigo-500 to-purple-500',
+  };
+
+  const studentStageModules: HomeModuleCard[] = [
+    { icon: 'ri-team-line', title: '组队与团队管理', desc: '完成组队测评与团队组建，教师确认后解锁后续阶段。', link: '/student-center?module=team-formation', color: 'from-purple-500 to-purple-600' },
+    { icon: 'ri-lightbulb-line', title: '创新思维与创意生成', desc: '选题与创意生成，配合教师审核确定项目方向。', link: '/student-center?module=ideation', color: 'from-teal-500 to-teal-600' },
+    { icon: 'ri-search-line', title: '市场调研与用户画像', desc: '问卷、报告与竞品分析，支撑产品与市场决策。', link: '/student-center?module=market-research', color: 'from-green-500 to-green-600' },
+    { icon: 'ri-pencil-ruler-line', title: '产品设计与迭代', desc: '产品方案与原型材料，团队分工协作提交。', link: '/student-center?module=product-design', color: 'from-orange-500 to-orange-600' },
+    { icon: 'ri-pie-chart-line', title: '商业模式设计', desc: '商业画布、SWOT、营销与财务等环节工具与战情室协作。', link: '/student-center?module=business-model', color: 'from-pink-500 to-pink-600' },
+    { icon: 'ri-robot-line', title: 'AI仿真模拟', desc: '基于项目与团队情境进行角色仿真与推演。', link: '/student-center?module=role-simulation', color: 'from-indigo-500 to-indigo-600' },
+    { icon: 'ri-file-text-line', title: '商业计划书要点', desc: '汇总各阶段成果，撰写计划书并配合教师审核。', link: '/student-center?module=business-plan', color: 'from-teal-500 to-cyan-600' },
   ];
+
+  const teacherModules: HomeModuleCard[] = [
+    {
+      icon: 'ri-dashboard-line',
+      title: '教师看板',
+      desc: '班级与课程配置、任务与通知、组队/选题/计划书审核、项目监控与教学评价。',
+      link: '/teacher-dashboard',
+      color: 'from-yellow-500 to-orange-500',
+      isTeacher: true,
+    },
+  ];
+
+  const trainingProcessSteps = [
+    { step: '1', title: '组队与团队管理', desc: '测评组队，教师确认' },
+    { step: '2', title: '创新思维与创意生成', desc: '选题与创意' },
+    { step: '3', title: '市场调研与用户画像', desc: '调研与验证' },
+    { step: '4', title: '产品设计与迭代', desc: '方案与原型' },
+    { step: '5', title: '商业模式设计', desc: '模式与策略' },
+    { step: '6', title: 'AI仿真模拟', desc: '角色仿真' },
+    { step: '7', title: '商业计划书要点', desc: '成果汇总' },
+  ];
+
+  const renderModuleCard = (module: HomeModuleCard, key: string) => (
+    <button
+      key={key}
+      type="button"
+      onClick={() => handleModuleClick(module.link, module.isTeacher ? 'teacher' : undefined)}
+      className="group bg-white p-8 rounded-2xl shadow-sm hover:shadow-xl transition-all border border-gray-100 hover:border-transparent hover:-translate-y-1 cursor-pointer text-left w-full"
+    >
+      <div className={`w-14 h-14 flex items-center justify-center bg-gradient-to-br ${module.color} rounded-xl mb-5 group-hover:scale-110 transition-transform`}>
+        <i className={`${module.icon} text-2xl text-white`}></i>
+      </div>
+      <h3 className="text-lg font-bold text-gray-900 mb-3 group-hover:text-teal-600 transition-colors">{module.title}</h3>
+      <p className="text-sm text-gray-600 leading-relaxed mb-4">{module.desc}</p>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center text-teal-500 text-sm font-medium">
+          <span>{isLoggedIn ? '进入' : '登录后进入'}</span>
+          <i className="ri-arrow-right-line ml-2 group-hover:translate-x-1 transition-transform"></i>
+        </div>
+        {module.isTeacher && (
+          <span className="px-2 py-0.5 bg-orange-100 text-orange-600 text-xs font-medium rounded-full whitespace-nowrap">教师端</span>
+        )}
+      </div>
+    </button>
+  );
 
   return (
     <div className="min-h-screen bg-white">
@@ -247,44 +305,6 @@ export default function Home() {
             <Link to={USER_GUIDE_PATH} className={`text-sm font-medium transition-colors hover:text-teal-500 cursor-pointer whitespace-nowrap ${scrolled ? 'text-gray-700' : 'text-white'}`}>
               <i className="ri-question-line mr-1"></i>帮助中心
             </Link>
-            {!isLoggedIn ? (
-              <button
-                onClick={() => setShowLoginModal(true)}
-                className="px-5 py-2 bg-teal-500 text-white text-sm font-medium rounded-full hover:bg-teal-600 transition-colors whitespace-nowrap cursor-pointer"
-              >
-                登录
-              </button>
-            ) : (
-              <div className="flex items-center gap-4">
-                <Link
-                  to={personalCenterLink}
-                  className="flex items-center gap-2 px-5 py-2 bg-teal-500 text-white text-sm font-medium rounded-full hover:bg-teal-600 transition-colors whitespace-nowrap cursor-pointer"
-                >
-                  <i className="ri-user-line"></i>个人中心
-                </Link>
-                <div className="relative group">
-                  <button className={`flex items-center gap-2 px-4 py-2 rounded-full transition-colors ${scrolled ? 'text-gray-700 hover:bg-gray-100' : 'text-white hover:bg-white/10'}`}>
-                    <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white text-sm font-bold ${userInfo?.role === 'admin' ? 'bg-gradient-to-br from-purple-500 to-pink-500' : userInfo?.role === 'teacher' ? 'bg-gradient-to-br from-orange-500 to-amber-500' : 'bg-gradient-to-br from-teal-500 to-cyan-600'}`}>
-                      {userInfo?.name.charAt(0)}
-                    </div>
-                    <span className="text-sm font-medium">{userInfo?.name}</span>
-                    <i className="ri-arrow-down-s-line"></i>
-                  </button>
-                  <div className="absolute right-0 top-full mt-2 w-48 bg-white rounded-xl shadow-lg border border-gray-100 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all">
-                    <div className="p-4 border-b border-gray-100">
-                      <div className="text-sm font-medium text-gray-900">{userInfo?.name}</div>
-                      <div className="text-xs text-gray-500">{userInfo?.role === 'admin' ? '管理员' : userInfo?.role === 'teacher' ? '教师' : '学生'}</div>
-                    </div>
-                    <Link to={personalCenterLink} className="w-full px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50 transition-colors flex items-center gap-2">
-                      <i className="ri-dashboard-line"></i>{personalCenterLabel}
-                    </Link>
-                    <button onClick={handleLogout} className="w-full px-4 py-3 text-left text-sm text-red-600 hover:bg-red-50 transition-colors flex items-center gap-2">
-                      <i className="ri-logout-box-line"></i>退出登录
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
           </div>
         </div>
       </nav>
@@ -299,8 +319,8 @@ export default function Home() {
         <div className="absolute inset-0 bg-gradient-to-b from-black/40 via-black/30 to-black/40"></div>
         <div className="relative z-10 text-center px-6 max-w-5xl mx-auto w-full">
           <h1 className="text-5xl md:text-6xl font-bold text-white mb-6 leading-tight">大学生创业实训平台</h1>
-          <p className="text-xl md:text-2xl text-white/95 mb-8 leading-relaxed">从创意到商业计划，AI赋能全流程数字化实训体验</p>
-          <p className="text-base md:text-lg text-white/90 mb-12 max-w-3xl mx-auto">支持7大核心模块，团队协作，过程留痕，智能评价，助力高校创新创业教育</p>
+          <p className="text-xl md:text-2xl text-white/95 mb-8 leading-relaxed">个性化教学班 · 实践课程 · 七阶段团队实训</p>
+          <p className="text-base md:text-lg text-white/90 mb-12 max-w-3xl mx-auto">面向高校创新创业实践教学，融通课程学习、团队协作实训与教师全过程指导评价</p>
           <div className="flex flex-wrap items-center justify-center gap-4">
             <button
               onClick={() => setShowLoginModal(true)}
@@ -323,14 +343,14 @@ export default function Home() {
         <div className="max-w-7xl mx-auto">
           <div className="text-center mb-16">
             <h2 className="text-4xl font-bold text-gray-900 mb-4">平台概览</h2>
-            <p className="text-lg text-gray-600 max-w-3xl mx-auto">遵循"组队→创新→调研→设计→商业模式→仿真→计划书→评价"的完整逻辑，形成实训-指导-审核-评价的闭环</p>
+            <p className="text-lg text-gray-600 max-w-3xl mx-auto">实践课程与知识点检测打基础，七阶段团队实训递进推进，教师发布任务、审核成果并监控进度</p>
           </div>
           <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
             {[
-              { icon: 'ri-ai-generate', title: 'AI全程辅助', desc: '每个环节都有AI对话助手，提供智能建议和指导', color: 'from-teal-500 to-cyan-500' },
-              { icon: 'ri-team-fill', title: '团队协作', desc: '实时协作编辑，版本管理，讨论区互动', color: 'from-orange-500 to-amber-500' },
-              { icon: 'ri-file-chart-line', title: '数字化留痕', desc: '全流程记录，成果自动沉淀，支持回溯查看', color: 'from-purple-500 to-pink-500' },
-              { icon: 'ri-eye-line', title: '过程监控', desc: '教师实时查看进度，动态指导，及时干预', color: 'from-green-500 to-emerald-500' },
+              { icon: 'ri-book-2-line', title: '实践课程与检测', desc: '按章节学习教师配置的资源，进度达标后可参加知识点检测', color: 'from-indigo-500 to-purple-500' },
+              { icon: 'ri-git-commit-line', title: '七阶段递进', desc: '组队确认后依次开放创意、市场、产品、商业模式、仿真与计划书等环节', color: 'from-teal-500 to-cyan-500' },
+              { icon: 'ri-task-line', title: '待办与通知', desc: '进度看板集中展示教师通知与待办任务，截止与提交要求清晰可查', color: 'from-orange-500 to-amber-500' },
+              { icon: 'ri-eye-line', title: '教师跟进', desc: '教师看板支持班级管理、过程监控、动态引导与教学评价', color: 'from-green-500 to-emerald-500' },
             ].map((feature, index) => (
               <div key={index} className="bg-white p-8 rounded-2xl shadow-sm hover:shadow-lg transition-all border border-gray-100 hover:border-teal-200">
                 <div className={`w-14 h-14 flex items-center justify-center bg-gradient-to-br ${feature.color} rounded-xl mb-5`}>
@@ -347,81 +367,76 @@ export default function Home() {
       {/* Modules Section */}
       <section id="modules" className="py-20 px-6 bg-white">
         <div className="max-w-7xl mx-auto">
-          <div className="text-center mb-16">
-            <h2 className="text-4xl font-bold text-gray-900 mb-4">实训模块</h2>
-            <p className="text-lg text-gray-600 max-w-3xl mx-auto">10大核心模块，覆盖创业全流程，每个环节都有AI智能辅助</p>
+          <div className="text-center mb-12">
+            <h2 className="text-4xl font-bold text-gray-900 mb-4">功能入口</h2>
+            <p className="text-lg text-gray-600 max-w-3xl mx-auto">登录后进入学生中心或教师看板；各实训阶段是否开放以班级时间与前置条件为准</p>
             {!isLoggedIn && (
               <div className="mt-4 inline-flex items-center gap-2 px-4 py-2 bg-teal-50 border border-teal-200 rounded-full text-sm text-teal-700">
                 <i className="ri-lock-line"></i>
-                <span>点击任意模块，登录后即可进入</span>
+                <span>点击卡片登录后即可进入对应功能</span>
               </div>
             )}
           </div>
-          <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
-            {trainingModules.map((module, index) => (
-              <button
-                key={index}
-                onClick={() => handleModuleClick(module.link, (module as any).isTeacher ? 'teacher' : undefined)}
-                className="group bg-white p-8 rounded-2xl shadow-sm hover:shadow-xl transition-all border border-gray-100 hover:border-transparent hover:-translate-y-1 cursor-pointer text-left w-full"
-              >
-                <div className={`w-14 h-14 flex items-center justify-center bg-gradient-to-br ${module.color} rounded-xl mb-5 group-hover:scale-110 transition-transform`}>
-                  <i className={`${module.icon} text-2xl text-white`}></i>
-                </div>
-                <h3 className="text-lg font-bold text-gray-900 mb-3 group-hover:text-teal-600 transition-colors">{module.title}</h3>
-                <p className="text-sm text-gray-600 leading-relaxed mb-4">{module.desc}</p>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center text-teal-500 text-sm font-medium">
-                    <span>{isLoggedIn ? '进入模块' : '登录后进入'}</span>
-                    <i className="ri-arrow-right-line ml-2 group-hover:translate-x-1 transition-transform"></i>
-                  </div>
-                  {(module as any).isTeacher && (
-                    <span className="px-2 py-0.5 bg-orange-100 text-orange-600 text-xs font-medium rounded-full whitespace-nowrap">教师端</span>
-                  )}
-                </div>
-              </button>
-            ))}
+
+          <div className="mb-10">
+            <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2">
+              <i className="ri-user-line text-teal-600"></i>
+              学生 · 实践课程
+            </h3>
+            <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
+              {renderModuleCard(studentCourseModule, 'course')}
+            </div>
+          </div>
+
+          <div className="mb-10">
+            <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2">
+              <i className="ri-map-pin-line text-teal-600"></i>
+              学生 · 七阶段实训
+            </h3>
+            <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
+              {studentStageModules.map((module) => renderModuleCard(module, module.link))}
+            </div>
+          </div>
+
+          <div>
+            <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2">
+              <i className="ri-user-star-line text-orange-600"></i>
+              教师 · 教学管理
+            </h3>
+            <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
+              {teacherModules.map((module) => renderModuleCard(module, module.link))}
+            </div>
           </div>
         </div>
       </section>
 
       {/* Process Flow */}
-      {/* <section id="process" className="py-20 px-6 bg-gradient-to-br from-teal-50 to-cyan-50">
+      <section id="process" className="py-20 px-6 bg-gradient-to-br from-teal-50 to-cyan-50">
         <div className="max-w-7xl mx-auto">
-          <div className="text-center mb-16">
-            <h2 className="text-4xl font-bold text-gray-900 mb-4">实训流程</h2>
-            <p className="text-lg text-gray-600 max-w-3xl mx-auto">标准化流程设计，环环相扣，确保实训质量</p>
+          <div className="text-center mb-12">
+            <h2 className="text-4xl font-bold text-gray-900 mb-4">实训阶段顺序</h2>
+            <p className="text-lg text-gray-600 max-w-3xl mx-auto">与学生中心侧栏一致；除时间与教师设置外，后续阶段需完成上一环节要求</p>
           </div>
-          <div className="relative">
-            <div className="absolute top-1/2 left-0 right-0 h-1 bg-gradient-to-r from-teal-200 via-cyan-200 to-teal-200 -translate-y-1/2 hidden lg:block"></div>
-            <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-8 relative">
-              {[
-                { step: '01', title: '组队', desc: '智能匹配，组建团队' },
-                { step: '02', title: '创新与调研', desc: '创意生成，市场验证' },
-                { step: '03', title: '设计与模式', desc: '产品设计，商业模式' },
-                { step: '04', title: '计划与评价', desc: '成果输出，科学评估' },
-              ].map((item, index) => (
-                <div key={index} className="relative">
-                  <div className="bg-white p-8 rounded-2xl shadow-md hover:shadow-xl transition-all border border-teal-100">
-                    <div className="text-5xl font-bold text-teal-500/20 mb-4">{item.step}</div>
-                    <h3 className="text-xl font-bold text-gray-900 mb-3">{item.title}</h3>
-                    <p className="text-sm text-gray-600">{item.desc}</p>
-                  </div>
-                  <div className="absolute -top-4 left-1/2 -translate-x-1/2 w-12 h-12 bg-gradient-to-br from-teal-500 to-cyan-500 rounded-full flex items-center justify-center text-white font-bold shadow-lg hidden lg:flex">
-                    {index + 1}
-                  </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-4">
+            {trainingProcessSteps.map((item) => (
+              <div key={item.step} className="bg-white p-5 rounded-xl shadow-sm border border-teal-100 text-center">
+                <div className="w-10 h-10 mx-auto mb-3 rounded-full bg-gradient-to-br from-teal-500 to-cyan-500 text-white font-bold flex items-center justify-center text-sm">
+                  {item.step}
                 </div>
-              ))}
-            </div>
+                <h3 className="text-sm font-bold text-gray-900 mb-2 leading-snug">{item.title}</h3>
+                <p className="text-xs text-gray-600">{item.desc}</p>
+              </div>
+            ))}
           </div>
         </div>
-      </section> */}
+      </section>
 
       {/* Features Detail */}
       <section id="features" className="py-20 px-6 bg-white">
         <div className="max-w-7xl mx-auto">
           <div className="text-center mb-16">
             <h2 className="text-4xl font-bold text-gray-900 mb-4">平台特色</h2>
-            <p className="text-lg text-gray-600 max-w-3xl mx-auto">创新技术赋能，打造高效实训体验</p>
+            <p className="text-lg text-gray-600 max-w-3xl mx-auto">面向高校创新创业实训的真实流程与工具能力</p>
           </div>
           <div className="grid lg:grid-cols-2 gap-12 items-center">
             <div>
@@ -433,10 +448,10 @@ export default function Home() {
             </div>
             <div className="space-y-8">
               {[
-                { icon: 'ri-user-star-line', title: '双角色支持', desc: '学生协作完成任务，教师全程监控指导，实现教学相长', color: 'from-teal-500 to-cyan-500' },
-                { icon: 'ri-database-2-line', title: '成果自动沉淀', desc: '各阶段成果自动归档，支持导出、分享、版本管理', color: 'from-orange-500 to-amber-500' },
-                { icon: 'ri-tools-line', title: '丰富工具库', desc: '商业画布、SWOT分析、六顶思考帽等专业工具内置', color: 'from-purple-500 to-pink-500' },
-                { icon: 'ri-line-chart-line', title: '数据可视化', desc: '进度追踪、成果统计、评价分析，一目了然', color: 'from-green-500 to-emerald-500' },
+                { icon: 'ri-user-star-line', title: '分端登录与权限', desc: '学生、教师分别登录进入学生中心与教师看板，身份与入口分离', color: 'from-teal-500 to-cyan-500' },
+                { icon: 'ri-exchange-line', title: '班级与消息', desc: '支持多教学班切换；通知用于告知，待办任务用于截止与提交', color: 'from-orange-500 to-amber-500' },
+                { icon: 'ri-tools-line', title: '环节内工具', desc: '各实训阶段内置商业画布、SWOT、市场调研、战情室等专用工具', color: 'from-purple-500 to-pink-500' },
+                { icon: 'ri-line-chart-line', title: '教师监控与评价', desc: '项目监控、动态引导、审核与评价面板，支撑过程性教学管理', color: 'from-green-500 to-emerald-500' },
               ].map((item, index) => (
                 <div key={index} className="flex gap-5">
                   <div className={`w-12 h-12 flex items-center justify-center bg-gradient-to-br ${item.color} rounded-xl flex-shrink-0`}>
@@ -457,8 +472,8 @@ export default function Home() {
       <section className="py-20 px-6 bg-gradient-to-br from-teal-500 to-cyan-500">
         <div className="max-w-4xl mx-auto text-center">
           <h2 className="text-4xl font-bold text-white mb-6">开启创业实训之旅</h2>
-          <p className="text-lg text-white/95 mb-10 leading-relaxed">加入我们，体验AI赋能的创新创业教育新模式</p>
-          <div className="flex items-center justify-center gap-4">
+          <p className="text-lg text-white/95 mb-6 leading-relaxed">使用学校分配的学号或工号登录；学生需已加入教师开放的教学班</p>
+          <div className="flex items-center justify-center gap-4 mb-4">
             <button
               onClick={() => { setLoginRole('teacher'); setShowLoginModal(true); }}
               className="px-8 py-3 bg-white text-teal-600 text-base font-semibold rounded-full hover:bg-gray-50 transition-all hover:scale-105 whitespace-nowrap cursor-pointer"
@@ -472,6 +487,12 @@ export default function Home() {
               学生入口
             </button>
           </div>
+          <p className="text-sm text-white/80">
+            平台管理员请访问
+            <Link to="/admin" className="underline underline-offset-2 mx-1 hover:text-white">
+              管理后台登录
+            </Link>
+          </p>
         </div>
       </section>
 
@@ -493,21 +514,21 @@ export default function Home() {
               <p className="text-sm text-gray-400 leading-relaxed">专注高校创新创业教育，AI赋能实训全流程</p>
             </div>
             <div>
-              <h4 className="text-sm font-bold mb-4">实训模块</h4>
+              <h4 className="text-sm font-bold mb-4">实训入口</h4>
               <ul className="space-y-2 text-sm text-gray-400">
-                <li><button onClick={() => handleModuleClick('/student-center?module=team-formation')} className="hover:text-teal-400 transition-colors cursor-pointer">组队管理</button></li>
-                <li><button onClick={() => handleModuleClick('/student-center?module=ideation')} className="hover:text-teal-400 transition-colors cursor-pointer">创新思维</button></li>
+                <li><button onClick={() => handleModuleClick('/student-center?tab=knowledge')} className="hover:text-teal-400 transition-colors cursor-pointer">实践课程</button></li>
+                <li><button onClick={() => handleModuleClick('/student-center?module=team-formation')} className="hover:text-teal-400 transition-colors cursor-pointer">组队测评</button></li>
+                <li><button onClick={() => handleModuleClick('/student-center?module=ideation')} className="hover:text-teal-400 transition-colors cursor-pointer">创意选题</button></li>
                 <li><button onClick={() => handleModuleClick('/student-center?module=market-research')} className="hover:text-teal-400 transition-colors cursor-pointer">市场调研</button></li>
-                <li><button onClick={() => handleModuleClick('/student-center?module=product-design')} className="hover:text-teal-400 transition-colors cursor-pointer">产品设计</button></li>
               </ul>
             </div>
             <div>
-              <h4 className="text-sm font-bold mb-4">关于我们</h4>
+              <h4 className="text-sm font-bold mb-4">帮助</h4>
               <ul className="space-y-2 text-sm text-gray-400">
-                <li><a href="#" className="hover:text-teal-400 transition-colors cursor-pointer">平台介绍</a></li>
-                <li><a href="#" className="hover:text-teal-400 transition-colors cursor-pointer">使用指南</a></li>
-                <li><a href="#" className="hover:text-teal-400 transition-colors cursor-pointer">常见问题</a></li>
-                <li><a href="#" className="hover:text-teal-400 transition-colors cursor-pointer">联系我们</a></li>
+                <li><a href="#features" className="hover:text-teal-400 transition-colors cursor-pointer">平台介绍</a></li>
+                <li><Link to={USER_GUIDE_PATH} className="hover:text-teal-400 transition-colors">使用指南</Link></li>
+                <li><Link to={USER_GUIDE_PATH} className="hover:text-teal-400 transition-colors">常见问题</Link></li>
+                <li><a href="mailto:jwc@zjxu.edu.cn" className="hover:text-teal-400 transition-colors cursor-pointer">联系我们</a></li>
               </ul>
             </div>
             <div>
