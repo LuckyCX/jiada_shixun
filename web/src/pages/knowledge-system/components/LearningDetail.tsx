@@ -5,6 +5,7 @@ import NotesPanel from './NotesPanel';
 import LearningQuiz from './LearningQuiz';
 import LearningProgressBar from './LearningProgressBar';
 import {
+  fetchStudentResourceProgress,
   saveStudentResourceProgress,
   studentCourseResourceFileUrl,
 } from '../../../lib/courseResourceApi';
@@ -89,22 +90,52 @@ const normalizeRealProgress = (progress: RealProgress): RealProgress => {
   };
 };
 
+const positionPlaybackSeconds = (position: Record<string, unknown>) => {
+  const raw = position.currentTime ?? position.studySeconds;
+  const n = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : 0;
+};
+
+const pickRicherLastPosition = (
+  current: Record<string, unknown>,
+  incoming: Record<string, unknown>
+): Record<string, unknown> => {
+  const tc = positionPlaybackSeconds(current);
+  const ti = positionPlaybackSeconds(incoming);
+  if (ti > tc) return { ...current, ...incoming };
+  if (tc > ti) return { ...incoming, ...current };
+  return { ...current, ...incoming };
+};
+
 const mergeRealProgress = (base: RealProgress, next?: RealProgress): RealProgress => {
   const current = normalizeRealProgress(base);
   if (!next) return current;
 
   const incoming = normalizeRealProgress(next);
   const progressPercent = Math.max(current.progressPercent, incoming.progressPercent);
+  let lastPosition = current.lastPosition;
+  if (incoming.progressPercent > current.progressPercent) {
+    lastPosition = incoming.lastPosition;
+  } else if (incoming.progressPercent < current.progressPercent) {
+    lastPosition = current.lastPosition;
+  } else {
+    lastPosition = pickRicherLastPosition(current.lastPosition, incoming.lastPosition);
+  }
   return {
     progressPercent,
-    lastPosition: incoming.progressPercent >= current.progressPercent ? incoming.lastPosition : current.lastPosition,
+    lastPosition,
     completed: current.completed || incoming.completed || progressPercent >= 100,
   };
 };
 
 const numberFromPosition = (position: Record<string, unknown>, key: string) => {
   const value = position[key];
-  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim() !== '') {
+    const n = Number(value);
+    if (Number.isFinite(n)) return n;
+  }
+  return 0;
 };
 
 const getResourceStudySeconds = (type: RealStudyResource['type'], progress: RealProgress) => {
@@ -411,6 +442,32 @@ export default function LearningDetail({
       return nextProgress;
     });
   }, [hasRealResourceContext, realStudyResources, searchParams]);
+
+  useEffect(() => {
+    if (!hasRealResourceContext || !selectedRealResourceId) return undefined;
+    const resource = realStudyResources.find((item) => item.id === selectedRealResourceId);
+    if (!resource || (resource.type !== 'video' && resource.type !== 'audio')) return undefined;
+    let cancelled = false;
+    void fetchStudentResourceProgress(resource.id)
+      .then((progress) => {
+        if (cancelled) return;
+        setRealProgress((prev) => {
+          const next = {
+            ...prev,
+            [resource.id]: mergeRealProgress(
+              mergeRealProgress(resource.progress, prev[resource.id]),
+              progress
+            ),
+          };
+          realProgressRef.current = next;
+          return next;
+        });
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [hasRealResourceContext, selectedRealResourceId, realStudyResources]);
 
   const selectRealResource = useCallback((resourceId: string) => {
     const resource = realStudyResources.find((item) => item.id === resourceId);

@@ -288,7 +288,7 @@ async function stageProgressForTeam(pool, classId, teamId, memberIds) {
       }
       return maxFilled >= 9 ? 1 : 0;
     })();
-  stageProgress.businessModel = bmDone >= 5 ? 100 : 0;
+  stageProgress.businessModel = bm?.bmc_canvas_saved_at || bmDone >= 5 ? 100 : 0;
 
   // 角色推荐：对齐学生端 teamQualified（全员有效轮次 >= 3）
   const byStudent = new Map((simRunRows || []).map((r) => [String(r.student_id), Number(r.max_run || 0)]));
@@ -638,6 +638,52 @@ router.get(
             name: proto.originName,
             downloadUrl: proto.downloadUrl,
           },
+        });
+      }
+
+      // 5 商业模式设计：营销 / 财务 / 商业画布（SWOT、战情室不在提交记录中展示）
+      const { rows: bmWsRows } = await pool.query(
+        `SELECT marketing_json, finance_json,
+                marketing_saved_at, finance_saved_at,
+                bmc_canvas_json, bmc_canvas_saved_at
+         FROM teacher_personal_class_team_business_model_workspace
+         WHERE team_id = $1
+         LIMIT 1`,
+        [teamId]
+      );
+      const bmWs = bmWsRows[0] || null;
+      const bmStageName = '商业模式设计';
+      if (bmWs?.marketing_saved_at) {
+        items.push({
+          id: `business-model-marketing-${teamId}`,
+          stageKey: 'businessModel',
+          stageName: bmStageName,
+          submitTime: fmtZh(bmWs.marketing_saved_at),
+          kind: 'data',
+          title: '营销策略',
+          payload: bmWs.marketing_json || {},
+        });
+      }
+      if (bmWs?.finance_saved_at) {
+        items.push({
+          id: `business-model-finance-${teamId}`,
+          stageKey: 'businessModel',
+          stageName: bmStageName,
+          submitTime: fmtZh(bmWs.finance_saved_at),
+          kind: 'data',
+          title: '财务模型',
+          payload: bmWs.finance_json || {},
+        });
+      }
+      if (bmWs?.bmc_canvas_saved_at) {
+        items.push({
+          id: `business-model-bmc-${teamId}`,
+          stageKey: 'businessModel',
+          stageName: bmStageName,
+          submitTime: fmtZh(bmWs.bmc_canvas_saved_at),
+          kind: 'data',
+          title: '商业画布',
+          payload: bmWs.bmc_canvas_json || {},
         });
       }
 

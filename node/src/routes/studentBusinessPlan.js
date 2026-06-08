@@ -17,6 +17,7 @@ import {
   buildBusinessPlanAnalyzeUserPrompt,
   buildBusinessPlanFillSectionUserPrompt,
   buildBusinessPlanGenerateUserPrompt,
+  normalizeBusinessPlanAnalyzePayload,
   normalizeGeneratePayload,
 } from '../lib/businessPlanPrompts.js';
 import {
@@ -26,6 +27,7 @@ import {
   sectionsToFullText,
 } from '../lib/businessPlanSections.js';
 import { evaluateModulePrerequisiteForStudent } from '../lib/trainingModulePrerequisite.js';
+import { formatDateTimeZhCN } from '../lib/calendarDate.js';
 import {
   createMarketResearchStreamHandler,
   extractJsonFromLlmText,
@@ -256,7 +258,7 @@ async function loadVersionSummaries(pool, teamId) {
     id: String(r.id),
     versionNumber: Number(r.version_no),
     summary: String(r.summary || ''),
-    savedAt: r.saved_at ? new Date(r.saved_at).toLocaleString('zh-CN') : '',
+    savedAt: r.saved_at ? formatDateTimeZhCN(r.saved_at) : '',
     operator: String(r.savedByName || '').trim() || '同学',
     savedById: r.saved_by ? String(r.saved_by) : '',
   }));
@@ -422,7 +424,7 @@ router.post('/student/personal-classes/:classId/business-plan/versions', require
         id: String(ins[0].id),
         versionNumber: Number(ins[0].version_no),
         summary: String(ins[0].summary),
-        savedAt: new Date(ins[0].saved_at).toLocaleString('zh-CN'),
+        savedAt: formatDateTimeZhCN(ins[0].saved_at),
         operator: savedByName || '同学',
         data: { sections },
       },
@@ -703,8 +705,8 @@ router.post('/student/personal-classes/:classId/business-plan/generate/stream', 
       const nextNo = Number(maxRows[0]?.m || 0) + 1;
       const summary =
         mode === 'full'
-          ? `AI 全量生成 ${new Date().toLocaleString('zh-CN')}`
-          : `AI 增量生成 ${new Date().toLocaleString('zh-CN')}`;
+          ? `AI 全量生成 ${formatDateTimeZhCN(new Date())}`
+          : `AI 增量生成 ${formatDateTimeZhCN(new Date())}`;
       await ctx.pool.query(
         `INSERT INTO teacher_personal_class_team_business_plan_versions
            (team_id, version_no, summary, sections_json, saved_by)
@@ -933,14 +935,34 @@ router.post(
         }
       }
 
-      const parseText = streamHandler.getParseText(fullText);
-      const parsed = extractJsonFromLlmText(parseText) || null;
-      if (!parsed || typeof parsed !== 'object') {
-        sseWrite(res, 'error', { message: !String(parseText || '').trim() ? '模型未返回内容' : '分析结果格式无效' });
+      const parseSources = [String(fullText || '').trim(), streamHandler.getParseText('')].filter(Boolean);
+      let normalized = null;
+      for (const src of parseSources) {
+        const parsed = extractJsonFromLlmText(src);
+        normalized = normalizeBusinessPlanAnalyzePayload(parsed);
+        if (normalized) break;
+      }
+      if (!normalized) {
+        sseWrite(res, 'error', {
+          message: parseSources.length ? '分析结果格式无效，请重试' : '模型未返回内容',
+        });
         return res.end();
       }
 
-      sseWrite(res, 'done', { analysis: parsed });
+      const resultText = JSON.stringify(normalized);
+      const { rows: ins } = await ctx.pool.query(
+        `INSERT INTO teacher_personal_class_team_business_plan_analyses
+           (team_id, version_id, result_text, created_by)
+         VALUES ($1, $2, $3, $4)
+         RETURNING id, created_at`,
+        [ctx.team.id, versionId, resultText, ctx.sid]
+      );
+
+      sseWrite(res, 'done', {
+        analysis: normalized,
+        analysisId: String(ins[0].id),
+        createdAt: formatDateTimeZhCN(ins[0].created_at),
+      });
       res.end();
     } catch (e) {
       logError(`POST business-plan analyze/stream traceId=${req.traceId}`, e);

@@ -98,14 +98,21 @@ const TAB_TO_MODULE_ID: Record<string, string> = {
 };
 const OVERVIEW_PANEL_PAGE_SIZE = 5;
 
-function countBusinessModelProgressFromWorkspace(d: BusinessModelWorkspacePayload, studentId: string) {
+const WAR_ROOM_CANVAS_CELL_COUNT = 9;
+
+function isTeamWarRoomCanvasComplete(d: BusinessModelWorkspacePayload) {
+  const members = d.teamMembers || [];
+  if (members.length === 0) return false;
+  const byId = new Map((d.warRoomTeamRecords || []).map((r) => [r.studentId, r.filledCount || 0]));
+  return members.every((m) => (byId.get(String(m.id)) || 0) >= WAR_ROOM_CANVAS_CELL_COUNT);
+}
+
+function countBusinessModelProgressFromWorkspace(d: BusinessModelWorkspacePayload) {
   let done = 0;
   if (d.swotSavedAt) done += 1;
   if (d.marketingSavedAt) done += 1;
   if (d.financeSavedAt) done += 1;
-  const sid = studentId || d.studentId || '';
-  const myRecord = (d.warRoomTeamRecords || []).find((r) => r.studentId === sid);
-  if (myRecord && myRecord.filledCount >= 9) done += 1;
+  if (isTeamWarRoomCanvasComplete(d)) done += 1;
   if (d.bmcCanvasSavedAt) done += 1;
   return done;
 }
@@ -172,6 +179,12 @@ const normalizeResourceProgress = (progress?: LearningDetailResource['progress']
   };
 };
 
+const playbackSecondsFromPosition = (position: Record<string, unknown>) => {
+  const raw = position.currentTime ?? position.studySeconds;
+  const n = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : 0;
+};
+
 const mergeResourceProgress = (
   base?: LearningDetailResource['progress'],
   next?: LearningDetailResource['progress'],
@@ -181,9 +194,19 @@ const mergeResourceProgress = (
 
   const incoming = normalizeResourceProgress(next);
   const progressPercent = Math.max(current.progressPercent, incoming.progressPercent);
+  let lastPosition = current.lastPosition;
+  if (incoming.progressPercent > current.progressPercent) {
+    lastPosition = incoming.lastPosition;
+  } else if (incoming.progressPercent < current.progressPercent) {
+    lastPosition = current.lastPosition;
+  } else {
+    const tc = playbackSecondsFromPosition(current.lastPosition);
+    const ti = playbackSecondsFromPosition(incoming.lastPosition);
+    lastPosition = ti >= tc ? { ...current.lastPosition, ...incoming.lastPosition } : { ...incoming.lastPosition, ...current.lastPosition };
+  }
   return {
     progressPercent,
-    lastPosition: incoming.progressPercent >= current.progressPercent ? incoming.lastPosition : current.lastPosition,
+    lastPosition,
     completed: current.completed || incoming.completed || progressPercent >= 100,
   };
 };
@@ -220,6 +243,16 @@ function getNotificationCategory(notice: StudentNotificationRow): NotificationCa
   if (notice.relatedModule === 'personal_class_task') return 'task';
   if (notice.relatedModule === 'teacher_guidance') return 'guidance';
   return 'other';
+}
+
+/** 概览通知：无正文/附件或仅需跳转时不展示「查看」 */
+function shouldShowOverviewNotificationView(notice: StudentNotificationRow): boolean {
+  const content = String(notice.content || '').trim();
+  const hasAttachments = Boolean(notice.attachments?.length);
+  if (!content && !hasAttachments) return false;
+  if (getNotificationCategory(notice) === 'task') return false;
+  if (String(notice.relatedLink || '').trim()) return false;
+  return true;
 }
 
 function getNotificationCategoryLabel(notice: StudentNotificationRow): string {
@@ -364,6 +397,7 @@ export default function StudentCenterPage() {
   const [studentMarketChallengeDone, setStudentMarketChallengeDone] = useState(false);
   const [teamMarketReportUploaded, setTeamMarketReportUploaded] = useState(false);
   const [teamProductPrototypeUploaded, setTeamProductPrototypeUploaded] = useState(false);
+  const [teamBmcCanvasUploaded, setTeamBmcCanvasUploaded] = useState(false);
   const [teamPlanApproved, setTeamPlanApproved] = useState(false);
   const [trainingEnded, setTrainingEnded] = useState(false);
   const [archiveLoading, setArchiveLoading] = useState(false);
@@ -420,6 +454,7 @@ export default function StudentCenterPage() {
       setIdeationTopicApproved(false);
       setTeamMarketReportUploaded(false);
       setTeamProductPrototypeUploaded(false);
+      setTeamBmcCanvasUploaded(false);
       setTeamPlanApproved(false);
       setTrainingEnded(false);
       return;
@@ -442,6 +477,7 @@ export default function StudentCenterPage() {
           setIdeationTopicApproved(false);
           setTeamMarketReportUploaded(false);
           setTeamProductPrototypeUploaded(false);
+          setTeamBmcCanvasUploaded(false);
           setTeamPlanApproved(false);
           setTrainingEnded(false);
           return;
@@ -465,10 +501,13 @@ export default function StudentCenterPage() {
         setTeamMarketReportUploaded(Boolean(marketSt.uploaded));
         setTeamProductPrototypeUploaded(Boolean(productSt.uploaded));
         if (businessWs) {
-          const businessDone = countBusinessModelProgressFromWorkspace(businessWs, studentId);
+          setTeamBmcCanvasUploaded(Boolean(businessWs.bmcCanvasSavedAt));
+          const businessDone = countBusinessModelProgressFromWorkspace(businessWs);
           setModuleProgressState((s) =>
             s.business === businessDone ? s : { ...s, business: businessDone }
           );
+        } else {
+          setTeamBmcCanvasUploaded(false);
         }
 
         if (simRecords && studentId) {
@@ -489,6 +528,7 @@ export default function StudentCenterPage() {
         setIdeationTopicApproved(false);
         setTeamMarketReportUploaded(false);
         setTeamProductPrototypeUploaded(false);
+        setTeamBmcCanvasUploaded(false);
         setTeamPlanApproved(false);
         setTrainingEnded(false);
       }
@@ -721,6 +761,7 @@ export default function StudentCenterPage() {
     if (moduleId === 'ideation') return ideationTopicApproved || (moduleProgressState.ideation || 0) >= (MODULE_COMPLETE_THRESHOLD.ideation ?? 99);
     if (moduleId === 'market') return teamMarketReportUploaded;
     if (moduleId === 'product') return teamProductPrototypeUploaded;
+    if (moduleId === 'business') return teamBmcCanvasUploaded;
     if (moduleId === 'plan') return teamPlanApproved || (moduleProgressState.plan || 0) >= (MODULE_COMPLETE_THRESHOLD.plan ?? 99);
     const val = moduleProgressState[moduleId] || 0;
     return val >= (MODULE_COMPLETE_THRESHOLD[moduleId] ?? 99);
@@ -752,6 +793,7 @@ export default function StudentCenterPage() {
   };
 
   const getModuleProgressPercent = (moduleId: string): number => {
+    if (moduleId === 'business' && teamBmcCanvasUploaded) return 100;
     if (moduleId === 'product' && teamProductPrototypeUploaded) return 100;
     const val = moduleProgressState[moduleId as keyof typeof moduleProgressState] ?? 0;
     const th = MODULE_COMPLETE_THRESHOLD[moduleId] ?? 99;
@@ -1027,13 +1069,8 @@ export default function StudentCenterPage() {
   };
 
   const handleOverviewNotificationView = (notice: StudentNotificationRow) => {
-    const cat = getNotificationCategory(notice);
-    if (cat === 'task' || cat === 'guidance') {
-      openNotificationDetail(notice);
-      return;
-    }
-    markAsRead(notice.id);
-    goFromNotificationLink(notice.relatedLink || '/student-center?tab=overview');
+    const latest = notificationList.find((n) => n.id === notice.id) || notice;
+    openNotificationDetail(latest);
   };
 
   const changeActiveTab = (tab: TabType) => {
@@ -1673,6 +1710,11 @@ export default function StudentCenterPage() {
   }, [overviewNotificationTotalPages]);
 
   useEffect(() => {
+    setOverviewNotificationPage(1);
+    setOverviewTaskPage(1);
+  }, [selectedClassId]);
+
+  useEffect(() => {
     setOverviewTaskPage((page) => Math.min(page, overviewTaskTotalPages));
   }, [overviewTaskTotalPages]);
 
@@ -1950,6 +1992,7 @@ export default function StudentCenterPage() {
             isTeamLeader={isCurrentStudentTeamLeader}
             trainingEnded={trainingEnded}
             onBusinessTabProgress={handleBusinessTabProgress}
+            onBmcCanvasUploaded={() => setTeamBmcCanvasUploaded(true)}
             onTaskComplete={() => completeActiveTrainingTask('business')}
           />
         );
@@ -2352,7 +2395,7 @@ export default function StudentCenterPage() {
               </div>
 
               {/* 实训模块步骤条 */}
-              <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+              <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 overflow-hidden relative z-0">
                 <div className="flex items-center justify-between mb-5">
                   <h3 className="text-base font-bold text-gray-900 flex items-center gap-2">
                     <i className="ri-layout-grid-line text-teal-600"></i>实训模块进度
@@ -2381,7 +2424,10 @@ export default function StudentCenterPage() {
                     return (
                       <div key={mod.moduleId} className="flex-1 flex flex-col items-center relative">
                         {index < moduleProgress.length - 1 && (
-                          <div className={`absolute top-5 left-1/2 w-full h-0.5 z-0 ${isCompleted ? 'bg-teal-400' : 'bg-gray-200'}`}></div>
+                          <div
+                            className={`absolute top-5 left-1/2 w-full h-0.5 z-0 pointer-events-none ${isCompleted ? 'bg-teal-400' : 'bg-gray-200'}`}
+                            aria-hidden
+                          />
                         )}
                         <button
                           type="button"
@@ -2405,7 +2451,7 @@ export default function StudentCenterPage() {
               </div>
 
               {/* 待办任务 */}
-              <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+              <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 relative z-10">
                 <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
                   <h3 className="text-base font-bold text-gray-900 flex items-center gap-2">
                     <i className="ri-todo-line text-teal-600"></i>通知•待办任务
@@ -2470,23 +2516,31 @@ export default function StudentCenterPage() {
                               <p className="text-xs text-gray-500 line-clamp-2">{notice.content}</p>
                               <div className="text-xs text-gray-400 mt-1">{notice.timestamp}</div>
                             </div>
-                            <div className="flex items-center gap-2 flex-shrink-0">
+                            <div className="flex items-center gap-2 flex-shrink-0 relative z-10">
                               {!notice.isRead && (
                                 <button
                                   type="button"
-                                  onClick={() => markAsRead(notice.id)}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    markAsRead(notice.id);
+                                  }}
                                   className="px-2.5 py-1.5 bg-white border border-teal-200 text-teal-700 text-xs rounded-lg hover:bg-teal-50 cursor-pointer whitespace-nowrap"
                                 >
                                   已读
                                 </button>
                               )}
-                              <button
-                                type="button"
-                                onClick={() => handleOverviewNotificationView(notice)}
-                                className="px-2.5 py-1.5 bg-teal-500 text-white text-xs rounded-lg hover:bg-teal-600 cursor-pointer whitespace-nowrap"
-                              >
-                                查看
-                              </button>
+                              {shouldShowOverviewNotificationView(notice) && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleOverviewNotificationView(notice);
+                                  }}
+                                  className="px-2.5 py-1.5 bg-teal-500 text-white text-xs rounded-lg hover:bg-teal-600 cursor-pointer whitespace-nowrap"
+                                >
+                                  查看
+                                </button>
+                              )}
                             </div>
                           </div>
                         ))}
@@ -2862,16 +2916,14 @@ export default function StudentCenterPage() {
                                     <span className={`px-3 py-1 rounded-lg text-sm font-medium ${isLocked ? 'bg-gray-200 text-gray-600' : statusLabel === '已完成' ? 'bg-green-100 text-green-700' : isActive ? 'bg-teal-100 text-teal-700' : 'bg-yellow-100 text-yellow-700'}`}>
                                       {statusLabel}
                                     </span>
-                                    {!isLocked && (
+                                    {!isLocked && !noCourse && (
                                       <button
                                         type="button"
-                                        disabled={noCourse}
                                         onClick={() => {
-                                          if (noCourse) return;
                                           setKnowledgeSubTab('knowledge');
                                           setSelectedModule(mod.id);
                                         }}
-                                        className="px-4 py-2 bg-gradient-to-r from-teal-500 to-cyan-600 text-white rounded-lg text-sm font-medium hover:shadow-md transition-all whitespace-nowrap cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                                        className="px-4 py-2 bg-gradient-to-r from-teal-500 to-cyan-600 text-white rounded-lg text-sm font-medium hover:shadow-md transition-all whitespace-nowrap cursor-pointer"
                                       >
                                         进入学习
                                       </button>
@@ -2988,7 +3040,7 @@ export default function StudentCenterPage() {
           {/* 学习档案 */}
           {activeTab === 'guide' && (
             <div className="max-h-[calc(100vh-10rem)] overflow-y-auto rounded-2xl border border-slate-100 bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 px-4 py-3">
-              <UserGuideContent embedded />
+              <UserGuideContent embedded onNavigateStudentTab={(tab) => changeActiveTab(tab as TabType)} />
             </div>
           )}
 
@@ -3199,6 +3251,8 @@ export default function StudentCenterPage() {
       <Modal
         open={!!notificationDetail}
         title="通知详情"
+        zIndex={1100}
+        destroyOnClose
         onCancel={() => setNotificationDetail(null)}
         footer={
           notificationDetail ? (
@@ -3207,7 +3261,9 @@ export default function StudentCenterPage() {
                 <Button type="primary" onClick={goToTaskFromNotificationDetail}>
                   前往待办
                 </Button>
-              ) : getNotificationCategory(notificationDetail) === 'other' && notificationDetail.relatedLink ? (
+              ) : notificationDetail.relatedLink &&
+                (getNotificationCategory(notificationDetail) === 'other' ||
+                  getNotificationCategory(notificationDetail) === 'guidance') ? (
                 <Button
                   type="primary"
                   onClick={() => {

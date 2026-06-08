@@ -8,6 +8,7 @@ import {
   fetchStudentIdeationProjectTopic,
   fetchStudentIdeationWorkspace,
   likeStudentIdeationIdea,
+  unlikeStudentIdeationIdea,
   sendStudentIdeationDiscussion,
   submitStudentIdeationProjectTopic,
   type IdeationProjectTopic,
@@ -171,6 +172,7 @@ export default function IdeationModule({
   const [sendingDiscussion, setSendingDiscussion] = useState(false);
   const [checkingConfirmTab, setCheckingConfirmTab] = useState(false);
   const [expandedAnalysis, setExpandedAnalysis] = useState<string | null>(null);
+  const [expandedDescriptionId, setExpandedDescriptionId] = useState<string | null>(null);
 
   const [exampleCategories, setExampleCategories] = useState<InstanceLibraryCategory[]>([]);
   const [selectedCategoryId, setSelectedCategoryId] = useState('');
@@ -410,14 +412,27 @@ export default function IdeationModule({
 
   const handleVote = async (id: string) => {
     const target = ideas.find((idea) => idea.id === id);
-    if (!target || target.liked) return;
-    setIdeas((prev) => prev.map((idea) => idea.id === id ? { ...idea, liked: true, votes: idea.votes + 1 } : idea));
+    if (!target) return;
+    const wasLiked = target.liked;
+    setIdeas((prev) =>
+      prev.map((idea) =>
+        idea.id === id
+          ? {
+              ...idea,
+              liked: !wasLiked,
+              votes: Math.max(0, idea.votes + (wasLiked ? -1 : 1)),
+            }
+          : idea
+      )
+    );
     try {
-      const next = await likeStudentIdeationIdea(classId, id);
-      setIdeas((prev) => prev.map((idea) => idea.id === id ? next : idea));
+      const next = wasLiked
+        ? await unlikeStudentIdeationIdea(classId, id)
+        : await likeStudentIdeationIdea(classId, id);
+      setIdeas((prev) => prev.map((idea) => (idea.id === id ? next : idea)));
     } catch (e) {
-      setIdeas((prev) => prev.map((idea) => idea.id === id ? target : idea));
-      message.error(e instanceof Error ? e.message : '点赞失败');
+      setIdeas((prev) => prev.map((idea) => (idea.id === id ? target : idea)));
+      message.error(e instanceof Error ? e.message : wasLiked ? '取消点赞失败' : '点赞失败');
     }
   };
 
@@ -443,7 +458,7 @@ export default function IdeationModule({
       if (incompleteMembers && incompleteMembers.length > 0) {
         Modal.info({
           title: '请先完成实践课程',
-          content: `小组成员 ${incompleteMembers.map((member) => member.name).join('、')} 还未完成实践课程的学习任务，先让他们完成后再一起来确定项目选题吧。`,
+          content: `小组成员 ${incompleteMembers.map((member) => member.name).join('、')} 尚未完成「创新思维与创意生成」环节的实践课程学习及知识点检测，请完成后由队长统一确定项目选题。`,
           okText: '确定',
           okButtonProps: { className: '!bg-teal-500 !border-teal-500 hover:!bg-teal-600' },
           onOk: () => setActiveTab('methods'),
@@ -864,7 +879,25 @@ export default function IdeationModule({
                       <div className="flex items-start justify-between mb-2">
                         <div className="flex-1 min-w-0 pr-3">
                           <h4 className="text-sm font-bold text-gray-900 mb-1">{idea.title}</h4>
-                          <p className="text-xs text-gray-500 leading-relaxed mb-2">{idea.description}</p>
+                          {idea.description?.trim() ? (
+                            <div className="mb-2">
+                              <p className="text-xs text-gray-500 leading-relaxed line-clamp-2">{idea.description}</p>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setExpandedDescriptionId(expandedDescriptionId === idea.id ? null : idea.id)
+                                }
+                                className="mt-1 inline-flex items-center gap-0.5 text-xs text-teal-600 hover:text-teal-700 font-medium cursor-pointer"
+                              >
+                                <i
+                                  className={
+                                    expandedDescriptionId === idea.id ? 'ri-arrow-up-s-line' : 'ri-arrow-down-s-line'
+                                  }
+                                />
+                                {expandedDescriptionId === idea.id ? '收起描述' : '展开描述'}
+                              </button>
+                            </div>
+                          ) : null}
                           <div className="flex items-center gap-3 text-xs text-gray-400">
                             <span className="flex items-center gap-1">
                               <i className="ri-user-line"></i>
@@ -880,13 +913,15 @@ export default function IdeationModule({
                         </div>
                         <div className="flex flex-col items-end gap-2 flex-shrink-0">
                           <button
-                            onClick={() => handleVote(idea.id)}
-                            disabled={idea.liked}
-                            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-all whitespace-nowrap ${
-                              idea.liked ? 'bg-teal-500 text-white cursor-default' : 'bg-teal-50 text-teal-600 hover:bg-teal-100 cursor-pointer'
+                            type="button"
+                            onClick={() => void handleVote(idea.id)}
+                            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-all whitespace-nowrap cursor-pointer ${
+                              idea.liked
+                                ? 'bg-teal-500 text-white hover:bg-teal-600'
+                                : 'bg-teal-50 text-teal-600 hover:bg-teal-100'
                             }`}
                           >
-                            <i className="ri-thumb-up-line"></i>
+                            <i className={idea.liked ? 'ri-thumb-up-fill' : 'ri-thumb-up-line'}></i>
                             {idea.votes}
                           </button>
                         </div>
@@ -942,6 +977,16 @@ export default function IdeationModule({
                         )}
                       </div>
                     </div>
+
+                    {expandedDescriptionId === idea.id && idea.description?.trim() ? (
+                      <div className="mx-4 mb-4 rounded-xl border border-gray-200 bg-gray-50/80 p-4">
+                        <div className="text-xs font-semibold text-gray-800 mb-2 flex items-center gap-1.5">
+                          <i className="ri-file-text-line text-teal-600" />
+                          创意描述
+                        </div>
+                        <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{idea.description}</p>
+                      </div>
+                    ) : null}
 
                     {/* AI分析加载中 */}
                     {idea.analyzing && (

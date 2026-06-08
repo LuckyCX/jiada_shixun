@@ -12,8 +12,11 @@ import {
   saveBusinessModelBmc,
   saveBusinessModelWorkspacePartial,
   type BmcPayload,
+  type BusinessModelTeamMember,
   type BusinessModelWorkspacePayload,
   type GenerateBusinessModelBmcAiError,
+  type SaveBusinessModelBmcError,
+  type WarRoomTeamRecordSummary,
 } from '../../../lib/studentBusinessModelApi';
 
 interface BMCData {
@@ -46,6 +49,27 @@ function bmcFromPayload(bmc?: BmcPayload): BMCData {
   const base = emptyBmcData();
   if (!bmc) return base;
   return { ...base, ...bmc };
+}
+
+const WAR_ROOM_CANVAS_CELL_COUNT = 9;
+
+function allTeamMembersWarRoomComplete(
+  members: BusinessModelTeamMember[],
+  records: WarRoomTeamRecordSummary[]
+) {
+  if (!members.length) return false;
+  const byId = new Map(records.map((r) => [r.studentId, r.filledCount || 0]));
+  return members.every((m) => (byId.get(String(m.id)) || 0) >= WAR_ROOM_CANVAS_CELL_COUNT);
+}
+
+function warRoomMissingMemberNames(
+  members: BusinessModelTeamMember[],
+  records: WarRoomTeamRecordSummary[]
+) {
+  const byId = new Map(records.map((r) => [r.studentId, r.filledCount || 0]));
+  return members
+    .filter((m) => (byId.get(String(m.id)) || 0) < WAR_ROOM_CANVAS_CELL_COUNT)
+    .map((m) => m.name || '同学');
 }
 
 function hasBmcContent(data: BMCData) {
@@ -100,6 +124,7 @@ type BusinessModelModuleProps = {
   trainingEnded?: boolean;
   onTaskComplete?: () => void;
   onBusinessTabProgress?: (doneCount: number) => void;
+  onBmcCanvasUploaded?: () => void;
 };
 
 export default function BusinessModelModule({
@@ -109,6 +134,7 @@ export default function BusinessModelModule({
   trainingEnded = false,
   onTaskComplete,
   onBusinessTabProgress,
+  onBmcCanvasUploaded,
 }: BusinessModelModuleProps) {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<'canvas' | 'swot' | 'marketing' | 'finance' | 'warroom'>('swot');
@@ -147,6 +173,8 @@ export default function BusinessModelModule({
   const [isSavingFinance, setIsSavingFinance] = useState(false);
   const [warRoomRecordSaved, setWarRoomRecordSaved] = useState(false);
   const [canvasTabUploaded, setCanvasTabUploaded] = useState(false);
+  const [teamMembers, setTeamMembers] = useState<BusinessModelTeamMember[]>([]);
+  const [warRoomTeamRecords, setWarRoomTeamRecords] = useState<WarRoomTeamRecordSummary[]>([]);
 
   const canCaptain = workspaceIsTeamLeader || isTeamLeader;
 
@@ -202,9 +230,11 @@ export default function BusinessModelModule({
           setMarketingSaveTime,
           setFinanceSaveTime,
         });
-        const sid = d.studentId || '';
-        const myRecord = (d.warRoomTeamRecords || []).find((r) => r.studentId === sid);
-        setWarRoomRecordSaved(Boolean(myRecord && myRecord.filledCount >= 9));
+        const records = d.warRoomTeamRecords || [];
+        const members = d.teamMembers || [];
+        setTeamMembers(members);
+        setWarRoomTeamRecords(records);
+        setWarRoomRecordSaved(allTeamMembersWarRoomComplete(members, records));
         setCanvasData(bmcFromPayload(d.bmc));
         setCanvasTabUploaded(Boolean(d.bmcCanvasSavedAt));
         setWorkspaceIsTeamLeader(Boolean(d.isTeamLeader));
@@ -290,14 +320,44 @@ export default function BusinessModelModule({
       message.warning('请先生成或填写画布内容');
       return;
     }
+    if (!swotSaveTime) {
+      message.warning('请先保存 SWOT 分析');
+      return;
+    }
+    if (!marketingSaveTime) {
+      message.warning('请先保存营销策略');
+      return;
+    }
+    if (!financeSaveTime) {
+      message.warning('请先保存成本与财务分析');
+      return;
+    }
+    const missingNames = warRoomMissingMemberNames(teamMembers, warRoomTeamRecords);
+    if (missingNames.length > 0) {
+      Modal.warning({
+        title: '暂无法提交',
+        content: `${missingNames.join('、')} 尚未完成虚拟董事会演练`,
+      });
+      return;
+    }
     setIsUploadingCanvas(true);
     try {
       const d = await saveBusinessModelBmc(classId.trim(), canvasData);
       applyWorkspaceBmc(d);
       setCanvasTabUploaded(true);
-      message.success('商业画布已上传');
+      onBmcCanvasUploaded?.();
+      message.success('商业画布已提交');
     } catch (e) {
-      message.error(e instanceof Error ? e.message : '上传失败');
+      const err = e as SaveBusinessModelBmcError;
+      if (err.missingMembers?.length) {
+        const names = err.missingMembers.map((m) => m.studentName).join('、');
+        Modal.warning({
+          title: '暂无法提交',
+          content: `${names} 尚未完成虚拟董事会演练`,
+        });
+      } else {
+        message.error(err instanceof Error ? err.message : '提交失败');
+      }
     } finally {
       setIsUploadingCanvas(false);
     }
@@ -952,7 +1012,18 @@ export default function BusinessModelModule({
             <WarRoom
               classId={classId}
               studentDisplayName={studentDisplayName}
-              onRecordSaved={() => setWarRoomRecordSaved(true)}
+              onRecordSaved={() => {
+                if (!classId?.trim()) return;
+                void fetchBusinessModelWorkspace(classId.trim())
+                  .then((d) => {
+                    const records = d.warRoomTeamRecords || [];
+                    const members = d.teamMembers || teamMembers;
+                    setWarRoomTeamRecords(records);
+                    if (members.length) setTeamMembers(members);
+                    setWarRoomRecordSaved(allTeamMembersWarRoomComplete(members, records));
+                  })
+                  .catch(() => {});
+              }}
               disabled={trainingEnded}
             />
           )}

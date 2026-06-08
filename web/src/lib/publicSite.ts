@@ -3,9 +3,11 @@ import { useCallback, useEffect, useState } from 'react';
 export type PublicSite = {
   siteTitle: string;
   logoUrl: string;
+  /** 对外访问根地址，用于问卷外链等（如 https://train.example.com） */
+  publicBaseUrl: string;
 };
 
-const empty: PublicSite = { siteTitle: '', logoUrl: '' };
+const empty: PublicSite = { siteTitle: '', logoUrl: '', publicBaseUrl: '' };
 
 let cache: PublicSite | null = null;
 let inflight: Promise<PublicSite> | null = null;
@@ -40,6 +42,7 @@ export async function fetchPublicSite(force = false): Promise<PublicSite> {
     cache = {
       siteTitle: String(d.siteTitle ?? '').trim(),
       logoUrl: String(d.logoUrl ?? '').trim(),
+      publicBaseUrl: String(d.publicBaseUrl ?? '').trim().replace(/\/$/, ''),
     };
     return cache;
   })();

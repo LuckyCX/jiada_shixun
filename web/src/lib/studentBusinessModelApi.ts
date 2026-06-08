@@ -169,14 +169,34 @@ export async function generateBusinessModelBmcAi(classId: string): Promise<Busin
   return j.data as BusinessModelWorkspacePayload;
 }
 
+export type SaveBusinessModelBmcError = Error & {
+  missingMembers?: { studentId: string; studentName: string }[];
+};
+
 export async function saveBusinessModelBmc(
   classId: string,
   bmc: BmcPayload
 ): Promise<BusinessModelWorkspacePayload> {
-  return portalAuthenticatedFetch('student', `${base(classId)}/bmc/save`, {
+  const token = getPortalToken('student');
+  const r = await fetch(`${base(classId)}/bmc/save`, {
     method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
     body: JSON.stringify({ bmc }),
-  }) as Promise<BusinessModelWorkspacePayload>;
+  });
+  const j = (await r.json().catch(() => ({ code: -1, message: '无效响应' }))) as {
+    code: number;
+    message?: string;
+    data?: { missingMembers?: { studentId: string; studentName: string }[] };
+  };
+  if (!r.ok || j.code !== 0) {
+    const err = new Error(typeof j.message === 'string' ? j.message : '提交失败') as SaveBusinessModelBmcError;
+    if (j.data?.missingMembers?.length) err.missingMembers = j.data.missingMembers;
+    throw err;
+  }
+  return j.data as BusinessModelWorkspacePayload;
 }
 
 export const WAR_ROOM_MODULE_DEFS: { key: string; title: string }[] = [

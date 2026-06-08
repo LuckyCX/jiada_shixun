@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { DatePicker, InputNumber, Switch } from 'antd';
 import dayjs from 'dayjs';
+
+function todayYmd() {
+  return dayjs().format('YYYY-MM-DD');
+}
 import type { CourseSettingStage, CourseStageSetting } from '../../../lib/courseSettingsApi';
 
 type PrerequisiteStage = {
@@ -26,33 +30,27 @@ type DeadlineSettingsProps = {
   }) => Promise<void> | void;
 };
 
-function todayDate() {
-  return new Date().toISOString().slice(0, 10);
-}
-
 function addDays(date: string, days: number) {
-  const d = new Date(`${date}T00:00:00`);
-  d.setDate(d.getDate() + days);
-  return d.toISOString().slice(0, 10);
+  return dayjs(date).add(days, 'day').format('YYYY-MM-DD');
 }
 
 function calcDuration(startDate: string, deadlineDate: string) {
   if (!startDate || !deadlineDate) return 0;
-  const start = new Date(`${startDate}T00:00:00`).getTime();
-  const end = new Date(`${deadlineDate}T00:00:00`).getTime();
-  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return 0;
-  return Math.floor((end - start) / 86400000) + 1;
+  const start = dayjs(startDate);
+  const end = dayjs(deadlineDate);
+  if (!start.isValid() || !end.isValid() || end.isBefore(start, 'day')) return 0;
+  return end.diff(start, 'day') + 1;
 }
 
 export default function DeadlineSettings({ stage, setting, defaultStartDate, saving = false, prerequisites = [], onSave }: DeadlineSettingsProps) {
-  const [startDate, setStartDate] = useState(setting.startDate || defaultStartDate || todayDate());
+  const [startDate, setStartDate] = useState(setting.startDate || defaultStartDate || todayYmd());
   const [deadlineDate, setDeadlineDate] = useState(setting.deadlineDate || '');
   const [reminderDays, setReminderDays] = useState(setting.reminderDays ?? 3);
   const [reminderEnabled, setReminderEnabled] = useState(setting.reminderEnabled);
   const [message, setMessage] = useState('');
 
   useEffect(() => {
-    setStartDate(setting.startDate || defaultStartDate || todayDate());
+    setStartDate(setting.startDate || defaultStartDate || todayYmd());
     setDeadlineDate(setting.deadlineDate || '');
     setReminderDays(setting.reminderDays ?? 3);
     setReminderEnabled(setting.reminderEnabled);
@@ -128,7 +126,12 @@ export default function DeadlineSettings({ stage, setting, defaultStartDate, sav
             <DatePicker
               value={deadlineDate ? dayjs(deadlineDate) : null}
               onChange={(date) => setDeadlineDate(date ? date.format('YYYY-MM-DD') : '')}
-              disabledDate={(date) => Boolean(startDate && date && date.isBefore(dayjs(startDate), 'day'))}
+              disabledDate={(date) => {
+                if (!date) return false;
+                if (startDate && date.isBefore(dayjs(startDate), 'day')) return true;
+                if (date.isBefore(dayjs().startOf('day'))) return true;
+                return false;
+              }}
               className="w-full"
               format="YYYY-MM-DD"
             />

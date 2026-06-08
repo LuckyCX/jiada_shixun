@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { getPool } from '../lib/db.js';
 import { logError } from '../lib/logError.js';
 import { requireAuth, requireTeacher } from '../middleware/auth.js';
+import { formatCalendarDateFromPg } from '../lib/calendarDate.js';
 
 const router = Router();
 
@@ -35,9 +36,7 @@ function teacherIdFromReq(req) {
 }
 
 function dateOnly(value) {
-  if (!value) return '';
-  if (typeof value === 'string') return value.slice(0, 10);
-  return new Date(value).toISOString().slice(0, 10);
+  return formatCalendarDateFromPg(value);
 }
 
 function isDateOnly(value) {
@@ -88,8 +87,12 @@ router.get('/teacher/personal-classes/:classId/course-settings', requireAuth(), 
     if (!classRow) return bad(req, res, 404, 40401, '班级不存在');
 
     const { rows } = await pool.query(
-      `SELECT module_key, start_date, deadline_date, duration_days, reminder_days, reminder_enabled,
-              last_reminded_at, last_reminded_deadline
+      `SELECT module_key,
+              to_char(start_date, 'YYYY-MM-DD') AS start_date,
+              to_char(deadline_date, 'YYYY-MM-DD') AS deadline_date,
+              duration_days, reminder_days, reminder_enabled,
+              last_reminded_at,
+              to_char(last_reminded_deadline, 'YYYY-MM-DD') AS last_reminded_deadline
        FROM teacher_personal_class_course_settings
        WHERE teacher_personal_class_id = $1 AND teacher_id = $2`,
       [classId, teacherId]
@@ -168,8 +171,12 @@ router.put('/teacher/personal-classes/:classId/course-settings/:moduleKey', requ
            ELSE teacher_personal_class_course_settings.last_reminded_deadline
          END,
          updated_at = now()
-       RETURNING module_key, start_date, deadline_date, duration_days, reminder_days, reminder_enabled,
-                 last_reminded_at, last_reminded_deadline`,
+       RETURNING module_key,
+                 to_char(start_date, 'YYYY-MM-DD') AS start_date,
+                 to_char(deadline_date, 'YYYY-MM-DD') AS deadline_date,
+                 duration_days, reminder_days, reminder_enabled,
+                 last_reminded_at,
+                 to_char(last_reminded_deadline, 'YYYY-MM-DD') AS last_reminded_deadline`,
       [classId, teacherId, moduleKey, startDate, deadlineDate, duration, reminderDays, reminderEnabled]
     );
     return ok(req, res, { setting: mapSetting(rows[0]) });

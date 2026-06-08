@@ -179,7 +179,7 @@ export default function SystemConfigPanel() {
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<TabValue>('site');
 
-  const [site, setSite] = useState({ siteTitle: '', logoUrl: '' });
+  const [site, setSite] = useState({ siteTitle: '', logoUrl: '', publicBaseUrl: '' });
   const [logoUploading, setLogoUploading] = useState(false);
   const logoFileInputRef = useRef<HTMLInputElement>(null);
   const [smtp, setSmtp] = useState({ host: '', port: 465, secure: true, user: '', pass: '', from: '' });
@@ -238,6 +238,7 @@ export default function SystemConfigPanel() {
     setSite({
       siteTitle: String(s.siteTitle || ''),
       logoUrl: String(s.logoUrl || ''),
+      publicBaseUrl: String(s.publicBaseUrl || '').trim().replace(/\/$/, ''),
     });
     const sm = (data.smtp_config?.value || {}) as Record<string, unknown>;
     setSmtp({
@@ -345,6 +346,7 @@ export default function SystemConfigPanel() {
       site: {
         siteTitle: site.siteTitle.trim(),
         logoUrl: site.logoUrl.trim(),
+        publicBaseUrl: site.publicBaseUrl.trim().replace(/\/$/, ''),
       },
     });
     if (ok) notifySiteBrandUpdated();
@@ -697,6 +699,16 @@ export default function SystemConfigPanel() {
               />
             </Form.Item>
             <Form.Item label="站点 Logo">{renderLogoField()}</Form.Item>
+            <Form.Item
+              label="对外访问地址"
+              extra="问卷二维码、外链等使用此域名；本地开发可填线上地址，如 https://train.jiuanci.com"
+            >
+              <Input
+                value={site.publicBaseUrl}
+                onChange={(e) => setSite((s) => ({ ...s, publicBaseUrl: e.target.value.trim() }))}
+                placeholder="https://train.jiuanci.com"
+              />
+            </Form.Item>
             <Form.Item>
               <Button type="primary" loading={loading} onClick={() => void saveSite()}>
                 保存站点配置

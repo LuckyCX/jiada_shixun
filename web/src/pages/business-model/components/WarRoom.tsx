@@ -258,9 +258,12 @@ export default function WarRoom({ classId, studentDisplayName = '同学', onReco
   }, [canvasFocus]);
 
   const applyWorkspace = useCallback(
-    (ws: Awaited<ReturnType<typeof fetchBusinessModelWorkspace>>, opts?: { syncMessages?: boolean }) => {
+    (
+      ws: Awaited<ReturnType<typeof fetchBusinessModelWorkspace>>,
+      opts?: { syncMessages?: boolean; syncCanvas?: boolean }
+    ) => {
       const wr = ws.warRoom;
-      if (wr?.canvas) setCanvas(wr.canvas);
+      if (opts?.syncCanvas !== false && wr?.canvas) setCanvas(wr.canvas);
       if (opts?.syncMessages !== false && wr?.transcript?.messages) {
         setMessages(wr.transcript.messages);
       }
@@ -270,6 +273,12 @@ export default function WarRoom({ classId, studentDisplayName = '同学', onReco
     },
     []
   );
+
+  const refreshWorkspace = useCallback(async () => {
+    if (!classId?.trim()) return;
+    const ws = await fetchBusinessModelWorkspace(classId.trim());
+    applyWorkspace(ws);
+  }, [classId, applyWorkspace]);
 
   useEffect(() => {
     if (!classId?.trim()) return;
@@ -326,9 +335,9 @@ export default function WarRoom({ classId, studentDisplayName = '同学', onReco
     setIsDebating(true);
     try {
       const { roundMessages, workspace } = await warRoomDebateStart(classId.trim(), studentDisplayName);
-      applyWorkspace(workspace, { syncMessages: false });
+      applyWorkspace(workspace, { syncMessages: false, syncCanvas: false });
       await playMessagesSequential(roundMessages);
-      applyWorkspace(workspace);
+      await refreshWorkspace();
     } catch (e) {
       message.error(e instanceof Error ? e.message : '开始辩论失败');
     } finally {
@@ -366,7 +375,7 @@ export default function WarRoom({ classId, studentDisplayName = '同学', onReco
           text,
           mentioned
         );
-        applyWorkspace(workspace, { syncMessages: false });
+        applyWorkspace(workspace, { syncMessages: false, syncCanvas: false });
         const serverUser = workspace.warRoom?.transcript?.messages?.[prevLen];
         setMessages((prev) => {
           const base = prev.filter((m) => m.id !== tempId);
@@ -376,14 +385,14 @@ export default function WarRoom({ classId, studentDisplayName = '同学', onReco
           return base;
         });
         await playMessagesSequential([reply]);
-        applyWorkspace(workspace);
+        await refreshWorkspace();
       } else {
         const { roundMessages, workspace } = await warRoomDebateRound(
           classId.trim(),
           studentDisplayName,
           text
         );
-        applyWorkspace(workspace, { syncMessages: false });
+        applyWorkspace(workspace, { syncMessages: false, syncCanvas: false });
         const serverUser = workspace.warRoom?.transcript?.messages?.[prevLen];
         setMessages((prev) => {
           const base = prev.filter((m) => m.id !== tempId);
@@ -394,7 +403,7 @@ export default function WarRoom({ classId, studentDisplayName = '同学', onReco
         });
         const aiOnly = roundMessages.filter((m) => m.hat !== 'user');
         await playMessagesSequential(aiOnly);
-        applyWorkspace(workspace);
+        await refreshWorkspace();
       }
     } catch (e) {
       setMessages((prev) => prev.filter((m) => m.id !== tempId));

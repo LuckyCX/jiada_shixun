@@ -444,25 +444,30 @@ export default function TeacherGuidePage() {
             常见问题
           </h3>
           <div className="space-y-3">
-            {faqs.map((faq, i) => (
-              <div
-                key={i}
-                className="bg-white rounded-2xl overflow-hidden border border-teal-100 cursor-pointer"
-                onClick={() => setOpenFaq(openFaq === i ? null : i)}
-              >
-                <div className="flex items-center justify-between px-6 py-4">
-                  <span className="text-sm font-bold text-gray-900">{faq.q}</span>
-                  <i
-                    className={`ri-arrow-down-s-line text-xl text-gray-400 transition-transform flex-shrink-0 ml-4 ${openFaq === i ? 'rotate-180' : ''}`}
-                  ></i>
+            {faqs.map((faq, i) => {
+              const open = openFaq === i;
+              return (
+                <div key={i} className="bg-white rounded-2xl overflow-hidden border border-teal-100">
+                  <button
+                    type="button"
+                    className="w-full flex items-center justify-between gap-3 px-6 py-4 text-left cursor-pointer hover:bg-slate-50/80 transition-colors"
+                    aria-expanded={open}
+                    onClick={() => setOpenFaq(open ? null : i)}
+                  >
+                    <span className="text-sm font-bold text-gray-900 pr-2">{faq.q}</span>
+                    <i
+                      className={`ri-arrow-down-s-line text-xl text-gray-400 transition-transform flex-shrink-0 ${open ? 'rotate-180' : ''}`}
+                      aria-hidden
+                    />
+                  </button>
+                  {open ? (
+                    <div className="px-6 pb-5">
+                      <p className="text-sm text-gray-600 leading-relaxed border-t border-slate-100 pt-4">{faq.a}</p>
+                    </div>
+                  ) : null}
                 </div>
-                {openFaq === i && (
-                  <div className="px-6 pb-5">
-                    <p className="text-sm text-gray-600 leading-relaxed border-t border-slate-100 pt-4">{faq.a}</p>
-                  </div>
-                )}
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       </div>

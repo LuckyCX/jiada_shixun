@@ -37,16 +37,66 @@ export default function VideoPlayer({
   const [completed, setCompleted] = useState(initialCompleted);
   const mediaRef = useRef<HTMLVideoElement | HTMLAudioElement | null>(null);
   const maxWatchedRef = useRef(initialTime);
+  const completedRef = useRef(initialCompleted);
+  const onSaveProgressRef = useRef(onSaveProgress);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const controlsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  onSaveProgressRef.current = onSaveProgress;
+
+  const persistMediaProgress = (completedFlag = completedRef.current) => {
+    const media = mediaRef.current;
+    if (!media || !src || !Number.isFinite(media.duration) || media.duration <= 0) return;
+    const percent = Math.round((media.currentTime / media.duration) * 100);
+    onSaveProgressRef.current?.(
+      percent,
+      { currentTime: media.currentTime, duration: media.duration },
+      completedFlag || percent >= 100
+    );
+  };
+
+  const applyResumeTime = (timeSeconds: number) => {
+    const media = mediaRef.current;
+    if (!media || !src) return;
+    if (!Number.isFinite(media.duration) || media.duration <= 0) return;
+    const resumeAt = Math.min(Math.max(0, timeSeconds), Math.max(0, media.duration - 0.5));
+    if (Math.abs(media.currentTime - resumeAt) > 0.3) {
+      media.currentTime = resumeAt;
+    }
+    setCurrentTime(resumeAt);
+    maxWatchedRef.current = Math.max(maxWatchedRef.current, resumeAt);
+  };
 
   const speeds = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
 
   useEffect(() => {
     setCurrentTime(initialTime);
     setCompleted(initialCompleted);
+    completedRef.current = initialCompleted;
     maxWatchedRef.current = initialTime;
   }, [resourceId, initialTime, initialCompleted]);
+
+  useEffect(() => {
+    completedRef.current = completed;
+  }, [completed]);
+
+  useEffect(() => {
+    if (!src) return undefined;
+    const media = mediaRef.current;
+    if (!media) return undefined;
+    const onMeta = () => applyResumeTime(initialTime);
+    if (media.readyState >= 1) {
+      onMeta();
+    } else {
+      media.addEventListener('loadedmetadata', onMeta);
+    }
+    return () => media.removeEventListener('loadedmetadata', onMeta);
+  }, [src, resourceId, initialTime]);
+
+  useEffect(() => {
+    if (!src) return undefined;
+    return () => persistMediaProgress();
+  }, [src, resourceId]);
 
   useEffect(() => {
     if (src) return undefined;
@@ -121,15 +171,12 @@ export default function VideoPlayer({
           ref={mediaRef as never}
           src={src}
           className={mediaType === 'video' ? 'w-full h-full bg-black' : 'hidden'}
-          onLoadedMetadata={(e) => {
-            const media = e.currentTarget;
-            const resumeAt = Math.min(initialTime, Math.max(0, media.duration - 1));
-            if (resumeAt > 0) media.currentTime = resumeAt;
-            setCurrentTime(resumeAt);
-            maxWatchedRef.current = resumeAt;
-          }}
+          onLoadedMetadata={() => applyResumeTime(initialTime)}
           onPlay={() => setIsPlaying(true)}
-          onPause={() => setIsPlaying(false)}
+          onPause={() => {
+            setIsPlaying(false);
+            persistMediaProgress();
+          }}
           onSeeking={(e) => {
             const media = e.currentTarget;
             if (media.currentTime > maxWatchedRef.current + 1) {
@@ -152,6 +199,7 @@ export default function VideoPlayer({
             const durationSeconds = media?.duration || totalTime;
             onSaveProgress?.(100, { currentTime: durationSeconds, duration: durationSeconds }, true);
             setCompleted(true);
+            completedRef.current = true;
             onComplete?.();
           }}
         />
@@ -189,6 +237,7 @@ export default function VideoPlayer({
             </div>
           </div>
           {completed && <p className="text-xs text-green-300 mt-2">已完成学习</p>}
+         
         </div>
       </div>
     );

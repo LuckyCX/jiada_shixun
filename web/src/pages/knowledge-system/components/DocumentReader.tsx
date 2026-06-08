@@ -40,6 +40,16 @@ export default function DocumentReader({
   const [zoom, setZoom] = useState(100);
   const [completed, setCompleted] = useState(initialCompleted);
   const contentRef = useRef<HTMLDivElement | null>(null);
+  const panRef = useRef({
+    active: false,
+    pointerId: -1,
+    startX: 0,
+    startY: 0,
+    scrollLeft: 0,
+    scrollTop: 0,
+  });
+  const [canPan, setCanPan] = useState(false);
+  const [isPanning, setIsPanning] = useState(false);
   const pageStartedAtRef = useRef(Date.now());
   const studySecondsRef = useRef(initialStudySeconds);
   const bottomSavedPageRef = useRef<number | null>(null);
@@ -156,6 +166,73 @@ export default function DocumentReader({
     return () => observer.disconnect();
   }, []);
 
+  const updateCanPan = () => {
+    const el = contentRef.current;
+    if (!el) return;
+    const overflow =
+      el.scrollWidth > el.clientWidth + 2 || el.scrollHeight > el.clientHeight + 2;
+    setCanPan(overflow);
+  };
+
+  useEffect(() => {
+    updateCanPan();
+  }, [zoom, contentWidth, currentPage, previewUrl, mimeType]);
+
+  useEffect(() => {
+    const el = contentRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => updateCanPan());
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [previewUrl, mimeType]);
+
+  const endPan = (el: HTMLDivElement, pointerId: number) => {
+    panRef.current.active = false;
+    panRef.current.pointerId = -1;
+    setIsPanning(false);
+    try {
+      el.releasePointerCapture(pointerId);
+    } catch {
+      /* ignore */
+    }
+    el.style.cursor = canPan ? 'grab' : '';
+  };
+
+  const handleContentPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    const el = contentRef.current;
+    if (!el) return;
+    const overflow =
+      el.scrollWidth > el.clientWidth + 2 || el.scrollHeight > el.clientHeight + 2;
+    if (!overflow) return;
+    panRef.current = {
+      active: true,
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      scrollLeft: el.scrollLeft,
+      scrollTop: el.scrollTop,
+    };
+    el.setPointerCapture(e.pointerId);
+    el.style.cursor = 'grabbing';
+    setIsPanning(true);
+  };
+
+  const handleContentPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const el = contentRef.current;
+    const pan = panRef.current;
+    if (!el || !pan.active || pan.pointerId !== e.pointerId) return;
+    el.scrollLeft = pan.scrollLeft - (e.clientX - pan.startX);
+    el.scrollTop = pan.scrollTop - (e.clientY - pan.startY);
+    e.preventDefault();
+  };
+
+  const handleContentPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    const el = contentRef.current;
+    if (!el || !panRef.current.active) return;
+    endPan(el, e.pointerId);
+  };
+
   const commitStudyTime = () => {
     const now = Date.now();
     const elapsedSeconds = Math.floor((now - pageStartedAtRef.current) / 1000);
@@ -240,7 +317,11 @@ export default function DocumentReader({
       {/* 文档内容区 */}
       <div
         ref={contentRef}
-        className="p-6 overflow-auto flex-1"
+        className={`p-6 overflow-auto flex-1 min-w-0 ${canPan ? 'cursor-grab' : ''} ${isPanning ? 'select-none' : ''}`}
+        onPointerDown={handleContentPointerDown}
+        onPointerMove={handleContentPointerMove}
+        onPointerUp={handleContentPointerUp}
+        onPointerCancel={handleContentPointerUp}
         onScroll={(e) => {
           const el = e.currentTarget;
           if (el.scrollTop + el.clientHeight >= el.scrollHeight - 8) {
@@ -258,7 +339,9 @@ export default function DocumentReader({
         }}
       >
         {previewUrl ? (
-          <div className="bg-white rounded-xl shadow-md mx-auto overflow-hidden w-fit max-w-full">
+          <div
+            className={`bg-white rounded-xl shadow-md mx-auto w-fit ${isPdf ? '' : 'max-w-full overflow-hidden'}`}
+          >
             {isImage ? (
               <img
                 src={previewUrl}
@@ -281,7 +364,11 @@ export default function DocumentReader({
                 loading={<div className="py-12 text-center text-sm text-gray-400">文档加载中...</div>}
                 error={<div className="py-12 text-center text-sm text-red-500">文档加载失败</div>}
               >
-                <Page pageNumber={currentPage} width={pageWidth} />
+                <Page
+                  pageNumber={currentPage}
+                  width={pageWidth}
+                  onRenderSuccess={updateCanPan}
+                />
               </Document>
             ) : (
               <iframe src={previewUrl} title={title} className="w-full h-[340px] bg-white" />

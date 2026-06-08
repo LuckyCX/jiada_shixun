@@ -13,6 +13,7 @@ import {
   QRCode,
 } from 'antd';
 import VersionControl, { Version } from '../../../components/feature/VersionControl';
+import { useSiteBrand } from '../../../lib/publicSite';
 import MarketResearchMethodUpload from './MarketResearchMethodUpload';
 import SurveyAIGenerateModal from './SurveyAIGenerateModal';
 import SurveyEditorModal from './SurveyEditorModal';
@@ -174,7 +175,13 @@ function BarChart({ items }: { items: { label: string; value: number }[] }) {
 
 function QRCodeModal({ survey, onClose }: { survey: Survey; onClose: () => void }) {
   const [copied, setCopied] = useState(false);
-  const link = survey.link || (survey.publicSlug ? buildPublicSurveyUrl(survey.publicSlug) : '');
+  const { publicBaseUrl } = useSiteBrand();
+  const link = useMemo(() => {
+    if (survey.publicSlug) {
+      return buildPublicSurveyUrl(survey.publicSlug, publicBaseUrl || undefined);
+    }
+    return survey.link || '';
+  }, [survey.publicSlug, survey.link, publicBaseUrl]);
 
   const handleCopy = () => {
     if (!link) return;
@@ -1215,6 +1222,7 @@ export default function MarketResearchModule({
           initialClosesAt={surveyEditor.survey?.closesAt ?? null}
           stageDeadlineDate={stagePeriod?.deadlineDate ?? null}
           saving={surveySaving}
+          saveButtonLabel={surveyEditor.mode === 'create' ? '确认创建问卷' : '保存'}
           onCancel={() => setSurveyEditor(null)}
           onSave={
             surveyEditor.mode === 'view'

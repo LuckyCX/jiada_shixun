@@ -709,9 +709,6 @@ const RoleSimulationModule = ({ classId, onTaskComplete, trainingEnded = false }
           <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-base font-bold text-gray-900">渠道分配</h3>
-              <span className={`text-xs px-2 py-1 rounded-full ${totalChannel === 100 ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-500'}`}>
-                总计 {totalChannel}%
-              </span>
             </div>
             {[
               { key: 'social', label: '社交媒体', icon: 'ri-share-line', color: 'text-pink-500' },

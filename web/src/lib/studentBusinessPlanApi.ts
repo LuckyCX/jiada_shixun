@@ -241,6 +241,87 @@ export type BusinessPlanAnalyzeJson = {
   nextActions: string[];
 };
 
+function coerceAnalyzeStringList(v: unknown): string[] {
+  if (Array.isArray(v)) return v.map((x) => String(x ?? '').trim()).filter(Boolean);
+  if (typeof v === 'string' && v.trim()) {
+    return v
+      .split(/\n+/)
+      .map((s) => s.replace(/^[\d一二三四五六七八九十]+[、.)．]\s*/, '').trim())
+      .filter(Boolean);
+  }
+  return [];
+}
+
+export function parseBusinessPlanAnalyzeFromStorage(result: string): BusinessPlanAnalyzeJson | null {
+  const t = String(result || '').trim();
+  if (!t) return null;
+  try {
+    const raw = JSON.parse(t) as Record<string, unknown>;
+    const nested =
+      raw.analysis && typeof raw.analysis === 'object' && !Array.isArray(raw.analysis)
+        ? (raw.analysis as Record<string, unknown>)
+        : raw;
+
+    let score = Math.round(Number(nested.score ?? nested.Score ?? nested.qualityScore ?? 0));
+    if (!Number.isFinite(score)) score = 0;
+    score = Math.max(0, Math.min(100, score));
+
+    const overall = String(nested.overall ?? nested.summary ?? nested.整体评价 ?? '').trim();
+    const strengths = coerceAnalyzeStringList(nested.strengths ?? nested.优点 ?? nested.优点分析);
+    const improvements = coerceAnalyzeStringList(nested.improvements ?? nested.改进建议 ?? nested.suggestions);
+    const nextActions = coerceAnalyzeStringList(nested.nextActions ?? nested.下一步行动建议 ?? nested.actions);
+
+    const mRaw = nested.metrics ?? nested.关键指标;
+    let metrics: BusinessPlanAnalyzeJson['metrics'] = [];
+    if (Array.isArray(mRaw)) {
+      metrics = mRaw
+        .map((m) => {
+          if (!m || typeof m !== 'object') return null;
+          const row = m as Record<string, unknown>;
+          const name = String(row.name ?? row.title ?? row.指标 ?? '').trim();
+          let stars = Math.round(Number(row.stars ?? row.star ?? row.score ?? 0));
+          if (!Number.isFinite(stars)) stars = 0;
+          stars = Math.max(0, Math.min(5, stars));
+          const comment = String(row.comment ?? row.desc ?? row.简评 ?? '').trim();
+          if (!name && !comment) return null;
+          return { name: name || '指标', stars, comment };
+        })
+        .filter(Boolean) as BusinessPlanAnalyzeJson['metrics'];
+    }
+
+    const hasBody =
+      overall.length >= 4 ||
+      strengths.length > 0 ||
+      improvements.length > 0 ||
+      metrics.length > 0 ||
+      nextActions.length > 0;
+    if (!hasBody) return null;
+
+    return { score, overall, strengths, improvements, metrics, nextActions };
+  } catch {
+    return null;
+  }
+}
+
+export function businessPlanAnalyzeToEditorHtml(data: BusinessPlanAnalyzeJson): string {
+  const scoreLabel = Number.isFinite(data.score) ? `${data.score}/100` : '';
+  return `<h3>一、整体评价</h3>
+<p>${data.overall || ''}${scoreLabel ? `（整体质量评分：${scoreLabel}）` : ''}</p>
+<h3>二、优点分析</h3>
+<ol>${(data.strengths || []).map((x) => `<li>${String(x || '')}</li>`).join('')}</ol>
+<h3>三、改进建议</h3>
+<ol>${(data.improvements || []).map((x) => `<li>${String(x || '')}</li>`).join('')}</ol>
+<h3>四、关键指标评估</h3>
+<ul>${(data.metrics || [])
+  .map((m) => {
+    const stars = Math.max(0, Math.min(5, Number(m?.stars || 0)));
+    return `<li>${String(m?.name || '')}：${'★'.repeat(stars)}${'☆'.repeat(5 - stars)}（${String(m?.comment || '')}）</li>`;
+  })
+  .join('')}</ul>
+<h3>五、下一步行动建议</h3>
+<ol>${(data.nextActions || []).map((x) => `<li>${String(x || '')}</li>`).join('')}</ol>`;
+}
+
 export async function analyzeBusinessPlanVersionStream(
   classId: string,
   body: { versionId: string },

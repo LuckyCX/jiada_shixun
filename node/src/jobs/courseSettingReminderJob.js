@@ -1,13 +1,14 @@
 import { getPool } from '../lib/db.js';
 import { logError } from '../lib/logError.js';
 import { COURSE_SETTING_STAGES } from '../routes/courseSettings.js';
+import { formatCalendarDateFromPg } from '../lib/calendarDate.js';
 
 const stageNameByKey = new Map(COURSE_SETTING_STAGES.map((stage) => [stage.key, stage.name]));
 let running = false;
 let started = false;
 
 function dateOnly(value) {
-  return value ? new Date(value).toISOString().slice(0, 10) : '';
+  return formatCalendarDateFromPg(value);
 }
 
 async function notifySetting(client, setting) {

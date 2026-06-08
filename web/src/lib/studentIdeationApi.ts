@@ -108,6 +108,14 @@ export async function likeStudentIdeationIdea(classId: string, ideaId: string): 
   ) as Promise<StudentIdeationIdea>;
 }
 
+export async function unlikeStudentIdeationIdea(classId: string, ideaId: string): Promise<StudentIdeationIdea> {
+  return portalAuthenticatedFetch(
+    'student',
+    `/api/student/personal-classes/${encodeURIComponent(classId)}/ideation/ideas/${encodeURIComponent(ideaId)}/like`,
+    { method: 'DELETE' }
+  ) as Promise<StudentIdeationIdea>;
+}
+
 export async function sendStudentIdeationDiscussion(
   classId: string,
   content: string

@@ -9,6 +9,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { randomInt, randomUUID } from 'crypto';
 import { sendSmtpMail } from '../lib/mailProvider.js';
+import { formatCalendarDateFromPg } from '../lib/calendarDate.js';
 
 const router = Router();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -30,8 +31,7 @@ function studentIdFromReq(req) {
 }
 
 function dateOnly(value) {
-  if (!value) return '';
-  return value instanceof Date ? value.toISOString().slice(0, 10) : String(value).slice(0, 10);
+  return formatCalendarDateFromPg(value);
 }
 
 function normalizeEmail(value) {

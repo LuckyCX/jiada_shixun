@@ -13,6 +13,9 @@ import {
   saveBusinessPlanWorkspace,
   submitBusinessPlan,
   analyzeBusinessPlanVersionStream,
+  businessPlanAnalyzeToEditorHtml,
+  listBusinessPlanAnalyses,
+  parseBusinessPlanAnalyzeFromStorage,
   type BusinessPlanAnalyzeJson,
   type BusinessPlanAnalysis,
   type BusinessPlanSection,
@@ -75,6 +78,8 @@ export default function BusinessPlanModule({
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [selectedAnalysisVersionId, setSelectedAnalysisVersionId] = useState<string | null>(null);
   const [analysisResult, setAnalysisResult] = useState<BusinessPlanAnalyzeJson | null>(null);
+  const [analysisMarkdownFallback, setAnalysisMarkdownFallback] = useState('');
+  const [analysisByVersionId, setAnalysisByVersionId] = useState<Map<string, BusinessPlanAnalysis>>(new Map());
   const [analysisThinking, setAnalysisThinking] = useState('');
   const [selectedSubmitVersionId, setSelectedSubmitVersionId] = useState<string | null>(null);
   const [submitPreview, setSubmitPreview] = useState('');
@@ -111,14 +116,55 @@ export default function BusinessPlanModule({
     }
   }, [serializeSections]);
 
+  const applyAnalysisRecord = useCallback((record: BusinessPlanAnalysis | undefined) => {
+    if (!record?.result?.trim()) {
+      setAnalysisResult(null);
+      setAnalysisMarkdownFallback('');
+      return;
+    }
+    const structured = parseBusinessPlanAnalyzeFromStorage(record.result);
+    if (structured) {
+      setAnalysisResult(structured);
+      setAnalysisMarkdownFallback('');
+      return;
+    }
+    setAnalysisResult(null);
+    setAnalysisMarkdownFallback(record.result);
+  }, []);
+
+  const loadAnalyses = useCallback(async () => {
+    if (!classId) return new Map<string, BusinessPlanAnalysis>();
+    const list = await listBusinessPlanAnalyses(classId);
+    const map = new Map<string, BusinessPlanAnalysis>();
+    for (const a of list) {
+      if (!map.has(a.versionId)) map.set(a.versionId, a);
+    }
+    setAnalysisByVersionId(map);
+    return map;
+  }, [classId]);
+
   const loadWorkspace = useCallback(async () => {
     if (!classId) return;
-    const ws = await fetchBusinessPlanWorkspace(classId);
+    const [ws, analysisMap] = await Promise.all([fetchBusinessPlanWorkspace(classId), loadAnalyses()]);
     applyWorkspace(ws, { markSaved: true });
+    const defaultVersionId =
+      selectedAnalysisVersionId || (ws.versions.length ? ws.versions[0].id : null);
     if (ws.versions.length && !selectedAnalysisVersionId) {
       setSelectedAnalysisVersionId(ws.versions[0].id);
     }
-  }, [applyWorkspace, classId, selectedAnalysisVersionId]);
+    if (defaultVersionId) {
+      applyAnalysisRecord(analysisMap.get(defaultVersionId));
+    }
+  }, [applyAnalysisRecord, applyWorkspace, classId, loadAnalyses, selectedAnalysisVersionId]);
+
+  useEffect(() => {
+    if (!selectedAnalysisVersionId) {
+      setAnalysisResult(null);
+      setAnalysisMarkdownFallback('');
+      return;
+    }
+    applyAnalysisRecord(analysisByVersionId.get(selectedAnalysisVersionId));
+  }, [analysisByVersionId, applyAnalysisRecord, selectedAnalysisVersionId]);
 
   useEffect(() => {
     if (!classId) {
@@ -243,7 +289,7 @@ export default function BusinessPlanModule({
     setSavingDraft(true);
     try {
       const snapshot = getSectionsSnapshotWithDraft();
-      const summary = `手动保存 ${new Date().toLocaleString('zh-CN')}`;
+      const summary = '手动保存';
       const res = await createBusinessPlanVersion(classId, summary, snapshot);
       setVersionCache((prev) => {
         const next = new Map(prev);
@@ -418,7 +464,10 @@ export default function BusinessPlanModule({
     if (!classId || !selectedAnalysisVersionId) return;
     setIsAnalyzing(true);
     setAnalysisThinking('');
+    setAnalysisResult(null);
+    setAnalysisMarkdownFallback('');
     try {
+      let streamed: BusinessPlanAnalyzeJson | null = null;
       await analyzeBusinessPlanVersionStream(
         classId,
         { versionId: selectedAnalysisVersionId },
@@ -429,11 +478,23 @@ export default function BusinessPlanModule({
             setAnalysisThinking((s) => (s + chunk).slice(-12000));
           },
           onDone: (p) => {
-            setAnalysisResult((p as any)?.analysis || null);
+            const raw = (p as { analysis?: BusinessPlanAnalyzeJson })?.analysis;
+            streamed = raw ? parseBusinessPlanAnalyzeFromStorage(JSON.stringify(raw)) || raw : null;
+            if (streamed) {
+              setAnalysisResult(streamed);
+              setAnalysisMarkdownFallback('');
+            }
           },
         }
       );
-      message.success('分析完成');
+      const map = await loadAnalyses();
+      applyAnalysisRecord(map.get(selectedAnalysisVersionId));
+      if (!streamed && !map.get(selectedAnalysisVersionId)) {
+        message.warning('报告已生成但内容为空，请重试');
+      } else {
+        message.success('分析完成');
+      }
+      setAnalysisThinking('');
     } catch (e) {
       message.error(e instanceof Error ? e.message : '分析失败');
     } finally {
@@ -947,7 +1008,10 @@ export default function BusinessPlanModule({
                             <button
                               key={v.id}
                               type="button"
-                              onClick={() => setSelectedAnalysisVersionId(v.id)}
+                              onClick={() => {
+                                setSelectedAnalysisVersionId(v.id);
+                                applyAnalysisRecord(analysisByVersionId.get(v.id));
+                              }}
                               className={`w-full text-left px-4 py-3 border-b border-gray-100 hover:bg-gray-50 cursor-pointer ${
                                 active ? 'bg-violet-50' : ''
                               }`}
@@ -983,23 +1047,14 @@ export default function BusinessPlanModule({
                           </div>
                         ) : analysisResult ? (
                           <RichTextEditor
-                            value={`<h3>一、整体评价</h3>
-<p>${analysisResult.overall || ''}（整体质量评分：${Number.isFinite(analysisResult.score) ? analysisResult.score : ''}/100）</p>
-<h3>二、优点分析</h3>
-<ol>${(analysisResult.strengths || []).map((x) => `<li>${String(x || '')}</li>`).join('')}</ol>
-<h3>三、改进建议</h3>
-<ol>${(analysisResult.improvements || []).map((x) => `<li>${String(x || '')}</li>`).join('')}</ol>
-<h3>四、关键指标评估</h3>
-<ul>${(analysisResult.metrics || [])
-  .map((m) => `<li>${String(m?.name || '')}：${'★'.repeat(Math.max(0, Math.min(5, Number(m?.stars || 0))))}${'☆'.repeat(
-    Math.max(0, 5 - Math.max(0, Math.min(5, Number(m?.stars || 0))))
-  )}（${String(m?.comment || '')}）</li>`)
-  .join('')}</ul>
-<h3>五、下一步行动建议</h3>
-<ol>${(analysisResult.nextActions || []).map((x) => `<li>${String(x || '')}</li>`).join('')}</ol>`}
+                            value={businessPlanAnalyzeToEditorHtml(analysisResult)}
                             viewOnly
                             fitHeight={false}
                           />
+                        ) : analysisMarkdownFallback ? (
+                          <div className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">
+                            {analysisMarkdownFallback}
+                          </div>
                         ) : (
                           <div className="py-16 text-center text-sm text-gray-500">请选择左侧版本并生成报告</div>
                         )}
@@ -1064,7 +1119,11 @@ export default function BusinessPlanModule({
                               </span>
                             ) : null}
                           </div>
-                          <p className="text-xs text-gray-500">{v.savedAt} · {v.operator}</p>
+                          {v.savedAt ? (
+                            <p className="text-xs text-gray-500 m-0 mt-1">{v.savedAt} · {v.operator}</p>
+                          ) : (
+                            <p className="text-xs text-gray-500 m-0 mt-1">{v.operator}</p>
+                          )}
                         </button>
                           );
                         })()

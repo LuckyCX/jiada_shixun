@@ -106,6 +106,73 @@ export function buildBusinessPlanAnalyzeUserPrompt(analyzeBundle) {
   return String(analyzeBundle || '').trim();
 }
 
+function coerceAnalyzeStringList(v) {
+  if (Array.isArray(v)) return v.map((x) => String(x ?? '').trim()).filter(Boolean);
+  if (typeof v === 'string' && v.trim()) {
+    return v
+      .split(/\n+/)
+      .map((s) => s.replace(/^[\d一二三四五六七八九十]+[、.)．]\s*/, '').trim())
+      .filter(Boolean);
+  }
+  return [];
+}
+
+/** 将模型 JSON（含中英文字段）规范为前端展示结构 */
+export function normalizeBusinessPlanAnalyzePayload(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const nested = raw.analysis && typeof raw.analysis === 'object' ? raw.analysis : raw;
+
+  let score = Math.round(Number(nested.score ?? nested.Score ?? nested.qualityScore ?? nested.质量分 ?? 0));
+  if (!Number.isFinite(score)) score = 0;
+  score = Math.max(0, Math.min(100, score));
+
+  const overall = String(
+    nested.overall ??
+      nested.summary ??
+      nested.evaluation ??
+      nested.整体评价 ??
+      nested['整体评价'] ??
+      ''
+  ).trim();
+
+  const strengths = coerceAnalyzeStringList(
+    nested.strengths ?? nested.优点 ?? nested.优点分析 ?? nested.strength
+  );
+  const improvements = coerceAnalyzeStringList(
+    nested.improvements ?? nested.suggestions ?? nested.改进建议 ?? nested.improvement
+  );
+  const nextActions = coerceAnalyzeStringList(
+    nested.nextActions ?? nested.next_steps ?? nested.下一步行动建议 ?? nested.actions
+  );
+
+  const mRaw = nested.metrics ?? nested.关键指标 ?? nested.indicators;
+  let metrics = [];
+  if (Array.isArray(mRaw)) {
+    metrics = mRaw
+      .map((m) => {
+        if (!m || typeof m !== 'object') return null;
+        const name = String(m.name ?? m.title ?? m.指标 ?? m.dimension ?? '').trim();
+        let stars = Math.round(Number(m.stars ?? m.star ?? m.score ?? m.星级 ?? 0));
+        if (!Number.isFinite(stars)) stars = 0;
+        stars = Math.max(0, Math.min(5, stars));
+        const comment = String(m.comment ?? m.desc ?? m.description ?? m.简评 ?? '').trim();
+        if (!name && !comment) return null;
+        return { name: name || '指标', stars, comment };
+      })
+      .filter(Boolean);
+  }
+
+  const hasBody =
+    overall.length >= 4 ||
+    strengths.length > 0 ||
+    improvements.length > 0 ||
+    metrics.length > 0 ||
+    nextActions.length > 0;
+  if (!hasBody) return null;
+
+  return { score, overall, strengths, improvements, metrics, nextActions };
+}
+
 export function normalizeGeneratePayload(text) {
   const parsed = extractJsonFromLlmText(String(text || ''));
   if (!parsed || !Array.isArray(parsed.sections)) {

@@ -1,4 +1,5 @@
 import { SURVEY_QUESTION_TYPES } from './marketResearchSurveyPrompts.js';
+import { instantToChinaCalendarDate } from './calendarDate.js';
 
 export function mapSurveyStatusToClient(status) {
   if (status === 'published') return '进行中';
@@ -84,9 +85,10 @@ export function validateSurveyClosesAt(closesAtIso, stage) {
     return { error: '截止时间须晚于当前时间' };
   }
   if (stage?.deadlineDate) {
-    const moduleEnd = new Date(`${stage.deadlineDate}T23:59:59.999`);
-    if (closes.getTime() > moduleEnd.getTime()) {
-      return { error: `截止时间不能晚于实训环节截止日（${stage.deadlineDate}）` };
+    const closesDay = instantToChinaCalendarDate(closes);
+    const deadlineDay = String(stage.deadlineDate).slice(0, 10);
+    if (closesDay && deadlineDay && closesDay > deadlineDay) {
+      return { error: `截止时间不能晚于实训环节截止日（${deadlineDay}）` };
     }
   }
   return { closesAt: closes.toISOString() };

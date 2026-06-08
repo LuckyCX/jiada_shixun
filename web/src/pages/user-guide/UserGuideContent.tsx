@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { COURSE_GATE_PERCENT } from '../../lib/trainingModulePrerequisite';
 
 interface GuideStep {
@@ -23,11 +23,13 @@ interface GuideSection {
 export type UserGuideContentProps = {
   /** 学生工作台内嵌：无顶栏、收紧版式、隐藏页尾引导 */
   embedded?: boolean;
+  /** 内嵌时由学生工作台切换 tab（如打开进度看板） */
+  onNavigateStudentTab?: (tab: string) => void;
 };
 
 function studentCenterHref(tab?: string, extra?: Record<string, string>) {
   const p = new URLSearchParams();
-  if (tab && tab !== 'overview') p.set('tab', tab);
+  if (tab) p.set('tab', tab);
   Object.entries(extra || {}).forEach(([k, v]) => {
     if (v) p.set(k, v);
   });
@@ -43,7 +45,7 @@ const sections: GuideSection[] = [
     color: 'from-blue-500 to-indigo-500',
     description: '登录学生工作台，选择当前教学班，了解班级未开放时的提示',
     studentTab: 'overview',
-    ctaLabel: '进入学生工作台',
+    ctaLabel: '',
     steps: [
       {
         title: '学生账号登录',
@@ -232,11 +234,24 @@ const faqs: { q: string; a: string }[] = [
   },
 ];
 
-export function UserGuideContent({ embedded = false }: UserGuideContentProps) {
+export function UserGuideContent({ embedded = false, onNavigateStudentTab }: UserGuideContentProps) {
+  const navigate = useNavigate();
   const [activeSection, setActiveSection] = useState('start');
+  const [openFaq, setOpenFaq] = useState<number | null>(null);
 
   const current = sections.find((s) => s.id === activeSection) || sections[0];
   const primaryHref = studentCenterHref(current.studentTab);
+  const showSectionCta = Boolean(current.studentTab && current.ctaLabel);
+
+  const handleSectionCta = () => {
+    const tab = current.studentTab;
+    if (!tab) return;
+    if (embedded && onNavigateStudentTab) {
+      onNavigateStudentTab(tab);
+      return;
+    }
+    navigate(primaryHref);
+  };
 
   const sectionWrap = embedded ? 'px-0 pt-2 pb-4' : 'max-w-7xl mx-auto px-6 pt-12 pb-8';
 
@@ -295,13 +310,26 @@ export function UserGuideContent({ embedded = false }: UserGuideContentProps) {
                 <p className="text-white/90 text-sm leading-relaxed">{current.description}</p>
               </div>
             </div>
-            <Link
-              to={primaryHref}
-              className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-white text-slate-900 font-medium hover:shadow-lg transition-all whitespace-nowrap"
-            >
-              <span>{current.ctaLabel}</span>
-              <i className="ri-arrow-right-line"></i>
-            </Link>
+            {showSectionCta ? (
+              embedded && onNavigateStudentTab ? (
+                <button
+                  type="button"
+                  onClick={handleSectionCta}
+                  className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-white text-slate-900 font-medium hover:shadow-lg transition-all whitespace-nowrap cursor-pointer"
+                >
+                  <span>{current.ctaLabel}</span>
+                  <i className="ri-arrow-right-line"></i>
+                </button>
+              ) : (
+                <Link
+                  to={primaryHref}
+                  className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-white text-slate-900 font-medium hover:shadow-lg transition-all whitespace-nowrap"
+                >
+                  <span>{current.ctaLabel}</span>
+                  <i className="ri-arrow-right-line"></i>
+                </Link>
+              )
+            ) : null}
           </div>
 
           <div className="p-8">
@@ -355,15 +383,15 @@ export function UserGuideContent({ embedded = false }: UserGuideContentProps) {
             </h3>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               <Link
-                to={studentCenterHref()}
+                to={studentCenterHref('overview')}
                 className="flex items-center gap-4 p-4 rounded-xl border-2 border-slate-200 hover:border-blue-500 hover:shadow-md transition-all group"
               >
                 <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-teal-500 to-cyan-500 flex items-center justify-center">
                   <i className="ri-dashboard-line text-white text-xl"></i>
                 </div>
                 <div>
-                  <h4 className="font-bold text-slate-900 group-hover:text-blue-600 transition-colors">学生工作台</h4>
-                  <p className="text-sm text-slate-600">进度看板</p>
+                  <h4 className="font-bold text-slate-900 group-hover:text-blue-600 transition-colors">进度看板</h4>
+                  <p className="text-sm text-slate-600">通知与待办任务</p>
                 </div>
               </Link>
               <Link
@@ -400,35 +428,33 @@ export function UserGuideContent({ embedded = false }: UserGuideContentProps) {
             <span>常见问题</span>
           </h3>
           <div className="space-y-3">
-            {faqs.map((faq, i) => (
-              <details key={i} className="bg-white rounded-xl p-5 cursor-pointer group">
-                <summary className="font-bold text-slate-900 flex items-center justify-between list-none">
-                  <span className="pr-4">{faq.q}</span>
-                  <i className="ri-arrow-down-s-line text-xl text-slate-400 group-open:rotate-180 transition-transform flex-shrink-0"></i>
-                </summary>
-                <p className="mt-4 text-sm text-slate-600 leading-relaxed border-t border-slate-100 pt-4">{faq.a}</p>
-              </details>
-            ))}
+            {faqs.map((faq, i) => {
+              const open = openFaq === i;
+              return (
+                <div key={i} className="bg-white rounded-xl overflow-hidden border border-slate-100">
+                  <button
+                    type="button"
+                    className="w-full flex items-center justify-between gap-3 px-5 py-4 text-left cursor-pointer hover:bg-slate-50/80 transition-colors"
+                    aria-expanded={open}
+                    onClick={() => setOpenFaq(open ? null : i)}
+                  >
+                    <span className="font-bold text-slate-900 pr-2">{faq.q}</span>
+                    <i
+                      className={`ri-arrow-down-s-line text-xl text-slate-400 transition-transform flex-shrink-0 ${open ? 'rotate-180' : ''}`}
+                      aria-hidden
+                    />
+                  </button>
+                  {open ? (
+                    <p className="px-5 pb-5 text-sm text-slate-600 leading-relaxed border-t border-slate-100 pt-4">
+                      {faq.a}
+                    </p>
+                  ) : null}
+                </div>
+              );
+            })}
           </div>
         </div>
 
-        {!embedded && (
-          <div className="mt-12 text-center pb-12">
-            <div className="inline-flex flex-col items-center gap-4 p-8 rounded-3xl bg-gradient-to-br from-blue-600 to-indigo-600 text-white">
-              <i className="ri-rocket-line text-5xl"></i>
-              <h3 className="text-2xl font-bold">进入学生工作台</h3>
-              <p className="text-white/90 max-w-md text-sm">
-                使用学生账号登录后，按指南完成选班、课程学习与各阶段实训
-              </p>
-              <Link
-                to="/student-center"
-                className="px-8 py-3 rounded-xl bg-white text-blue-600 font-bold hover:shadow-xl transition-all whitespace-nowrap"
-              >
-                进入学生工作台
-              </Link>
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );

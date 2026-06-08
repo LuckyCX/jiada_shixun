@@ -55,6 +55,18 @@ function topicReviewHeadline(status?: string): string {
   return formatReviewStatus(status) || '审核中';
 }
 
+const BMC_PREVIEW_FIELDS: { key: string; label: string }[] = [
+  { key: 'keyPartnerships', label: '合作伙伴' },
+  { key: 'keyActivities', label: '关键业务' },
+  { key: 'valueProposition', label: '价值主张' },
+  { key: 'customerRelationships', label: '客户关系' },
+  { key: 'customerSegments', label: '客户细分' },
+  { key: 'keyResources', label: '核心资源' },
+  { key: 'channels', label: '渠道通路' },
+  { key: 'costStructure', label: '成本结构' },
+  { key: 'revenueStreams', label: '收入来源' },
+];
+
 export default function TeamDetailModal({ classId, team, onClose, onIntervene }: TeamDetailModalProps) {
   const [activeTab, setActiveTab] = useState<'overview' | 'submissions'>('overview');
   const [submissions, setSubmissions] = useState<TeacherMonitorSubmissionItem[]>([]);
@@ -154,6 +166,21 @@ export default function TeamDetailModal({ classId, team, onClose, onIntervene }:
 
     if (item.stageKey === 'marketResearch' && item.title === '市场调研报告') {
       return <MarketReportSubmissionPreview classId={classId} teamId={team.id} />;
+    }
+
+    if (item.stageKey === 'businessModel' && item.title === '商业画布' && typeof payload === 'object') {
+      return (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {BMC_PREVIEW_FIELDS.map(({ key, label }) => (
+            <div key={key} className="bg-gray-50 border border-gray-200 rounded-xl p-4 text-left">
+              <div className="text-xs font-bold text-gray-600 mb-2">{label}</div>
+              <p className="text-sm text-gray-800 whitespace-pre-wrap break-words">
+                {String(payload[key] || '').trim() || '未填写'}
+              </p>
+            </div>
+          ))}
+        </div>
+      );
     }
 
     // 7 商业计划书：Word 式文档排版预览
@@ -516,7 +543,8 @@ export default function TeamDetailModal({ classId, team, onClose, onIntervene }:
               <div
                 className={`bg-white rounded-2xl shadow-2xl w-full overflow-hidden ${
                   (preview.stageKey === 'marketResearch' && preview.title === '市场调研报告') ||
-                  (preview.stageKey === 'businessPlan' && preview.title === '商业计划书提交')
+                  (preview.stageKey === 'businessPlan' && preview.title === '商业计划书提交') ||
+                  (preview.stageKey === 'businessModel' && preview.title === '商业画布')
                     ? 'max-w-4xl'
                     : 'max-w-2xl'
                 }`}

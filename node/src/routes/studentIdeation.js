@@ -7,6 +7,7 @@ import {
   getIdeationMethodPrompt,
   IDEATION_METHOD_LABELS,
 } from '../lib/ideationPrompts.js';
+import { evaluateModulePrerequisiteForStudent } from '../lib/trainingModulePrerequisite.js';
 
 const router = Router();
 
@@ -244,65 +245,27 @@ async function loadDiscussions(pool, teamId) {
 }
 
 async function loadIncompleteIdeationMembers(pool, teamId) {
-  const { rows } = await pool.query(
-    `WITH RECURSIVE
-       team_members AS (
-         SELECT m.student_id, COALESCE(NULLIF(u.real_name, ''), u.username, '成员') AS name
-         FROM teacher_personal_class_team_members m
-         JOIN users u ON u.id = m.student_id
-         WHERE m.team_id = $1
-       ),
-       ideation_nodes AS (
-         SELECT n.id
-         FROM course_resource_nodes n
-         WHERE n.module_key = 'ideation'
-           AND n.level = 3
-           AND n.status = 'published'
-       ),
-       ideation_resources AS (
-         SELECT DISTINCT f.content_hash
-         FROM course_resource_files f
-         JOIN ideation_nodes n ON n.id = f.node_id
-         WHERE COALESCE(f.content_hash, '') <> ''
-           AND f.resource_type <> 'archive'
-       ),
-       ideation_knowledge AS (
-         SELECT DISTINCT l.knowledge_point_id
-         FROM course_resource_node_knowledge_points l
-         JOIN ideation_nodes n ON n.id = l.node_id
-       )
-     SELECT DISTINCT tm.student_id AS "studentId", tm.name
-     FROM team_members tm
-     WHERE EXISTS (
-       SELECT 1
-       FROM ideation_resources ir
-       WHERE NOT EXISTS (
-         SELECT 1
-         FROM student_course_resource_progress p
-         WHERE p.user_id = tm.student_id
-           AND p.content_hash = ir.content_hash
-           AND p.completed_at IS NOT NULL
-       )
-     )
-     OR EXISTS (
-       SELECT 1
-       FROM ideation_knowledge ik
-       WHERE NOT EXISTS (
-         SELECT 1
-         FROM quiz_attempts a
-         JOIN quizzes q ON q.id = a.quiz_id
-         WHERE a.user_id = tm.student_id
-           AND a.passed = true
-           AND q.knowledge_point_id = ik.knowledge_point_id
-       )
-     )
-     ORDER BY tm.name ASC`,
+  const { rows: members } = await pool.query(
+    `SELECT m.student_id, COALESCE(NULLIF(u.real_name, ''), u.username, '成员') AS name
+     FROM teacher_personal_class_team_members m
+     JOIN users u ON u.id = m.student_id
+     WHERE m.team_id = $1
+     ORDER BY name ASC`,
     [teamId]
   );
-  return rows.map((row) => ({
-    studentId: String(row.studentId),
-    name: row.name,
-  }));
+  const incompleteMembers = [];
+  for (const row of members) {
+    const sid = Number(row.student_id);
+    if (!Number.isFinite(sid) || sid <= 0) continue;
+    const result = await evaluateModulePrerequisiteForStudent(pool, sid, 'ideation');
+    if (!result.allowed) {
+      incompleteMembers.push({
+        studentId: String(row.student_id),
+        name: row.name,
+      });
+    }
+  }
+  return incompleteMembers;
 }
 
 async function projectDirectionExists(pool, classId, projectDirection) {
@@ -484,7 +447,13 @@ router.post('/student/personal-classes/:classId/ideation/topic', requireAuth(), 
     }
     const incompleteMembers = await loadIncompleteIdeationMembers(pool, Number(team.id));
     if (incompleteMembers.length > 0) {
-      return bad(req, res, 400, 40017, `小组成员 ${incompleteMembers.map((m) => m.name).join('、')} 还未完成实践课程`);
+      return bad(
+        req,
+        res,
+        400,
+        40017,
+        `小组成员 ${incompleteMembers.map((m) => m.name).join('、')} 尚未完成创新思维环节的实践课程学习及知识点检测`
+      );
     }
     const existing = await loadTeamProjectTopic(pool, Number(team.id));
     if (existing?.status === 'pending') return bad(req, res, 400, 40018, '项目选题已提交，待教师审核');
@@ -721,6 +690,32 @@ router.post('/student/personal-classes/:classId/ideation/ideas/:ideaId/like', re
     return ok(req, res, next);
   } catch (e) {
     logError(`POST ideation like traceId=${req.traceId}`, e);
+    return bad(req, res, 500, 50000, e.message);
+  }
+});
+
+router.delete('/student/personal-classes/:classId/ideation/ideas/:ideaId/like', requireAuth(), requireStudent(), async (req, res) => {
+  try {
+    const sid = studentIdFromReq(req);
+    const classId = parseId(req.params.classId);
+    const ideaId = parseId(req.params.ideaId);
+    if (!sid || !classId || !ideaId) return bad(req, res, 400, 40003, '参数无效');
+    const pool = getPool();
+    if (!(await studentEnrolledInClass(pool, sid, classId))) {
+      return bad(req, res, 403, 40301, '未加入该班级');
+    }
+    const team = await getConfirmedTeam(pool, sid, classId);
+    if (!team) return bad(req, res, 400, 40014, '教师确认组队后可取消点赞');
+    const idea = await loadIdea(pool, ideaId, Number(team.id), sid);
+    if (!idea) return bad(req, res, 404, 40401, '创意不存在');
+    await pool.query(
+      `DELETE FROM teacher_personal_class_team_idea_likes WHERE idea_id = $1 AND student_id = $2`,
+      [ideaId, sid]
+    );
+    const next = await loadIdea(pool, ideaId, Number(team.id), sid);
+    return ok(req, res, next);
+  } catch (e) {
+    logError(`DELETE ideation like traceId=${req.traceId}`, e);
     return bad(req, res, 500, 50000, e.message);
   }
 });

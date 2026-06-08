@@ -25,6 +25,7 @@ import {
   validateSurveyClosesAt,
   assertSurveyIdsForTeam,
 } from '../lib/marketResearchSurveyDb.js';
+import { resolvePublicWebOrigin } from '../lib/publicWebOrigin.js';
 import {
   buildMarketResearchContext,
   buildSurveyOnlyContext,
@@ -151,18 +152,15 @@ async function loadTeamMembers(pool, teamId) {
 
 async function getMarketStageDates(pool, classId) {
   const { rows } = await pool.query(
-    `SELECT start_date, deadline_date
+    `SELECT to_char(start_date, 'YYYY-MM-DD') AS start_date,
+            to_char(deadline_date, 'YYYY-MM-DD') AS deadline_date
      FROM teacher_personal_class_course_settings
      WHERE teacher_personal_class_id = $1 AND module_key = 'market'`,
     [classId]
   );
   const row = rows[0];
   if (!row?.start_date || !row?.deadline_date) return null;
-  const fmt = (d) => {
-    const x = d instanceof Date ? d : new Date(d);
-    return x.toISOString().slice(0, 10);
-  };
-  return { startDate: fmt(row.start_date), deadlineDate: fmt(row.deadline_date) };
+  return { startDate: String(row.start_date), deadlineDate: String(row.deadline_date) };
 }
 
 function dateInRange(dateStr, startDate, deadlineDate) {
@@ -344,21 +342,10 @@ function extractJsonObject(raw) {
   }
 }
 
-function publicBaseFromRequest(req) {
-  const origin = String(req.headers.origin || '').trim();
-  if (origin) {
-    try {
-      return new URL(origin).origin;
-    } catch {
-      /* ignore */
-    }
-  }
-  return String(process.env.PUBLIC_WEB_ORIGIN || 'http://localhost:5173').replace(/\/$/, '');
-}
-
 async function mapSurveyWithQuestions(pool, row, req) {
   const questions = await loadSurveyQuestions(pool, row.id);
-  return mapSurveyRow(row, questions, publicBaseFromRequest(req));
+  const base = await resolvePublicWebOrigin(req);
+  return mapSurveyRow(row, questions, base);
 }
 
 router.get('/student/personal-classes/:classId/market-research/plan', requireAuth(), requireStudent(), async (req, res) => {
@@ -739,7 +726,8 @@ router.post(
       await client.query('COMMIT');
       open = false;
       const questions = await loadSurveyQuestions(client, surveyId);
-      return ok(req, res, mapSurveyRow(rows[0], questions, publicBaseFromRequest(req)));
+      const base = await resolvePublicWebOrigin(req);
+      return ok(req, res, mapSurveyRow(rows[0], questions, base));
     } catch (e) {
       if (open) await client.query('ROLLBACK').catch(() => {});
       logError(`POST market-research survey traceId=${req.traceId}`, e);
@@ -788,7 +776,8 @@ router.put(
       await client.query('COMMIT');
       open = false;
       const questions = await loadSurveyQuestions(client, surveyId);
-      return ok(req, res, mapSurveyRow(rows[0], questions, publicBaseFromRequest(req)));
+      const base = await resolvePublicWebOrigin(req);
+      return ok(req, res, mapSurveyRow(rows[0], questions, base));
     } catch (e) {
       if (open) await client.query('ROLLBACK').catch(() => {});
       logError(`PUT market-research survey traceId=${req.traceId}`, e);
@@ -864,7 +853,7 @@ router.post(
          RETURNING id, title, status, collected_count, public_slug, source, created_at, published_at, closes_at`,
         [surveyId, ctx.team.id, slug]
       );
-      const base = publicBaseFromRequest(req);
+      const base = await resolvePublicWebOrigin(req);
       const mapped = mapSurveyRow(rows[0], questions, base);
       return ok(req, res, {
         ...mapped,
@@ -901,7 +890,8 @@ router.post(
         [surveyId, ctx.team.id]
       );
       const questions = await loadSurveyQuestions(ctx.pool, surveyId);
-      return ok(req, res, mapSurveyRow(rows[0], questions, publicBaseFromRequest(req)));
+      const base = await resolvePublicWebOrigin(req);
+      return ok(req, res, mapSurveyRow(rows[0], questions, base));
     } catch (e) {
       logError(`POST market-research withdraw traceId=${req.traceId}`, e);
       return bad(req, res, 500, 50000, e.message);

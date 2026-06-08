@@ -22,9 +22,29 @@ type Props = {
   initialClosesAt?: string | null;
   stageDeadlineDate?: string | null;
   saving?: boolean;
+  saveButtonLabel?: string;
   onCancel: () => void;
   onSave?: (payload: SurveyEditorPayload) => void | Promise<void>;
 };
+
+function defaultClosesAt(stageDeadlineDate: string | null): Dayjs {
+  const now = dayjs();
+  const stageEnd = stageDeadlineDate ? dayjs(stageDeadlineDate).endOf('day') : null;
+  let candidate = now.add(7, 'day');
+  if (stageEnd) {
+    candidate = candidate.isAfter(stageEnd) ? stageEnd : candidate;
+  }
+  if (!candidate.isAfter(now)) {
+    candidate = now.add(1, 'hour');
+    if (stageEnd && candidate.isAfter(stageEnd)) {
+      candidate = stageEnd;
+    }
+  }
+  if (!candidate.isAfter(now)) {
+    candidate = now.add(30, 'minute');
+  }
+  return candidate;
+}
 
 function newQuestion(): MarketSurveyQuestion {
   return {
@@ -44,6 +64,7 @@ export default function SurveyEditorModal({
   initialClosesAt = null,
   stageDeadlineDate = null,
   saving = false,
+  saveButtonLabel = '保存',
   onCancel,
   onSave,
 }: Props) {
@@ -51,9 +72,8 @@ export default function SurveyEditorModal({
   const [questions, setQuestions] = useState<MarketSurveyQuestion[]>([]);
   const [closesAt, setClosesAt] = useState<Dayjs | null>(null);
 
-  const minClosesAt = useMemo(() => dayjs().add(1, 'minute'), [open]);
   const maxClosesAt = useMemo(
-    () => (stageDeadlineDate ? dayjs(`${stageDeadlineDate}T23:59:59`) : null),
+    () => (stageDeadlineDate ? dayjs(stageDeadlineDate).endOf('day') : null),
     [stageDeadlineDate]
   );
 
@@ -66,11 +86,10 @@ export default function SurveyEditorModal({
         : [newQuestion()]
     );
     if (initialClosesAt) {
-      setClosesAt(dayjs(initialClosesAt));
-    } else if (stageDeadlineDate) {
-      setClosesAt(dayjs(`${stageDeadlineDate}T23:59:59`));
+      const parsed = dayjs(initialClosesAt);
+      setClosesAt(parsed.isValid() ? parsed : defaultClosesAt(stageDeadlineDate));
     } else {
-      setClosesAt(dayjs().add(7, 'day'));
+      setClosesAt(defaultClosesAt(stageDeadlineDate));
     }
   }, [open, initialTitle, initialQuestions, initialClosesAt, stageDeadlineDate]);
 
@@ -99,7 +118,8 @@ export default function SurveyEditorModal({
       message.warning('请设置问卷截止时间');
       return;
     }
-    if (closesAt.isBefore(minClosesAt)) {
+    const now = dayjs();
+    if (!closesAt.isAfter(now)) {
       message.warning('截止时间须晚于当前时间');
       return;
     }
@@ -131,9 +151,26 @@ export default function SurveyEditorModal({
 
   const disabledDate = (current: Dayjs) => {
     if (!current) return false;
-    if (current.isBefore(minClosesAt, 'day')) return true;
+    if (current.isBefore(dayjs().startOf('day'))) return true;
     if (maxClosesAt && current.isAfter(maxClosesAt, 'day')) return true;
     return false;
+  };
+
+  const disabledTime = (current: Dayjs | null) => {
+    if (!current || !current.isSame(dayjs(), 'day')) {
+      return {};
+    }
+    const now = dayjs();
+    const h = now.hour();
+    const m = now.minute();
+    const s = now.second();
+    return {
+      disabledHours: () => Array.from({ length: h }, (_, i) => i),
+      disabledMinutes: (selectedHour: number) =>
+        selectedHour === h ? Array.from({ length: m }, (_, i) => i) : [],
+      disabledSeconds: (selectedHour: number, selectedMinute: number) =>
+        selectedHour === h && selectedMinute === m ? Array.from({ length: s + 1 }, (_, i) => i) : [],
+    };
   };
 
   return (
@@ -154,7 +191,7 @@ export default function SurveyEditorModal({
                 取消
               </Button>,
               <Button key="save" type="primary" loading={saving} onClick={() => void handleSave()}>
-                保存
+                {saveButtonLabel}
               </Button>,
             ]
       }
@@ -173,12 +210,13 @@ export default function SurveyEditorModal({
         <div>
           <div className="text-sm font-medium text-gray-900 mb-1">问卷截止时间</div>
           <DatePicker
-            showTime
+            showTime={{ format: 'HH:mm' }}
             className="w-full"
             value={closesAt}
             onChange={(v) => setClosesAt(v)}
             disabled={readOnly}
             disabledDate={disabledDate}
+            disabledTime={disabledTime}
             format="YYYY-MM-DD HH:mm"
           />
           {stageDeadlineDate && (

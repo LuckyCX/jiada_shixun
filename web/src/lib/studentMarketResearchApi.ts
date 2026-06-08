@@ -100,13 +100,15 @@ export type SurveyPromptEcho = {
   user: string;
 };
 
-export function buildPublicSurveyUrl(slug: string): string {
+export function buildPublicSurveyUrl(slug: string, publicBaseUrl?: string): string {
   const basePath = (typeof __BASE_PATH__ !== 'undefined' ? __BASE_PATH__ : '/').replace(/\/$/, '') || '';
-  const path = `${basePath}/s/${encodeURIComponent(slug)}`;
-  if (typeof window !== 'undefined') {
-    return `${window.location.origin}${path.startsWith('/') ? path : `/${path}`}`;
-  }
-  return path;
+  const path = `${basePath}/s/${encodeURIComponent(slug)}`.replace(/\/{2,}/g, '/');
+  const configured = String(publicBaseUrl || '').trim().replace(/\/$/, '');
+  const origin =
+    configured ||
+    (typeof window !== 'undefined' ? window.location.origin.replace(/\/$/, '') : '');
+  const suffix = path.startsWith('/') ? path : `/${path}`;
+  return `${origin}${suffix}`;
 }
 
 export async function fetchMarketResearchPlan(classId: string): Promise<MarketPlanResponse> {

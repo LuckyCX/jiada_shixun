@@ -134,6 +134,30 @@ function coerceBmc(j) {
   return base;
 }
 
+async function assertBusinessCanvasSubmitReady(pool, teamId, members) {
+  const row = await loadWorkspaceRow(pool, teamId);
+  if (!row?.swot_saved_at) {
+    return { ok: false, status: 400, code: 40028, message: '请先保存 SWOT 分析' };
+  }
+  if (!row?.marketing_saved_at) {
+    return { ok: false, status: 400, code: 40029, message: '请先保存营销策略' };
+  }
+  if (!row?.finance_saved_at) {
+    return { ok: false, status: 400, code: 40030, message: '请先保存成本与财务分析' };
+  }
+  const missing = await getWarRoomTeamMissingMembers(pool, teamId, members);
+  if (missing.length > 0) {
+    return {
+      ok: false,
+      status: 400,
+      code: 40027,
+      message: '组员尚未完成虚拟董事会演练',
+      data: { missingMembers: missing },
+    };
+  }
+  return { ok: true };
+}
+
 async function getWarRoomTeamMissingMembers(pool, teamId, members) {
   const { rows } = await pool.query(
     `SELECT student_id, canvas_json
@@ -953,6 +977,13 @@ router.put(
       const emptyKeys = BMC_MODULE_KEYS.filter((k) => !String(bmc[k] || '').trim());
       if (emptyKeys.length) {
         return bad(req, res, 400, 40004, '请先完善商业模式画布九格内容');
+      }
+      const ready = await assertBusinessCanvasSubmitReady(ctx.pool, ctx.team.id, ctx.members);
+      if (!ready.ok) {
+        if (ready.data) {
+          return badWithData(req, res, ready.status, ready.code, ready.message, ready.data);
+        }
+        return bad(req, res, ready.status, ready.code, ready.message);
       }
       await persistBmcFields(ctx.pool, ctx.team.id, ctx.sid, bmc, {
         setGenerated: false,
