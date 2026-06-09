@@ -381,13 +381,13 @@ export default function TeacherDashboard() {
                     </button>
                   ))}
                 </div>
-                <button
+                {/* <button
                   onClick={() => setShowBatchScoring(true)}
                   className="px-4 py-2 bg-teal-500 text-white text-xs font-medium rounded-xl hover:bg-teal-600 transition-colors whitespace-nowrap cursor-pointer flex items-center gap-1.5"
                 >
                   <i className="ri-edit-2-line"></i>
                   批量评分
-                </button>
+                </button> */}
               </div>
 
               {/* 团队卡片网格 */}
