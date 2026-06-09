@@ -1,28 +1,32 @@
 # 一键编排：网关(静态+反代)、Node API、PostgreSQL、Redis
 # 服务器宿主机映射 PG 15434（避免与同机其他项目的 15433 冲突）；容器内 node 仍用 postgres:5432
 # 本地 dev 端口 15433：docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d postgres redis
-# 不使用仓库 .env；连接信息仅写在本文件 environment 中。业务配置在库表 system_config。
+# 进程级变量见根目录 .env（由 .env.example 复制生成）；业务配置在库表 system_config。
 
 services:
   postgres:
-    image: postgres:15-alpine
+    image: ${POSTGRES_IMAGE:-postgres:15-alpine}
     environment:
-      POSTGRES_USER: jiada_shixun
-      POSTGRES_PASSWORD: jiuan@123
-      POSTGRES_DB: jiada_shixun
+      POSTGRES_USER: ${POSTGRES_USER:-jiada_shixun}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-jiuan@123}
+      POSTGRES_DB: ${POSTGRES_DB:-jiada_shixun}
     volumes:
       - jiada_shixun:/var/lib/postgresql/data
       - ./docs/sql/init:/docker-entrypoint-initdb.d:ro
     ports:
-      - "15434:5432"
+      - "${POSTGRES_HOST_PORT:-15434}:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U jiada_shixun -d jiada_shixun"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-jiada_shixun} -d ${POSTGRES_DB:-jiada_shixun}",
+        ]
       interval: 5s
       timeout: 5s
       retries: 10
 
   redis:
-    image: redis:7-alpine
+    image: ${REDIS_IMAGE:-redis:7-alpine}
     command: redis-server --appendonly yes
     volumes:
       - redisdata:/data
@@ -41,9 +45,10 @@ services:
     environment:
       DB_HOST: postgres
       REDIS_HOST: redis
-      PORT: "4000"
-      PG_POOL_MAX: "30"
-      LIBREOFFICE_BIN: /usr/bin/soffice
+      PORT: ${PORT:-4000}
+      PG_POOL_MAX: ${PG_POOL_MAX:-30}
+      LIBREOFFICE_BIN: ${LIBREOFFICE_BIN:-/usr/bin/soffice}
+      PUBLIC_WEB_ORIGIN: ${PUBLIC_WEB_ORIGIN:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -58,6 +63,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.gateway
+      args:
+        WEB_BUILD_NODE_IMAGE: ${WEB_BUILD_NODE_IMAGE:-${NODE_IMAGE:-docker.1ms.run/library/node:20-bookworm-slim}}
+        NGINX_IMAGE: ${NGINX_IMAGE:-docker.1ms.run/library/nginx:1.27-alpine}
     ports:
       - "${GATEWAY_PORT:-18081}:80"
     depends_on:

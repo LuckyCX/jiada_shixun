@@ -6,16 +6,122 @@
 
 ## 一键部署与验收（快速开始）
 
-**前置条件**：本机已安装 Docker，且能使用 `docker compose`（Docker Desktop 或 Compose 插件）。在**仓库根目录**（与 `docker-compose.yml` 同级）执行。
+**前置条件**：本机已安装 Docker，且能使用 `docker compose`。在**仓库根目录**执行。
 
-### 1）构建并后台启动全部服务
+### 1）推荐：一键部署
 
 ```bash
 cd /path/to/jiada_shixun
+chmod +x deploy.sh
+./deploy.sh
+```
+
+脚本会自动：补全 `.env`、预拉基础镜像、构建 `node` 与 `gateway`、启动全部服务并做健康检查。
+
+执行 `./deploy.sh` 后按提示输入 **1**（联网拉取）或 **2**（本地已导入镜像）。jxdx 等慢网机选 **2**；`.env` 中 `DEPLOY_BASE_IMAGES=local` 可作为菜单默认项。另：`--pull-only`、`--skip-build`、`DEPLOY_PRUNE_IMAGES=1`。
+
+手动等价流程：
+
+```bash
 docker compose up -d --build
 ```
 
+**镜像下载慢时**：`.env` 配置 `NODE_IMAGE`、`NGINX_IMAGE`、`POSTGRES_IMAGE`、`REDIS_IMAGE`（建议 `docker.1ms.run/library/...`）；`deploy.sh` 会让 gateway 与 node **共用** `NODE_IMAGE`。拉取时出现的 `~28MB/28.24MB` 是 Node 官方镜像里的**运行时主层**，慢多为出口带宽。可先 `./deploy.sh --pull-only`，或配置 `/etc/docker/daemon.json` 的 `registry-mirrors` 后重启 Docker。也可按下一节在**网络好的机器**拉取后导入目标机。
+
 首次会拉取 `postgres`、`redis` 镜像，并构建 `node`、`gateway`（gateway 内会构建前端静态资源，耗时可能数分钟）。
+
+### 1.1）基础镜像：快机器拉取 → 导入目标服务器
+
+适用于学校/生产机访问镜像站极慢，但你有另一台能较快 `docker pull` 的机器（下称 **A**），目标部署机为 **B**。
+
+**需要打包的 4 个基础镜像**（与默认 `.env.example` 一致；若 B 上 `.env` 改过，A 上 pull 的地址须与 B 的 `.env` 完全相同）：
+
+| 变量 | 默认镜像 |
+|------|----------|
+| `NODE_IMAGE` | `docker.1ms.run/library/node:20-bookworm-slim` |
+| `NGINX_IMAGE` | `docker.1ms.run/library/nginx:1.27-alpine` |
+| `POSTGRES_IMAGE` | `postgres:15-alpine`（勿用 1ms 前缀，该站常无 postgres 清单） |
+| `REDIS_IMAGE` | `docker.1ms.run/library/redis:7-alpine` |
+
+**架构**：B 多为 `linux/amd64`。若 A 是 Apple Silicon Mac，拉取与 `docker run` 校验时必须加 `--platform linux/amd64`，否则 B 上会报 platform 不匹配或层损坏。
+
+#### 在 A 上：逐个拉取、校验、单独 save
+
+```bash
+# B 为 x86 Ubuntu 时在 Mac 上执行（A 本身已是 amd64 可去掉 PLATFORM 相关参数）
+export PLATFORM=linux/amd64
+PULL=(docker pull --platform "$PLATFORM")
+RUN=(docker run --rm --platform "$PLATFORM")
+
+# 1) node
+${PULL[@]} docker.1ms.run/library/node:20-bookworm-slim
+docker save -o base-node-20-bookworm-slim.tar docker.1ms.run/library/node:20-bookworm-slim
+
+# 2) nginx
+${PULL[@]} docker.1ms.run/library/nginx:1.27-alpine
+docker save -o base-nginx-1.27-alpine.tar docker.1ms.run/library/nginx:1.27-alpine
+
+# 3) postgres（勿用 1ms 前缀；须拉完整后再 save）
+${PULL[@]} postgres:15-alpine
+${RUN[@]} postgres:15-alpine postgres --version
+docker save -o base-postgres-15-alpine.tar postgres:15-alpine
+
+# 4) redis
+${PULL[@]} docker.1ms.run/library/redis:7-alpine
+${RUN[@]} docker.1ms.run/library/redis:7-alpine redis-server --version
+docker save -o base-redis-7-alpine.tar docker.1ms.run/library/redis:7-alpine
+```
+
+传到 B（示例，四个文件分开传，失败可只重传某一个）：
+
+```bash
+scp base-*.tar root@目标服务器IP:/www/wwwroot/cxsx.zjxu.edu.cn/
+```
+
+#### 在 B 上：逐个 load、核对架构
+
+```bash
+cd /www/wwwroot/cxsx.zjxu.edu.cn
+
+# 若曾导入过错误架构或残缺层，可先删掉对应 tag 再 load
+docker load -i base-node-20-bookworm-slim.tar
+docker load -i base-nginx-1.27-alpine.tar
+docker load -i base-postgres-15-alpine.tar
+docker load -i base-redis-7-alpine.tar
+
+docker run --rm postgres:15-alpine postgres --version
+docker run --rm docker.1ms.run/library/redis:7-alpine redis-server --version
+
+for img in \
+  docker.1ms.run/library/node:20-bookworm-slim \
+  docker.1ms.run/library/nginx:1.27-alpine \
+  postgres:15-alpine \
+  docker.1ms.run/library/redis:7-alpine
+do
+  docker image inspect "$img" --format '{{.Repository}}:{{.Tag}} {{.Os}}/{{.Architecture}}'
+done
+# 期望均为 linux/amd64
+
+grep '^POSTGRES_IMAGE=' .env   # 须为 postgres:15-alpine
+
+chmod +x deploy.sh
+./deploy.sh
+```
+
+慢网机 `docker load` 后运行 `./deploy.sh` 并选 **2**。local 模式下强制再联网拉基础镜像：`DEPLOY_FORCE_BASE_PULL=1` 且选 **2**。
+
+导入后 **不必**再能从外网拉齐这 4 个基础层；`deploy.sh` 仍会 **在本机构建** `node`、`gateway` 业务镜像（编译前端、安装 LibreOffice 等），这部分与带宽无关，但比反复拉基础镜像省很多时间。
+
+#### 可选：连业务镜像一起在 A 构建后导入
+
+若希望 B **几乎不再 build**（A 与 B 需 **同架构**，一般为 `linux/amd64`）：
+
+1. 在 A 上克隆同版本代码，配置与 B 相同的 `.env`，执行 `docker compose build node gateway`。
+2. 在 A 上查看镜像名：`docker images | grep -E 'node|gateway'`（名称常带 Compose 项目目录前缀，如 `cxsxzjxueducn-node`）。
+3. `docker save -o jiada_shixun-built.tar <node镜像名> <gateway镜像名>`，传到 B 后 `docker load`。
+4. B 上 `docker compose up -d` 时需能用到同名镜像；若项目目录名不同导致镜像名不一致，可在 B 上对导入的镜像 `docker tag 旧名 新名` 后再启动。
+
+一般**只导入基础镜像**即可解决「28MB 层拉一天」的问题；业务镜像仍在 B 构建一次即可。
 
 ### 2）查看容器是否就绪
 
