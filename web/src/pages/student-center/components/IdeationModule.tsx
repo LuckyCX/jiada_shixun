@@ -9,9 +9,11 @@ import {
   fetchStudentIdeationWorkspace,
   likeStudentIdeationIdea,
   unlikeStudentIdeationIdea,
+  saveStudentIdeationProjectTopicDraft,
   sendStudentIdeationDiscussion,
   submitStudentIdeationProjectTopic,
   type IdeationProjectTopic,
+  type IdeationProjectTopicDraft,
   type IdeationProjectTopicInput,
   type IdeationMethodKey,
   type StudentIdeationAnalysis,
@@ -150,6 +152,32 @@ function topicToFormValues(topic: IdeationProjectTopic): IdeationTopicFormValues
   };
 }
 
+function draftToFormValues(draft: IdeationProjectTopicDraft): IdeationTopicFormValues {
+  return {
+    projectName: draft.projectName,
+    projectDirection: draft.projectDirection,
+    projectDescription: draft.projectDescription,
+    coreValue: draft.coreValue,
+    targetUsers: draft.targetUsers,
+    coreProblem: draft.coreProblem,
+    solutionOverview: draft.solutionOverview,
+    marketSize: draft.marketSize,
+    competitiveAdvantage: draft.competitiveAdvantage,
+  };
+}
+
+function applyTopicFormFromServer(topic: IdeationProjectTopic | null, draft: IdeationProjectTopicDraft | null) {
+  const editable = !topic || topic.status === 'rejected';
+  if (!editable) return;
+  if (draft) {
+    return draftToFormValues(draft);
+  }
+  if (topic?.status === 'rejected') {
+    return topicToFormValues(topic);
+  }
+  return null;
+}
+
 export default function IdeationModule({
   classId,
   learningResources = [],
@@ -161,6 +189,8 @@ export default function IdeationModule({
 }: IdeationModuleProps) {
   const [form] = Form.useForm<IdeationFormValues>();
   const [topicForm] = Form.useForm<IdeationTopicFormValues>();
+  const methodDraftsRef = useRef<Partial<Record<IdeationMethodKey, IdeationFormValues>>>({});
+  const prevIdeationTabRef = useRef<IdeationModuleTab | null>(null);
   const [activeTab, setActiveTab] = useState<IdeationModuleTab>(initialTab || 'examples');
   const [activeMethod, setActiveMethod] = useState<IdeationMethodKey>('brainstorm');
   const [ideas, setIdeas] = useState<Idea[]>([]);
@@ -180,6 +210,7 @@ export default function IdeationModule({
   const [previewCase, setPreviewCase] = useState<InstanceLibraryCase | null>(null);
   
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [savingTopicDraft, setSavingTopicDraft] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
   const [projectTopic, setProjectTopic] = useState<IdeationProjectTopic | null>(null);
   const [topicLoading, setTopicLoading] = useState(false);
@@ -252,8 +283,9 @@ export default function IdeationModule({
       .then((res) => {
         if (cancelled) return;
         setProjectTopic(res.topic);
-        if (res.topic) topicForm.setFieldsValue(topicToFormValues(res.topic));
-        else topicForm.resetFields();
+        const formValues = applyTopicFormFromServer(res.topic, res.draft);
+        if (formValues) topicForm.setFieldsValue(formValues);
+        else if (!res.topic || res.topic.status === 'rejected') topicForm.resetFields();
       })
       .catch((e) => {
         if (!cancelled) {
@@ -308,12 +340,39 @@ export default function IdeationModule({
     };
   }, [classId]);
 
-  useEffect(() => {
+  const persistMethodDraft = (method: IdeationMethodKey) => {
+    methodDraftsRef.current[method] = form.getFieldsValue(true);
+  };
+
+  const applyMethodDraft = (method: IdeationMethodKey) => {
     form.resetFields();
-    if (activeMethod === 'scamper') {
+    const draft = methodDraftsRef.current[method];
+    if (draft) {
+      form.setFieldsValue(draft);
+    }
+    if (method === 'scamper' && !draft?.scamperDimension) {
       form.setFieldValue('scamperDimension', SCAMPER_OPTIONS[0].value);
     }
-  }, [activeMethod, form]);
+  };
+
+  const switchMethod = (key: IdeationMethodKey) => {
+    if (key === activeMethod) return;
+    if (activeTab === 'methods') {
+      persistMethodDraft(activeMethod);
+    }
+    setActiveMethod(key);
+  };
+
+  useEffect(() => {
+    const prevTab = prevIdeationTabRef.current;
+    if (prevTab === 'methods' && activeTab !== 'methods') {
+      persistMethodDraft(activeMethod);
+    }
+    if (activeTab === 'methods') {
+      applyMethodDraft(activeMethod);
+    }
+    prevIdeationTabRef.current = activeTab;
+  }, [activeTab, activeMethod]);
 
   // 保存当前版本
   const handleSaveVersion = (summary: string) => {
@@ -400,6 +459,7 @@ export default function IdeationModule({
       });
       setIdeas((prev) => [idea, ...prev.filter((item) => item.id !== idea.id)]);
       setExpandedAnalysis(idea.id);
+      delete methodDraftsRef.current[activeMethod];
       form.resetFields();
       if (activeMethod === 'scamper') form.setFieldValue('scamperDimension', SCAMPER_OPTIONS[0].value);
       message.success('创意分析已完成');
@@ -472,6 +532,23 @@ export default function IdeationModule({
       setActiveTab('methods');
     } finally {
       setCheckingConfirmTab(false);
+    }
+  };
+
+  const handleSaveTopicDraft = async () => {
+    if (!isTeamLeader) {
+      message.warning('仅队长可保存选题草稿');
+      return;
+    }
+    setSavingTopicDraft(true);
+    try {
+      const values = topicForm.getFieldsValue(true) as IdeationTopicFormValues;
+      await saveStudentIdeationProjectTopicDraft(classId, values);
+      message.success('草稿已保存');
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '保存草稿失败');
+    } finally {
+      setSavingTopicDraft(false);
     }
   };
 
@@ -707,7 +784,7 @@ export default function IdeationModule({
                 {methodTabs.map((tab) => (
                   <button
                     key={tab.key}
-                    onClick={() => setActiveMethod(tab.key)}
+                    onClick={() => switchMethod(tab.key)}
                     className={`px-3 py-2.5 text-xs font-semibold rounded-xl transition-all whitespace-nowrap cursor-pointer flex items-center justify-center gap-1.5 ${
                       activeMethod === tab.key
                         ? `bg-gradient-to-br ${tab.color} text-white shadow-md`
@@ -1266,14 +1343,25 @@ export default function IdeationModule({
                   <Form.Item name="competitiveAdvantage" label="竞争优势" rules={[{ required: true, message: '请输入竞争优势' }]}>
                     <Input.TextArea rows={3} placeholder="说明项目与现有方案相比的差异和优势" />
                   </Form.Item>
-                  <Button
-                    htmlType="submit"
-                    loading={isSubmitting}
-                    block
-                    className="!h-11 !rounded-xl !border-0 !bg-gradient-to-r !from-teal-500 !to-cyan-600 !font-semibold !text-white hover:!from-teal-600 hover:!to-cyan-700"
-                  >
-                    {projectTopic?.status === 'rejected' ? '重新提交选题' : '提交选题'}
-                  </Button>
+                  <div className="flex flex-col sm:flex-row gap-3">
+                    <Button
+                      type="default"
+                      loading={savingTopicDraft}
+                      disabled={isSubmitting}
+                      onClick={() => void handleSaveTopicDraft()}
+                      className="!h-11 !rounded-xl !font-semibold sm:flex-1"
+                    >
+                      存为草稿
+                    </Button>
+                    <Button
+                      htmlType="submit"
+                      loading={isSubmitting}
+                      disabled={savingTopicDraft}
+                      className="!h-11 !rounded-xl !border-0 !bg-gradient-to-r !from-teal-500 !to-cyan-600 !font-semibold !text-white hover:!from-teal-600 hover:!to-cyan-700 sm:flex-[2]"
+                    >
+                      {projectTopic?.status === 'rejected' ? '重新提交选题' : '提交选题'}
+                    </Button>
+                  </div>
                 </Form>
               )}
             </div>

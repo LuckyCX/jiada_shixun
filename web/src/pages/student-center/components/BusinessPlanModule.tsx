@@ -1141,71 +1141,74 @@ export default function BusinessPlanModule({
                       )}
                     </div>
                   </div>
-                  <div className="bg-white border border-gray-200 rounded-xl p-4">
-                    <div className="flex items-center justify-between gap-3 flex-wrap">
-                      <div className="text-sm font-medium text-gray-700">附件资料</div>
-                      <div className="text-xs text-gray-500">必传：PPT；可选：Word/PDF/Excel/ZIP</div>
-                    </div>
-                    <div className="mt-3 grid grid-cols-12 gap-4">
-                      <div className="col-span-12 md:col-span-6">
-                        <div className="text-xs font-semibold text-gray-600 mb-2">必传：商业计划书演示文稿（PPT）</div>
-                        <Upload
-                          multiple={false}
-                          fileList={submitPptFiles}
-                          accept=".ppt,.pptx"
-                          beforeUpload={() => false}
-                          disabled={trainingEnded}
-                          onChange={({ fileList }) => setSubmitPptFiles(fileList.slice(-1))}
-                        >
-                          <button
-                            type="button"
-                            className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-sm font-medium transition-all whitespace-nowrap cursor-pointer"
-                          >
-                            <i className="ri-upload-cloud-2-line mr-1.5"></i>
-                            上传PPT
-                          </button>
-                        </Upload>
+                  <div className="bg-white border border-gray-200 rounded-xl p-4 flex flex-col md:flex-row md:items-center gap-4">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center align-left gap-3 flex-wrap">
+                        <div className="text-sm font-medium text-gray-700">附件资料</div>
+                        <div className="text-xs text-gray-500">必传：PPT；可选：Word/PDF/Excel/ZIP</div>
                       </div>
-                      <div className="col-span-12 md:col-span-6">
-                        <div className="text-xs font-semibold text-gray-600 mb-2">可选：补充材料</div>
-                        <Upload
-                          multiple
-                          fileList={submitOptionalFiles}
-                          accept=".doc,.docx,.pdf,.xls,.xlsx,.zip"
-                          beforeUpload={() => false}
-                          disabled={trainingEnded}
-                          onChange={({ fileList }) => setSubmitOptionalFiles(fileList)}
-                        >
-                          <button
-                            type="button"
-                            className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-sm font-medium transition-all whitespace-nowrap cursor-pointer"
+                      <div className="mt-3 grid grid-cols-12 gap-4">
+                        <div className="col-span-12 md:col-span-6">
+                          <div className="text-xs font-semibold text-gray-600 mb-2">必传：商业计划书演示文稿（PPT）</div>
+                          <Upload
+                            multiple={false}
+                            fileList={submitPptFiles}
+                            accept=".ppt,.pptx"
+                            beforeUpload={() => false}
+                            disabled={trainingEnded}
+                            onChange={({ fileList }) => setSubmitPptFiles(fileList.slice(-1))}
                           >
-                            <i className="ri-upload-cloud-2-line mr-1.5"></i>
-                            上传附件
-                          </button>
-                        </Upload>
+                            <button
+                              type="button"
+                              className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-sm font-medium transition-all whitespace-nowrap cursor-pointer"
+                            >
+                              <i className="ri-upload-cloud-2-line mr-1.5"></i>
+                              上传PPT
+                            </button>
+                          </Upload>
+                        </div>
+                        <div className="col-span-12 md:col-span-6">
+                          <div className="text-xs font-semibold text-gray-600 mb-2">可选：补充材料</div>
+                          <Upload
+                            multiple
+                            fileList={submitOptionalFiles}
+                            accept=".doc,.docx,.pdf,.xls,.xlsx,.zip"
+                            beforeUpload={() => false}
+                            disabled={trainingEnded}
+                            onChange={({ fileList }) => setSubmitOptionalFiles(fileList)}
+                          >
+                            <button
+                              type="button"
+                              className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-sm font-medium transition-all whitespace-nowrap cursor-pointer"
+                            >
+                              <i className="ri-upload-cloud-2-line mr-1.5"></i>
+                              上传附件
+                            </button>
+                          </Upload>
+                        </div>
                       </div>
                     </div>
+                    {isTeamLeader ? (
+                      <button
+                        type="button"
+                        disabled={
+                          !selectedSubmitVersionId ||
+                          submitting ||
+                          trainingEnded ||
+                          submitPptFiles.length === 0 ||
+                          submission?.status === 'pending' ||
+                          submission?.status === 'approved'
+                        }
+                        onClick={handleSubmitFinal}
+                        className="shrink-0 w-full md:w-auto px-6 py-3 bg-violet-600 text-white text-sm font-medium rounded-xl disabled:opacity-50 cursor-pointer whitespace-nowrap"
+                      >
+                        {submitting ? '提交中…' : '提交最终商业计划书'}
+                      </button>
+                    ) : null}
                   </div>
                   {!isTeamLeader ? (
                     <p className="text-sm text-amber-700">仅队长可提交最终商业计划书。</p>
-                  ) : (
-                    <button
-                      type="button"
-                      disabled={
-                        !selectedSubmitVersionId ||
-                        submitting ||
-                        trainingEnded ||
-                        submitPptFiles.length === 0 ||
-                        submission?.status === 'pending' ||
-                        submission?.status === 'approved'
-                      }
-                      onClick={handleSubmitFinal}
-                      className="w-full px-6 py-3 bg-violet-600 text-white text-sm font-medium rounded-xl disabled:opacity-50 cursor-pointer"
-                    >
-                      {submitting ? '提交中…' : '提交最终商业计划书'}
-                    </button>
-                  )}
+                  ) : null}
                 </>
               )}
             </div>

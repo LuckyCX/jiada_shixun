@@ -1,13 +1,34 @@
 import { useCallback, useEffect, useState } from 'react';
 
+/** 管理端「恢复默认」与占位提示共用 */
+export const SITE_HERO_DEFAULTS = {
+  heroTitle: '大学生创业实训平台',
+  heroSubtitle: '个性化教学班 · 实践课程 · 七阶段团队实训',
+  heroDescription: '面向高校创新创业实践教学，融通课程学习、团队协作实训与教师全过程指导评价',
+} as const;
+
 export type PublicSite = {
   siteTitle: string;
   logoUrl: string;
   /** 对外访问根地址，用于问卷外链等（如 https://train.example.com） */
   publicBaseUrl: string;
+  /** 首页 Hero 背景图（data URL 或 https 地址）；空则用内置默认图 */
+  heroBackgroundUrl: string;
+  /** 首页 Hero 主标题（与导航站点标题独立；留空则不展示） */
+  heroTitle: string;
+  heroSubtitle: string;
+  heroDescription: string;
 };
 
-const empty: PublicSite = { siteTitle: '', logoUrl: '', publicBaseUrl: '' };
+const empty: PublicSite = {
+  siteTitle: '',
+  logoUrl: '',
+  publicBaseUrl: '',
+  heroBackgroundUrl: '',
+  heroTitle: '',
+  heroSubtitle: '',
+  heroDescription: '',
+};
 
 let cache: PublicSite | null = null;
 let inflight: Promise<PublicSite> | null = null;
@@ -43,6 +64,10 @@ export async function fetchPublicSite(force = false): Promise<PublicSite> {
       siteTitle: String(d.siteTitle ?? '').trim(),
       logoUrl: String(d.logoUrl ?? '').trim(),
       publicBaseUrl: String(d.publicBaseUrl ?? '').trim().replace(/\/$/, ''),
+      heroBackgroundUrl: String(d.heroBackgroundUrl ?? '').trim(),
+      heroTitle: String(d.heroTitle ?? '').trim(),
+      heroSubtitle: String(d.heroSubtitle ?? '').trim(),
+      heroDescription: String(d.heroDescription ?? '').trim(),
     };
     return cache;
   })();

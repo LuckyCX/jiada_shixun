@@ -195,7 +195,7 @@ async function persistAiTeamsToDb(pool, classId, pending, aiTeams) {
       const { rows: ins } = await client.query(
         `INSERT INTO teacher_personal_class_teams
            (teacher_personal_class_id, name, grouping_status, complement_score, ai_rationale, sort_order)
-         VALUES ($1, $2, 'draft', $3, $4, $5)
+         VALUES ($1, $2, 'confirmed', $3, $4, $5)
          RETURNING id`,
         [classId, t.name, complementScore, t.rationale || null, t.sortOrder ?? 0]
       );
@@ -210,7 +210,7 @@ async function persistAiTeamsToDb(pool, classId, pending, aiTeams) {
           [teamId, sid, st.aiMatchedRole || null, JSON.stringify(st.profile)]
         );
         await client.query(
-          `UPDATE student_team_formation_submissions SET status = 'grouped', updated_at = now()
+          `UPDATE student_team_formation_submissions SET status = 'confirmed', updated_at = now()
            WHERE teacher_personal_class_id = $1 AND student_id = $2`,
           [classId, sid]
         );
@@ -232,11 +232,11 @@ async function persistAiTeamsToDb(pool, classId, pending, aiTeams) {
   }
 }
 
-/** 增量 AI：仅 INSERT 新 draft 团队，不删除已有 draft */
-async function persistNewAiTeamsOnly(pool, classId, pending, aiTeams, existingDraftTeams) {
+/** 增量 AI：仅 INSERT 新团队，不删除已有团队 */
+async function persistNewAiTeamsOnly(pool, classId, pending, aiTeams, existingTeamsForSort) {
   const pendingMap = new Map(pending.map((s) => [s.id, s]));
   let nextSort =
-    existingDraftTeams.reduce((m, t) => Math.max(m, t.sortOrder ?? 0), -1) + 1;
+    existingTeamsForSort.reduce((m, t) => Math.max(m, t.sortOrder ?? 0), -1) + 1;
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -246,7 +246,7 @@ async function persistNewAiTeamsOnly(pool, classId, pending, aiTeams, existingDr
       const { rows: ins } = await client.query(
         `INSERT INTO teacher_personal_class_teams
            (teacher_personal_class_id, name, grouping_status, complement_score, ai_rationale, sort_order)
-         VALUES ($1, $2, 'draft', $3, $4, $5)
+         VALUES ($1, $2, 'confirmed', $3, $4, $5)
          RETURNING id`,
         [classId, t.name, complementScore, t.rationale || null, t.sortOrder ?? nextSort++]
       );
@@ -261,7 +261,7 @@ async function persistNewAiTeamsOnly(pool, classId, pending, aiTeams, existingDr
           [teamId, sid, st.aiMatchedRole || null, JSON.stringify(st.profile)]
         );
         await client.query(
-          `UPDATE student_team_formation_submissions SET status = 'grouped', updated_at = now()
+          `UPDATE student_team_formation_submissions SET status = 'confirmed', updated_at = now()
            WHERE teacher_personal_class_id = $1 AND student_id = $2`,
           [classId, sid]
         );
@@ -283,7 +283,28 @@ async function persistNewAiTeamsOnly(pool, classId, pending, aiTeams, existingDr
   }
 }
 
+/** 历史草稿队：有成员即视为已生效团队（与取消「确认组队」后的规则一致） */
+async function promoteDraftTeamsWithMembers(pool, classId) {
+  await pool.query(
+    `UPDATE teacher_personal_class_teams t SET grouping_status = 'confirmed', updated_at = now()
+     WHERE t.teacher_personal_class_id = $1 AND t.grouping_status = 'draft'
+       AND EXISTS (SELECT 1 FROM teacher_personal_class_team_members m WHERE m.team_id = t.id)`,
+    [classId]
+  );
+  await pool.query(
+    `UPDATE student_team_formation_submissions s SET status = 'confirmed', updated_at = now()
+     WHERE s.teacher_personal_class_id = $1 AND s.status = 'grouped'
+       AND EXISTS (
+         SELECT 1 FROM teacher_personal_class_team_members m
+         JOIN teacher_personal_class_teams t ON t.id = m.team_id AND t.teacher_personal_class_id = $1
+         WHERE m.student_id = s.student_id
+       )`,
+    [classId]
+  );
+}
+
 async function teacherGroupingPayload(pool, classId) {
+  await promoteDraftTeamsWithMembers(pool, classId);
   const pendingStudents = await listPendingStudentsForClass(pool, classId);
   const teams = await loadTeamsWithMembers(pool, classId, ['draft', 'confirmed']);
   return { pendingStudents, teams, minPendingForAi: MIN_PENDING_FOR_AI };
@@ -322,10 +343,13 @@ async function loadTeamsWithMembers(pool, classId, statuses = ['draft', 'confirm
      ORDER BY m.team_id, m.id ASC`,
     [teamIds, classId]
   );
+  const teamStatusById = new Map(teamRows.map((t) => [String(t.id), t.groupingStatus]));
   const byTeam = new Map(teamIds.map((id) => [String(id), []]));
   for (const m of memRows) {
     const prof = m.dimensionProfile && typeof m.dimensionProfile === 'object' ? m.dimensionProfile : {};
     const profile = parseDimensionScores(prof);
+    const gs = teamStatusById.get(String(m.teamId));
+    const memberStatus = gs === 'confirmed' ? 'confirmed' : 'grouped';
     byTeam.get(String(m.teamId))?.push({
       id: String(m.studentId),
       name: m.name || m.email || '',
@@ -335,7 +359,7 @@ async function loadTeamsWithMembers(pool, classId, statuses = ['draft', 'confirm
       aiMatchedRole: m.aiMatchedRole || '',
       aiMatchedRoleLabel: TEAM_ROLE_LABELS[m.aiMatchedRole] || m.aiMatchedRole || '',
       profile,
-      status: 'grouped',
+      status: memberStatus,
     });
   }
   return teamRows.map((t) => {
@@ -1113,9 +1137,7 @@ router.get(
       if (!(await ownsPersonalClass(pool, tid, classId))) {
         return bad(req, res, 404, 40402, '班级不存在或无权操作');
       }
-      const pendingStudents = await listPendingStudentsForClass(pool, classId);
-      const teams = await loadTeamsWithMembers(pool, classId, ['draft', 'confirmed']);
-      return ok(req, res, { pendingStudents, teams, minPendingForAi: MIN_PENDING_FOR_AI });
+      return ok(req, res, await teacherGroupingPayload(pool, classId));
     } catch (e) {
       logError(`GET grouping traceId=${req.traceId}`, e);
       return bad(req, res, 500, 50000, e.message);
@@ -1211,10 +1233,8 @@ router.post(
         minPending: MIN_TEAM_SIZE,
         incrementalOnly: true,
       });
-      const draftAfter = (await loadTeamsWithMembers(pool, classId, ['draft'])).filter(
-        (t) => t.groupingStatus === 'draft'
-      );
-      await persistNewAiTeamsOnly(pool, classId, remainder, aiTeams, draftAfter);
+      const teamsForSort = await loadTeamsWithMembers(pool, classId, ['draft', 'confirmed']);
+      await persistNewAiTeamsOnly(pool, classId, remainder, aiTeams, teamsForSort);
       sseWrite(res, 'done', await teacherGroupingPayload(pool, classId));
       res.end();
     } catch (e) {
@@ -1324,9 +1344,7 @@ router.delete(
          WHERE teacher_personal_class_id = $1 AND student_id = $2`,
         [classId, studentId]
       );
-      const pendingStudents = await listPendingStudentsForClass(pool, classId);
-      const teams = await loadTeamsWithMembers(pool, classId, ['draft', 'confirmed']);
-      return ok(req, res, { pendingStudents, teams });
+      return ok(req, res, await teacherGroupingPayload(pool, classId));
     } catch (e) {
       logError(`DELETE team member traceId=${req.traceId}`, e);
       return bad(req, res, 500, 50000, e.message);
@@ -1364,9 +1382,7 @@ router.put(
         `UPDATE teacher_personal_class_teams SET leader_student_id = $1, updated_at = now() WHERE id = $2`,
         [studentId, teamId]
       );
-      const pendingStudents = await listPendingStudentsForClass(pool, classId);
-      const teams = await loadTeamsWithMembers(pool, classId, ['draft', 'confirmed']);
-      return ok(req, res, { pendingStudents, teams });
+      return ok(req, res, await teacherGroupingPayload(pool, classId));
     } catch (e) {
       logError(`PUT team leader traceId=${req.traceId}`, e);
       return bad(req, res, 500, 50000, e.message);
@@ -1395,7 +1411,6 @@ router.post(
         [teamId, classId]
       );
       if (!tr.length) return bad(req, res, 404, 40403, '团队不存在');
-      const teamConfirmed = tr[0].grouping_status === 'confirmed';
       const { rows: cnt } = await pool.query(
         `SELECT COUNT(*)::int AS c FROM teacher_personal_class_team_members WHERE team_id = $1`,
         [teamId]
@@ -1421,14 +1436,17 @@ router.post(
         [teamId, studentId, sub[0].aiMatchedRole, JSON.stringify(profile)]
       );
       await pool.query(
-        `UPDATE student_team_formation_submissions SET status = $3, updated_at = now()
+        `UPDATE student_team_formation_submissions SET status = 'confirmed', updated_at = now()
          WHERE teacher_personal_class_id = $1 AND student_id = $2`,
-        [classId, studentId, teamConfirmed ? 'confirmed' : 'grouped']
+        [classId, studentId]
+      );
+      await pool.query(
+        `UPDATE teacher_personal_class_teams SET grouping_status = 'confirmed', updated_at = now()
+         WHERE id = $1 AND grouping_status = 'draft'`,
+        [teamId]
       );
       await refreshTeamComplementScore(pool, teamId);
-      const pendingStudents = await listPendingStudentsForClass(pool, classId);
-      const teams = await loadTeamsWithMembers(pool, classId, ['draft', 'confirmed']);
-      return ok(req, res, { pendingStudents, teams });
+      return ok(req, res, await teacherGroupingPayload(pool, classId));
     } catch (e) {
       logError(`POST team member traceId=${req.traceId}`, e);
       return bad(req, res, 500, 50000, e.message);
@@ -1449,21 +1467,13 @@ router.post(
       if (!(await ownsPersonalClass(pool, tid, classId))) {
         return bad(req, res, 404, 40402, '班级不存在或无权操作');
       }
-      const mode = req.body?.mode === 'notify' ? 'notify' : 'confirm';
-      const draftTeams = await loadTeamsWithMembers(pool, classId, ['draft']);
+      if (req.body?.mode !== 'notify') {
+        return bad(req, res, 400, 40003, '无效操作');
+      }
       const allTeams = await loadTeamsWithMembers(pool, classId, ['draft', 'confirmed']);
       const teamsToNotify = existingTeamsWithMembers(allTeams);
 
-      if (mode === 'confirm') {
-        if (!draftTeams.length) {
-          return bad(req, res, 400, 40017, '没有待确认的草稿团队');
-        }
-        for (const t of draftTeams) {
-          if (t.members.length < MIN_TEAM_SIZE) {
-            return bad(req, res, 400, 40018, `「${t.name}」人数不足 ${MIN_TEAM_SIZE} 人`);
-          }
-        }
-      } else if (!teamsToNotify.length) {
+      if (!teamsToNotify.length) {
         return bad(req, res, 400, 40019, '还没有已入队学生，无法发送通知');
       }
 
@@ -1479,37 +1489,20 @@ router.post(
       let notifiedCount = 0;
       try {
         await client.query('BEGIN');
-        if (mode === 'confirm') {
-          await client.query(
-            `UPDATE teacher_personal_class_teams SET grouping_status = 'confirmed', updated_at = now()
-             WHERE teacher_personal_class_id = $1 AND grouping_status = 'draft'`,
-            [classId]
-          );
-          for (const team of draftTeams) {
-            for (const m of team.members) {
-              await client.query(
-                `UPDATE student_team_formation_submissions SET status = 'confirmed', updated_at = now()
-                 WHERE teacher_personal_class_id = $1 AND student_id = $2`,
-                [classId, m.id]
-              );
-            }
-          }
-        } else {
-          for (const team of teamsToNotify) {
-            for (const m of team.members) {
-              await client.query(
-                `INSERT INTO notifications (receiver_id, sender_id, type, title, content, related_module, related_link, is_read)
-                 VALUES ($1, $2, 'team_join', $3, $4, 'team_formation', $5, false)`,
-                [
-                  m.id,
-                  tid,
-                  '你已被编入创业团队',
-                  `${teacherName} 已将你编入「${team.name}」（${className}），请进入「组队与团队管理」查看最新团队信息。`,
-                  '/student-center?tab=module-team&teamTab=myteam',
-                ]
-              );
-              notifiedCount += 1;
-            }
+        for (const team of teamsToNotify) {
+          for (const m of team.members) {
+            await client.query(
+              `INSERT INTO notifications (receiver_id, sender_id, type, title, content, related_module, related_link, is_read)
+               VALUES ($1, $2, 'team_join', $3, $4, 'team_formation', $5, false)`,
+              [
+                m.id,
+                tid,
+                '你已被编入创业团队',
+                `${teacherName} 已将你编入「${team.name}」（${className}），请进入「组队与团队管理」查看最新团队信息。`,
+                '/student-center?tab=module-team&teamTab=myteam',
+              ]
+            );
+            notifiedCount += 1;
           }
         }
         await client.query('COMMIT');
@@ -1519,13 +1512,8 @@ router.post(
       } finally {
         client.release();
       }
-      const outTeams = await loadTeamsWithMembers(pool, classId, ['draft', 'confirmed']);
-      const pendingStudents = await listPendingStudentsForClass(pool, classId);
-      return ok(req, res, {
-        teams: outTeams,
-        pendingStudents,
-        notifiedCount,
-      });
+      const payload = await teacherGroupingPayload(pool, classId);
+      return ok(req, res, { ...payload, notifiedCount });
     } catch (e) {
       logError(`POST confirm traceId=${req.traceId}`, e);
       return bad(req, res, 500, 50000, e.message);

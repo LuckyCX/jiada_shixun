@@ -24,8 +24,9 @@ import {
   portalAuthenticatedFetch,
   setPortalToken,
 } from '../../../../lib/authApi';
-import { notifySiteBrandUpdated } from '../../../../lib/publicSite';
+import { notifySiteBrandUpdated, SITE_HERO_DEFAULTS } from '../../../../lib/publicSite';
 import { resizeImageFileTo128Png } from '../../../../lib/resizeLogoTo128';
+import { resizeImageFileForHeroBackground } from '../../../../lib/resizeHeroBackground';
 
 /** 设为 true 可恢复 RTC 配置 Tab（逻辑已保留：state / fillFromApi / saveRtc） */
 const SHOW_RTC_TAB = false;
@@ -179,9 +180,19 @@ export default function SystemConfigPanel() {
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<TabValue>('site');
 
-  const [site, setSite] = useState({ siteTitle: '', logoUrl: '', publicBaseUrl: '' });
+  const [site, setSite] = useState({
+    siteTitle: '',
+    logoUrl: '',
+    publicBaseUrl: '',
+    heroBackgroundUrl: '',
+    heroTitle: '',
+    heroSubtitle: '',
+    heroDescription: '',
+  });
   const [logoUploading, setLogoUploading] = useState(false);
+  const [heroBgUploading, setHeroBgUploading] = useState(false);
   const logoFileInputRef = useRef<HTMLInputElement>(null);
+  const heroBgFileInputRef = useRef<HTMLInputElement>(null);
   const [smtp, setSmtp] = useState({ host: '', port: 465, secure: true, user: '', pass: '', from: '' });
   const [testSmtpTo, setTestSmtpTo] = useState('');
   const [testSmsPhone, setTestSmsPhone] = useState('');
@@ -239,6 +250,10 @@ export default function SystemConfigPanel() {
       siteTitle: String(s.siteTitle || ''),
       logoUrl: String(s.logoUrl || ''),
       publicBaseUrl: String(s.publicBaseUrl || '').trim().replace(/\/$/, ''),
+      heroBackgroundUrl: String(s.heroBackgroundUrl || ''),
+      heroTitle: String(s.heroTitle || ''),
+      heroSubtitle: String(s.heroSubtitle || ''),
+      heroDescription: String(s.heroDescription || ''),
     });
     const sm = (data.smtp_config?.value || {}) as Record<string, unknown>;
     setSmtp({
@@ -347,6 +362,10 @@ export default function SystemConfigPanel() {
         siteTitle: site.siteTitle.trim(),
         logoUrl: site.logoUrl.trim(),
         publicBaseUrl: site.publicBaseUrl.trim().replace(/\/$/, ''),
+        heroBackgroundUrl: site.heroBackgroundUrl.trim(),
+        heroTitle: site.heroTitle.trim(),
+        heroSubtitle: site.heroSubtitle.trim(),
+        heroDescription: site.heroDescription.trim(),
       },
     });
     if (ok) notifySiteBrandUpdated();
@@ -364,6 +383,21 @@ export default function SystemConfigPanel() {
       messageApi.error((err as Error).message);
     } finally {
       setLogoUploading(false);
+    }
+  };
+
+  const handleHeroBgFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setHeroBgUploading(true);
+    try {
+      const dataUrl = await resizeImageFileForHeroBackground(file);
+      setSite((s) => ({ ...s, heroBackgroundUrl: dataUrl }));
+    } catch (err) {
+      messageApi.error((err as Error).message);
+    } finally {
+      setHeroBgUploading(false);
     }
   };
 
@@ -654,6 +688,39 @@ export default function SystemConfigPanel() {
     { key: 'allowReset', label: '短信找回密码' },
   ];
 
+  const renderHeroBackgroundField = (): ReactNode => (
+    <div className="flex flex-wrap items-start gap-4">
+      <div className="w-full max-w-md h-28 rounded-xl border border-gray-200 bg-gray-50 flex items-center justify-center overflow-hidden flex-shrink-0">
+        {site.heroBackgroundUrl ? (
+          <img src={site.heroBackgroundUrl} alt="背景预览" className="w-full h-full object-cover object-top" />
+        ) : (
+          <span className="text-xs text-gray-400 px-2 text-center">使用系统默认背景图</span>
+        )}
+      </div>
+      <div className="flex flex-col gap-2">
+        <input
+          ref={heroBgFileInputRef}
+          type="file"
+          accept="image/jpeg,image/png,image/gif,image/webp"
+          tabIndex={-1}
+          aria-hidden
+          style={{ display: 'none' }}
+          onChange={handleHeroBgFile}
+          disabled={heroBgUploading || loading}
+        />
+        <Button disabled={loading} loading={heroBgUploading} onClick={() => heroBgFileInputRef.current?.click()}>
+          选择背景图上传
+        </Button>
+        <Button
+          disabled={loading || !site.heroBackgroundUrl}
+          onClick={() => setSite((s) => ({ ...s, heroBackgroundUrl: '' }))}
+        >
+          恢复默认背景
+        </Button>
+      </div>
+    </div>
+  );
+
   const renderLogoField = (): ReactNode => (
     <div className="flex flex-wrap items-start gap-4">
       <div className="w-32 h-32 rounded-xl border border-gray-200 bg-gray-50 flex items-center justify-center overflow-hidden flex-shrink-0">
@@ -699,6 +766,68 @@ export default function SystemConfigPanel() {
               />
             </Form.Item>
             <Form.Item label="站点 Logo">{renderLogoField()}</Form.Item>
+            <Form.Item label="首页背景图" extra="建议横图，上传后自动压缩；清除后使用内置默认背景">
+              {renderHeroBackgroundField()}
+            </Form.Item>
+            <Form.Item
+              label="首页主标题"
+              extra="与导航「站点标题」独立；留空则首页不显示该行"
+            >
+              <Space.Compact className="w-full">
+                <Input
+                  className="!w-full"
+                  value={site.heroTitle}
+                  onChange={(e) => setSite((s) => ({ ...s, heroTitle: e.target.value }))}
+                  placeholder={SITE_HERO_DEFAULTS.heroTitle}
+                />
+                <Button onClick={() => setSite((s) => ({ ...s, heroTitle: SITE_HERO_DEFAULTS.heroTitle }))}>
+                  恢复默认
+                </Button>
+              </Space.Compact>
+            </Form.Item>
+            <Form.Item label="首页副标题" extra="留空则首页不显示该行">
+              <Space.Compact className="w-full">
+                <Input
+                  className="!w-full"
+                  value={site.heroSubtitle}
+                  onChange={(e) => setSite((s) => ({ ...s, heroSubtitle: e.target.value }))}
+                  placeholder={SITE_HERO_DEFAULTS.heroSubtitle}
+                />
+                <Button onClick={() => setSite((s) => ({ ...s, heroSubtitle: SITE_HERO_DEFAULTS.heroSubtitle }))}>
+                  恢复默认
+                </Button>
+              </Space.Compact>
+            </Form.Item>
+            <Form.Item label="首页说明" extra="留空则首页不显示该行">
+              <div className="flex flex-col gap-2 w-full">
+                <Input.TextArea
+                  rows={2}
+                  value={site.heroDescription}
+                  onChange={(e) => setSite((s) => ({ ...s, heroDescription: e.target.value }))}
+                  placeholder={SITE_HERO_DEFAULTS.heroDescription}
+                />
+                <Button
+                  className="self-start"
+                  onClick={() => setSite((s) => ({ ...s, heroDescription: SITE_HERO_DEFAULTS.heroDescription }))}
+                >
+                  恢复默认说明
+                </Button>
+              </div>
+            </Form.Item>
+            <Form.Item>
+              <Button
+                onClick={() =>
+                  setSite((s) => ({
+                    ...s,
+                    heroTitle: SITE_HERO_DEFAULTS.heroTitle,
+                    heroSubtitle: SITE_HERO_DEFAULTS.heroSubtitle,
+                    heroDescription: SITE_HERO_DEFAULTS.heroDescription,
+                  }))
+                }
+              >
+                恢复全部首页文案默认
+              </Button>
+            </Form.Item>
             <Form.Item
               label="对外访问地址"
               extra="问卷二维码、外链等使用此域名；本地开发可填线上地址，如 https://train.jiuanci.com"

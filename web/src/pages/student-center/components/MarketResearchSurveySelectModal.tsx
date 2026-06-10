@@ -26,9 +26,11 @@ export default function MarketResearchSurveySelectModal({
     setSelected([]);
   }, [open]);
 
-  const selectable = surveys.filter((s) => s.status !== '草稿' || s.collected > 0);
+  const listed = surveys.filter((s) => s.status !== '草稿');
 
   const toggle = (id: string, checked: boolean) => {
+    const survey = surveys.find((s) => s.id === id);
+    if (!survey || survey.collected <= 0) return;
     setSelected((prev) => {
       if (!checked) return prev.filter((x) => x !== id);
       if (prev.includes(id)) return prev;
@@ -57,28 +59,34 @@ export default function MarketResearchSurveySelectModal({
       destroyOnClose
     >
       <p className="text-sm text-gray-600 mb-3">最多可选 {maxCount} 份问卷，将仅基于所选问卷的回收数据生成结果。</p>
-      {!selectable.length ? (
-        <Alert type="info" showIcon message="暂无可选问卷，请先发布问卷并回收答卷" />
+      {!listed.length ? (
+        <Alert type="info" showIcon message="暂无可选问卷，请先发布问卷" />
       ) : (
         <div className="space-y-2 max-h-[50vh] overflow-y-auto">
-          {selectable.map((s) => (
-            <label
-              key={s.id}
-              className="flex items-start gap-3 border border-gray-200 rounded-lg px-3 py-2 cursor-pointer hover:border-green-300"
-            >
-              <Checkbox
-                checked={selected.includes(s.id)}
-                onChange={(e) => toggle(s.id, e.target.checked)}
-              />
-              <div className="flex-1 min-w-0">
-                <div className="font-medium text-gray-900 truncate">{s.title}</div>
-                <div className="text-xs text-gray-500 mt-0.5">
-                  {s.status} · 已回收 {s.collected} 份
-                  {s.publishedAtDisplay ? ` · 发布于 ${s.publishedAtDisplay}` : ''}
+          {listed.map((s) => {
+            const canSelect = s.collected > 0;
+            return (
+              <label
+                key={s.id}
+                className={`flex items-start gap-3 border border-gray-200 rounded-lg px-3 py-2 ${
+                  canSelect ? 'cursor-pointer hover:border-green-300' : 'opacity-60 cursor-not-allowed'
+                }`}
+              >
+                <Checkbox
+                  disabled={!canSelect}
+                  checked={canSelect && selected.includes(s.id)}
+                  onChange={(e) => toggle(s.id, e.target.checked)}
+                />
+                <div className="flex-1 min-w-0">
+                  <div className="font-medium text-gray-900 truncate">{s.title}</div>
+                  <div className="text-xs text-gray-500 mt-0.5">
+                    {s.status} · 已回收 {s.collected} 份
+                    {s.publishedAtDisplay ? ` · 发布于 ${s.publishedAtDisplay}` : ''}
+                  </div>
                 </div>
-              </div>
-            </label>
-          ))}
+              </label>
+            );
+          })}
         </div>
       )}
     </Modal>

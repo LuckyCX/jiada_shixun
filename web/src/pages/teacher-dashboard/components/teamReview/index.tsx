@@ -5,7 +5,6 @@ import UserAvatar from '../../../../components/UserAvatar';
 import {
   addTeamMember,
   confirmTeacherAiGroupRandom,
-  confirmTeacherGrouping,
   notifyTeacherTeamStudents,
   fetchTeacherGrouping,
   fetchTeacherTeamQuestions,
@@ -238,17 +237,16 @@ function mapGroupingToUi(data: TeacherGroupingState): { students: Student[]; tea
       hasIntroVideo: Boolean(m.hasIntroVideo),
       profile: normalizeTeamDimensionProfile(m.profile),
       skills: [] as string[],
-      status: (t.groupingStatus === 'confirmed' ? 'confirmed' : 'grouped') as 'grouped' | 'confirmed',
+      status: 'confirmed' as const,
       teamId: t.id,
       aiMatchedRole: m.aiMatchedRole,
       aiMatchedRoleLabel: m.aiMatchedRoleLabel,
       isTeamLeader: Boolean(m.isTeamLeader),
     }));
-    const gs = t.groupingStatus === 'confirmed' ? 'confirmed' : 'draft';
     return {
       id: t.id,
       name: t.name,
-      groupingStatus: gs,
+      groupingStatus: 'confirmed' as const,
       members,
       avgProfile: normalizeTeamDimensionProfile(t.avgProfile),
       complementScore: t.complementScore ?? 0,
@@ -300,7 +298,6 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
   const [teams, setTeams] = useState<Team[]>([]);
   const [selectedStudents, setSelectedStudents] = useState<string[]>([]);
   const [draggedStudent, setDraggedStudent] = useState<Student | null>(null);
-  const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [filterStatus, setFilterStatus] = useState<'all' | 'pending' | 'grouped'>('all');
   const [searchKeyword, setSearchKeyword] = useState('');
   const [introStudent, setIntroStudent] = useState<Student | null>(null);
@@ -353,10 +350,9 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
     });
   };
 
-  const hasDraftTeams = teams.some((t) => t.groupingStatus === 'draft');
   const hasExistingTeams = teams.some((t) => t.members.length > 0);
   const minPendingForAiClick = hasExistingTeams ? 1 : MIN_PENDING_FOR_AI;
-  const teamCanEdit = (t: Team) => t.groupingStatus === 'draft' || t.groupingStatus === 'confirmed';
+  const teamCanEdit = () => true;
 
   const applyGroupingDone = (data: TeacherGroupingState, toastMsg?: string) => {
     const ui = mapGroupingToUi(data);
@@ -477,23 +473,6 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
 
   const inTeamCount = teams.reduce((s, t) => s + t.members.length, 0);
 
-  const handleConfirmGrouping = async () => {
-    if (!hasDraftTeams) {
-      showToast('没有待确认的草稿团队', 'error');
-      return;
-    }
-    try {
-      const data = await confirmTeacherGrouping(personalClass.id);
-      const ui = mapGroupingToUi(data);
-      setStudents(ui.students);
-      setTeams(ui.teams);
-      setShowConfirmModal(false);
-      showToast('已确认组队，团队状态已锁定为已确认');
-    } catch (e) {
-      showToast(e instanceof Error ? e.message : '确认失败', 'error');
-    }
-  };
-
   const handleNotifyStudents = async () => {
     if (inTeamCount < 1) {
       showToast('还没有已入队学生', 'error');
@@ -515,11 +494,7 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
   });
 
   const pendingCount = students.filter(s => s.status === 'pending').length;
-  const editableTeams = teams.filter(
-    (t) => teamCanEdit(t) && t.members.length > 0 && t.members.length < MAX_TEAM_SIZE
-  );
-  const groupedCount = students.filter(s => s.status === 'grouped').length;
-  const confirmedCount = students.filter(s => s.status === 'confirmed').length;
+  const editableTeams = teams.filter((t) => t.members.length < MAX_TEAM_SIZE);
 
   return (
     <div className="space-y-6">
@@ -590,17 +565,6 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
                 ) : null}
                 <button
                   type="button"
-                  disabled={!hasDraftTeams}
-                  onClick={() => setShowConfirmModal(true)}
-                  className={`px-5 py-2.5 bg-white text-teal-700 text-sm font-bold rounded-xl whitespace-nowrap flex items-center gap-2 cursor-pointer ${
-                    !hasDraftTeams ? 'opacity-50 cursor-not-allowed' : 'hover:shadow-lg'
-                  }`}
-                >
-                  <i className="ri-check-double-line text-base"></i>
-                  确认组队
-                </button>
-                <button
-                  type="button"
                   disabled={inTeamCount < 1}
                   onClick={() => void handleNotifyStudents()}
                   className={`px-5 py-2.5 bg-white/90 text-teal-800 text-sm font-bold rounded-xl whitespace-nowrap flex items-center gap-2 cursor-pointer border border-white/60 ${
@@ -615,12 +579,11 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
           </div>
         </div>
 
-        <div className="grid grid-cols-4 gap-4">
+        <div className="grid grid-cols-3 gap-4">
           {[
             { label: '总学生数', value: students.length, icon: 'ri-user-line', color: 'bg-white/20' },
             { label: '待组队', value: pendingCount, icon: 'ri-time-line', color: 'bg-amber-500/30' },
-            { label: '已分组', value: groupedCount, icon: 'ri-team-line', color: 'bg-green-500/30' },
-            { label: '已确认', value: confirmedCount, icon: 'ri-checkbox-circle-line', color: 'bg-blue-500/30' },
+            { label: '已入队', value: inTeamCount, icon: 'ri-team-line', color: 'bg-green-500/30' },
           ].map((stat, i) => (
             <div key={i} className={`${stat.color} backdrop-blur-sm border border-white/30 rounded-xl p-4`}>
               <div className="flex items-center justify-between mb-2">
@@ -898,7 +861,7 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
                             </div>
                           </div>
                           <div className="flex items-center gap-2 flex-shrink-0">
-                            {teamCanEdit(team) && (
+                            {teamCanEdit() && (
                               <button
                                 type="button"
                                 onClick={() => void handleSetTeamLeader(member.id, team.id)}
@@ -916,7 +879,7 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
                             <button
                               type="button"
                               onClick={() => void handleRemoveFromTeam(member.id, team.id)}
-                              disabled={!teamCanEdit(team)}
+                              disabled={!teamCanEdit()}
                               className="px-3 py-1.5 bg-red-50 text-red-600 text-xs font-medium rounded-lg hover:bg-red-100 transition-colors whitespace-nowrap cursor-pointer border border-red-200 disabled:opacity-40 disabled:cursor-not-allowed"
                             >
                               <i className="ri-close-line mr-1"></i>
@@ -927,7 +890,7 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
                       ))}
                     </div>
 
-                    {teamCanEdit(team) && team.members.length < MAX_TEAM_SIZE && (
+                    {teamCanEdit() && team.members.length < MAX_TEAM_SIZE && (
                       <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 flex items-center gap-2">
                         <i className="ri-information-line"></i>
                         <span>拖拽左侧学生到此区域可添加成员（最多 {MAX_TEAM_SIZE} 人）</span>
@@ -940,63 +903,6 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
           </div>
         </div>
       </div>
-
-      {/* 确认组队弹窗 */}
-      {showConfirmModal && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-7">
-            <div className="text-center mb-6">
-              <div className="w-16 h-16 bg-gradient-to-br from-teal-500 to-cyan-500 rounded-full flex items-center justify-center mx-auto mb-4">
-                <i className="ri-check-double-line text-3xl text-white"></i>
-              </div>
-              <h3 className="text-xl font-bold text-gray-900 mb-2">确认组队</h3>
-              <p className="text-sm text-gray-500">
-                将当前所有草稿团队标记为已确认，学生组队状态同步为已确认。不会发送通知，请另行点击「通知学生」。
-              </p>
-            </div>
-
-            <div className="bg-gray-50 rounded-xl p-4 mb-6 space-y-2 text-sm">
-              <div className="flex items-center justify-between">
-                <span className="text-gray-600">团队总数</span>
-                <span className="font-bold text-gray-900">{teams.length} 个</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-gray-600">草稿团队数</span>
-                <span className="font-bold text-gray-900">
-                  {teams.filter((t) => t.groupingStatus === 'draft').length} 个
-                </span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-gray-600">待组队学生</span>
-                <span className="font-bold text-amber-600">{pendingCount} 人</span>
-              </div>
-            </div>
-
-            {pendingCount > 0 && (
-              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-6 text-sm text-amber-800 flex items-start gap-2">
-                <i className="ri-error-warning-line mt-0.5"></i>
-                <span>还有 {pendingCount} 名学生未分组，确认后这些学生将保持待组队状态</span>
-              </div>
-            )}
-
-            <div className="flex gap-3">
-              <button
-                onClick={() => setShowConfirmModal(false)}
-                className="flex-1 px-5 py-3 bg-gray-100 text-gray-700 text-sm font-medium rounded-xl hover:bg-gray-200 transition-colors whitespace-nowrap cursor-pointer"
-              >
-                取消
-              </button>
-              <button
-                onClick={() => void handleConfirmGrouping()}
-                className="flex-1 px-5 py-3 bg-gradient-to-r from-teal-500 to-cyan-500 text-white text-sm font-bold rounded-xl hover:shadow-lg transition-all whitespace-nowrap cursor-pointer"
-              >
-                <i className="ri-check-double-line mr-2"></i>
-                确认组队
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       <Modal
         title={introStudent ? `${introStudent.name} · 个人介绍` : '个人介绍'}

@@ -79,6 +79,10 @@ export type IdeationProjectTopic = IdeationProjectTopicInput & {
   reviewTime: string;
 };
 
+export type IdeationProjectTopicDraft = IdeationProjectTopicInput & {
+  savedAt: string;
+};
+
 export async function fetchStudentIdeationWorkspace(classId: string): Promise<StudentIdeationWorkspace> {
   return portalAuthenticatedFetch(
     'student',
@@ -141,11 +145,27 @@ export async function fetchStudentIdeationTeamPrerequisites(classId: string): Pr
 
 export async function fetchStudentIdeationProjectTopic(classId: string): Promise<{
   topic: IdeationProjectTopic | null;
+  draft: IdeationProjectTopicDraft | null;
 }> {
   return portalAuthenticatedFetch(
     'student',
     `/api/student/personal-classes/${encodeURIComponent(classId)}/ideation/topic`
-  ) as Promise<{ topic: IdeationProjectTopic | null }>;
+  ) as Promise<{ topic: IdeationProjectTopic | null; draft: IdeationProjectTopicDraft | null }>;
+}
+
+export async function saveStudentIdeationProjectTopicDraft(
+  classId: string,
+  body: IdeationProjectTopicInput
+): Promise<IdeationProjectTopicDraft> {
+  const res = await portalAuthenticatedFetch(
+    'student',
+    `/api/student/personal-classes/${encodeURIComponent(classId)}/ideation/topic-draft`,
+    {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }
+  ) as { draft: IdeationProjectTopicDraft };
+  return res.draft;
 }
 
 export async function submitStudentIdeationProjectTopic(

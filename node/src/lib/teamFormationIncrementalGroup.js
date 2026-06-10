@@ -114,13 +114,6 @@ export function randomPlaceRemainder(remainder, existingTeams) {
 export async function persistPlacements(pool, classId, placements, studentById) {
   if (!placements?.length) return;
   const teamIds = [...new Set(placements.map((p) => p.teamId))];
-  const { rows: teamRows } = await pool.query(
-    `SELECT id, grouping_status FROM teacher_personal_class_teams WHERE id = ANY($1::bigint[])`,
-    [teamIds]
-  );
-  const submissionStatusByTeam = new Map(
-    teamRows.map((r) => [String(r.id), r.grouping_status === 'confirmed' ? 'confirmed' : 'grouped'])
-  );
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -134,11 +127,15 @@ export async function persistPlacements(pool, classId, placements, studentById) 
          ON CONFLICT (team_id, student_id) DO NOTHING`,
         [teamId, studentId, st.aiMatchedRole || null, JSON.stringify(st.profile || {})]
       );
-      const subStatus = submissionStatusByTeam.get(String(teamId)) || 'grouped';
       await client.query(
-        `UPDATE student_team_formation_submissions SET status = $3, updated_at = now()
+        `UPDATE student_team_formation_submissions SET status = 'confirmed', updated_at = now()
          WHERE teacher_personal_class_id = $1 AND student_id = $2`,
-        [classId, studentId, subStatus]
+        [classId, studentId]
+      );
+      await client.query(
+        `UPDATE teacher_personal_class_teams SET grouping_status = 'confirmed', updated_at = now()
+         WHERE id = $1 AND grouping_status = 'draft'`,
+        [teamId]
       );
     }
     for (const teamId of teamIds) {

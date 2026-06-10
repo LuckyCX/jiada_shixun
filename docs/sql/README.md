@@ -45,3 +45,15 @@ cd docs/sql && psql -v ON_ERROR_STOP=1 -U postgres -d your_db -f init_all.sql
 ## 安全
 
 - 勿将生产 `ai_models.api_key_encrypted` 等密钥提交至公开仓库。
+
+## 维护脚本
+
+| 脚本 | 说明 |
+|------|------|
+| [`maintenance/reset_student_training_flow.sql`](maintenance/reset_student_training_flow.sql) | 清空学生实训各阶段团队数据、任务完成记录、相关通知与学习/检测进度；**保留**已组队信息、教师课程资源与课程设置、任务定义 |
+
+执行前请备份。编辑脚本内 `v_class_id`：`NULL` 为全部教学班，或填 `teacher_personal_classes.id` 仅清理该班。
+
+```bash
+psql -v ON_ERROR_STOP=1 -U postgres -d your_db -f docs/sql/maintenance/reset_student_training_flow.sql
+```

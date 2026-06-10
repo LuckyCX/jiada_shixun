@@ -314,6 +314,36 @@ function validateTopicBody(body) {
   };
 }
 
+function parseTopicDraftBody(body) {
+  return {
+    projectName: normalizeText(body?.projectName).slice(0, 256),
+    projectDirection: normalizeText(body?.projectDirection).slice(0, 128),
+    projectDescription: String(body?.projectDescription ?? '').slice(0, 10000),
+    coreValue: String(body?.coreValue ?? '').slice(0, 10000),
+    targetUsers: String(body?.targetUsers ?? '').slice(0, 2000),
+    coreProblem: String(body?.coreProblem ?? '').slice(0, 10000),
+    solutionOverview: String(body?.solutionOverview ?? '').slice(0, 20000),
+    marketSize: String(body?.marketSize ?? '').slice(0, 10000),
+    competitiveAdvantage: String(body?.competitiveAdvantage ?? '').slice(0, 10000),
+  };
+}
+
+function mapTopicDraft(row) {
+  if (!row) return null;
+  return {
+    projectName: row.project_name || '',
+    projectDirection: row.project_direction || '',
+    projectDescription: row.project_description || '',
+    coreValue: row.core_value || '',
+    targetUsers: row.target_users || '',
+    coreProblem: row.core_problem || '',
+    solutionOverview: row.solution_overview || '',
+    marketSize: row.market_size || '',
+    competitiveAdvantage: row.competitive_advantage || '',
+    savedAt: row.updated_at ? new Date(row.updated_at).toISOString() : '',
+  };
+}
+
 async function mapProjectTopic(pool, row) {
   if (!row) return null;
   const { rows: teamRows } = await pool.query(
@@ -367,6 +397,25 @@ async function loadTeamProjectTopic(pool, teamId) {
   return rows[0] || null;
 }
 
+async function loadTeamProjectTopicDraft(pool, teamId) {
+  const { rows } = await pool.query(
+    `SELECT * FROM teacher_personal_class_team_project_topic_drafts WHERE team_id = $1 LIMIT 1`,
+    [teamId]
+  );
+  return rows[0] || null;
+}
+
+async function assertLeaderCanEditTopicDraft(pool, sid, team) {
+  const leaderId = await resolveTeamLeaderId(pool, Number(team.id));
+  if (String(leaderId || '') !== String(sid)) {
+    return { error: '仅队长可保存选题草稿' };
+  }
+  const existing = await loadTeamProjectTopic(pool, Number(team.id));
+  if (existing?.status === 'pending') return { error: '项目选题已提交，待教师审核' };
+  if (existing?.status === 'approved') return { error: '项目选题已审核通过' };
+  return { existing };
+}
+
 router.get('/student/personal-classes/:classId/ideation/workspace', requireAuth(), requireStudent(), async (req, res) => {
   try {
     const sid = studentIdFromReq(req);
@@ -418,11 +467,73 @@ router.get('/student/personal-classes/:classId/ideation/topic', requireAuth(), r
       return bad(req, res, 403, 40301, '未加入该班级');
     }
     const team = await getConfirmedTeam(pool, sid, classId);
-    if (!team) return ok(req, res, { topic: null });
+    if (!team) return ok(req, res, { topic: null, draft: null });
     const row = await loadTeamProjectTopic(pool, Number(team.id));
-    return ok(req, res, { topic: await mapProjectTopic(pool, row) });
+    const draftRow = await loadTeamProjectTopicDraft(pool, Number(team.id));
+    return ok(req, res, {
+      topic: await mapProjectTopic(pool, row),
+      draft: mapTopicDraft(draftRow),
+    });
   } catch (e) {
     logError(`GET ideation topic traceId=${req.traceId}`, e);
+    return bad(req, res, 500, 50000, e.message);
+  }
+});
+
+router.put('/student/personal-classes/:classId/ideation/topic-draft', requireAuth(), requireStudent(), async (req, res) => {
+  try {
+    const sid = studentIdFromReq(req);
+    const classId = parseId(req.params.classId);
+    if (!sid || !classId) return bad(req, res, 400, 40003, '参数无效');
+    const draft = parseTopicDraftBody(req.body);
+
+    const pool = getPool();
+    if (!(await studentEnrolledInClass(pool, sid, classId))) {
+      return bad(req, res, 403, 40301, '未加入该班级');
+    }
+    const team = await getConfirmedTeam(pool, sid, classId);
+    if (!team) return bad(req, res, 400, 40014, '教师确认组队后可保存选题草稿');
+    const gate = await assertLeaderCanEditTopicDraft(pool, sid, team);
+    if (gate.error) return bad(req, res, 403, 40304, gate.error);
+
+    const { rows } = await pool.query(
+      `INSERT INTO teacher_personal_class_team_project_topic_drafts
+         (teacher_personal_class_id, team_id, saved_by, project_name, project_direction,
+          project_description, core_value, target_users, core_problem, solution_overview,
+          market_size, competitive_advantage, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now())
+       ON CONFLICT (team_id) DO UPDATE SET
+         teacher_personal_class_id = EXCLUDED.teacher_personal_class_id,
+         saved_by = EXCLUDED.saved_by,
+         project_name = EXCLUDED.project_name,
+         project_direction = EXCLUDED.project_direction,
+         project_description = EXCLUDED.project_description,
+         core_value = EXCLUDED.core_value,
+         target_users = EXCLUDED.target_users,
+         core_problem = EXCLUDED.core_problem,
+         solution_overview = EXCLUDED.solution_overview,
+         market_size = EXCLUDED.market_size,
+         competitive_advantage = EXCLUDED.competitive_advantage,
+         updated_at = now()
+       RETURNING *`,
+      [
+        classId,
+        Number(team.id),
+        sid,
+        draft.projectName,
+        draft.projectDirection,
+        draft.projectDescription,
+        draft.coreValue,
+        draft.targetUsers,
+        draft.coreProblem,
+        draft.solutionOverview,
+        draft.marketSize,
+        draft.competitiveAdvantage,
+      ]
+    );
+    return ok(req, res, { draft: mapTopicDraft(rows[0]) });
+  } catch (e) {
+    logError(`PUT ideation topic-draft traceId=${req.traceId}`, e);
     return bad(req, res, 500, 50000, e.message);
   }
 });
@@ -502,6 +613,9 @@ router.post('/student/personal-classes/:classId/ideation/topic', requireAuth(), 
         v.competitiveAdvantage,
       ]
     );
+    await pool.query(`DELETE FROM teacher_personal_class_team_project_topic_drafts WHERE team_id = $1`, [
+      Number(team.id),
+    ]);
     return ok(req, res, { topic: await mapProjectTopic(pool, rows[0]) });
   } catch (e) {
     logError(`POST ideation topic traceId=${req.traceId}`, e);

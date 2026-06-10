@@ -26,8 +26,12 @@ function getRequiredPortalRole(link: string): PortalRole | null {
 }
 
 export default function Home() {
-  const { logoUrl, siteTitle } = useSiteBrand();
+  const { logoUrl, siteTitle, heroBackgroundUrl, heroTitle, heroSubtitle, heroDescription } = useSiteBrand();
   const navBrandTitle = siteTitle.trim() || '嘉兴大学创业实训平台';
+  const heroBgSrc = heroBackgroundUrl.trim() || bg;
+  const heroTitleText = heroTitle.trim();
+  const heroSubtitleText = heroSubtitle.trim();
+  const heroDescriptionText = heroDescription.trim();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [scrolled, setScrolled] = useState(false);
@@ -312,27 +316,35 @@ export default function Home() {
       {/* Hero Section */}
       <section className="relative h-screen flex items-center justify-center overflow-hidden">
         <img
-          src={bg}
-          alt="Hero Background"
+          src={heroBgSrc}
+          alt=""
           className="absolute inset-0 w-full h-full object-cover object-top"
         />
         <div className="absolute inset-0 bg-gradient-to-b from-black/40 via-black/30 to-black/40"></div>
         <div className="relative z-10 text-center px-6 max-w-5xl mx-auto w-full">
-          <h1 className="text-5xl md:text-6xl font-bold text-white mb-6 leading-tight">大学生创业实训平台</h1>
-          <p className="text-xl md:text-2xl text-white/95 mb-8 leading-relaxed">个性化教学班 · 实践课程 · 七阶段团队实训</p>
-          <p className="text-base md:text-lg text-white/90 mb-12 max-w-3xl mx-auto">面向高校创新创业实践教学，融通课程学习、团队协作实训与教师全过程指导评价</p>
-          <div className="flex flex-wrap items-center justify-center gap-4">
+          {heroTitleText ? (
+            <h1 className="text-5xl md:text-6xl font-bold text-white mb-6 leading-tight">{heroTitleText}</h1>
+          ) : null}
+          {heroSubtitleText ? (
+            <p className="text-xl md:text-2xl text-white/95 mb-8 leading-relaxed">{heroSubtitleText}</p>
+          ) : null}
+          {heroDescriptionText ? (
+            <p className="text-base md:text-lg text-white/90 mb-12 max-w-3xl mx-auto">{heroDescriptionText}</p>
+          ) : null}
+          <div className="flex flex-wrap items-stretch justify-center gap-4">
             <button
+              type="button"
               onClick={() => setShowLoginModal(true)}
-              className="px-8 py-4 rounded-xl bg-teal-500 text-white font-bold text-lg hover:bg-teal-600 hover:shadow-2xl hover:scale-105 transition-all whitespace-nowrap"
+              className="inline-flex items-center justify-center min-h-[3.5rem] min-w-[11rem] px-8 py-3.5 rounded-xl border-2 border-transparent bg-teal-500 text-white font-bold text-lg hover:bg-teal-600 hover:shadow-2xl hover:scale-105 transition-all whitespace-nowrap box-border"
             >
-              立即开始实训
+              现在开始
             </button>
             <Link
               to={USER_GUIDE_PATH}
-              className="px-8 py-4 rounded-xl bg-white/90 backdrop-blur-sm text-slate-900 font-bold text-lg hover:shadow-xl hover:scale-105 transition-all border-2 border-slate-200 whitespace-nowrap flex items-center gap-2"
+              className="inline-flex items-center justify-center gap-2 min-h-[3.5rem] min-w-[11rem] px-8 py-3.5 rounded-xl border-2 border-slate-200 bg-white/90 backdrop-blur-sm text-slate-900 font-bold text-lg hover:shadow-xl hover:scale-105 transition-all whitespace-nowrap box-border"
             >
-              <i className="ri-book-open-line"></i><span>使用指南</span>
+              <i className="ri-book-open-line"></i>
+              <span>使用指南</span>
             </Link>
           </div>
         </div>
