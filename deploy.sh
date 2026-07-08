@@ -248,6 +248,43 @@ wait_healthy() {
   return 1
 }
 
+# 已有库增量 DDL：docs/sql/migrations/*.sql（按文件名排序，脚本需可重复执行）
+run_sql_migrations() {
+  local mig_dir="${ROOT_DIR}/docs/sql/migrations"
+  if [[ ! -d "$mig_dir" ]]; then
+    echo -e "${YELLOW}未找到迁移目录 ${mig_dir}，跳过 SQL 迁移${NC}"
+    return 0
+  fi
+  local files=()
+  local f
+  shopt -s nullglob
+  for f in "$mig_dir"/*.sql; do
+    files+=("$f")
+  done
+  shopt -u nullglob
+  if [[ ${#files[@]} -eq 0 ]]; then
+    echo -e "${GREEN}无增量迁移脚本${NC}"
+    return 0
+  fi
+  IFS=$'\n' files=($(printf '%s\n' "${files[@]}" | sort))
+  unset IFS
+
+  local pg_user="${POSTGRES_USER:-jiada_shixun}"
+  local pg_db="${POSTGRES_DB:-jiada_shixun}"
+  echo -e "${BLUE}执行数据库增量迁移（${#files[@]} 个脚本）...${NC}"
+  for f in "${files[@]}"; do
+    local base
+    base="$(basename "$f")"
+    echo "  → ${base}"
+    compose cp "$f" "postgres:/tmp/${base}" >/dev/null
+    if ! compose exec -T postgres psql -v ON_ERROR_STOP=1 -U "$pg_user" -d "$pg_db" -f "/tmp/${base}"; then
+      echo -e "${RED}迁移失败: ${base}（请先备份库后排查；可单独执行见 docs/sql/migrations/README.md）${NC}"
+      return 1
+    fi
+  done
+  echo -e "${GREEN}增量迁移完成${NC}"
+}
+
 wait_api() {
   local url="http://127.0.0.1:${GATEWAY_PORT}/api/health/live"
   echo -e "${BLUE}检查 API: ${url}${NC}"
@@ -291,6 +328,7 @@ deploy() {
 
   wait_healthy postgres 60 || true
   wait_healthy redis 40 || true
+  run_sql_migrations || exit 1
   sleep 3
 
   echo ""

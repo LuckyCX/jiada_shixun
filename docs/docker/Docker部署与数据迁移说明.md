@@ -274,7 +274,8 @@ Node 进程级环境变量（如 `DATABASE_URL`、`REDIS_URL`）写在 `docker-c
 1. **幂等与可重复审阅**：每条迁移尽量可安全执行一次；复杂场景用 `IF NOT EXISTS`、或先查系统表再 `ALTER`，避免二次执行直接报错（团队可约定是否配合迁移记录表）。
 2. **禁止**在增量脚本里随意 `DROP DATABASE`、大范围无备份 `TRUNCATE`、或对生产库不做说明的破坏性 `DROP COLUMN`。
 3. **存放位置**：将新文件放在 [`docs/sql/migrations/`](sql/migrations/)，命名与执行顺序见该目录下 `README.md`。
-4. **执行方式（在已有 Compose 跑起来的前提下）**，在宿主机执行：
+4. **一键部署**：根目录 [`./deploy.sh`](../../deploy.sh) 在 `postgres` 健康检查通过后，会**按文件名排序**自动执行 `docs/sql/migrations/*.sql`（脚本需可重复执行）。发版后执行 `./deploy.sh` 即可带上增量 DDL；若仅 `./deploy.sh --skip-build`，仍会跑迁移。
+5. **手动执行（在已有 Compose 跑起来的前提下）**，在宿主机执行：
    ```bash
    # 将新文件复制进容器可读路径，或使用 stdin / bind mount
    docker compose cp docs/sql/migrations/00xx_描述.sql postgres:/tmp/00xx.sql
@@ -282,7 +283,7 @@ Node 进程级环境变量（如 `DATABASE_URL`、`REDIS_URL`）写在 `docker-c
    ```
    **执行前请备份**。
 
-5. **Redis**：结构变更一般**不**通过 SQL 维护；更新应用后如需刷新缓存，可依赖 TTL、或在发版说明中约定短时间内的缓存不一致可接受；必要时运维对特定 key 前缀做清理（需评估业务影响）。
+6. **Redis**：结构变更一般**不**通过 SQL 维护；更新应用后如需刷新缓存，可依赖 TTL、或在发版说明中约定短时间内的缓存不一致可接受；必要时运维对特定 key 前缀做清理（需评估业务影响）。
 
 ---
 
