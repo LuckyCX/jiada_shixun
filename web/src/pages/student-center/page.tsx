@@ -713,7 +713,7 @@ export default function StudentCenterPage() {
         setActiveTab('module-team');
         notification.info({
           message: '请先完成组队测评',
-          description: '进入「组队与团队管理」完成教师预设题目、上传视频并提交，等待教师组队。',
+          description: '进入「组队与团队管理」完成教师预设题目与 AI 分析并提交，等待教师组队（自我介绍视频选填）。',
           placement: 'topRight',
           duration: 6,
         });

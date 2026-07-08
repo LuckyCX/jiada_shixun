@@ -699,7 +699,7 @@ export default function TeamFormationModule({ classId, className, initialSubTab,
           </div>
           <div>
             <h2 className="text-xl font-bold mb-1">智能组队系统</h2>
-            <p className="text-white/80 text-sm">完成测评 → 上传视频 → AI分析 → 等待组队 → 完善团队信息</p>
+            <p className="text-white/80 text-sm">完成测评 → AI 分析（视频选填）→ 等待组队 → 完善团队信息</p>
           </div>
         </div>
       </div>
@@ -728,11 +728,16 @@ export default function TeamFormationModule({ classId, className, initialSubTab,
           {activeTab === 'assessment' && (
             <TeamFormationAssessmentPanel
               classId={classId}
-              onSubmitted={() => {
-                setActiveTab('waiting');
-                setWaitingForTeam(true);
+              onSubmitted={(mode) => {
                 void loadWaitingSummary();
                 void loadTeamsFromApi();
+                if (mode === 'solo') {
+                  setWaitingForTeam(false);
+                  setActiveTab('myteam');
+                } else {
+                  setActiveTab('waiting');
+                  setWaitingForTeam(true);
+                }
               }}
             />
           )}

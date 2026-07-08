@@ -61,6 +61,7 @@ CREATE TABLE student_team_formation_submissions (
   video_transcript text,
   ai_matched_role varchar(32),
   ai_analysis_raw jsonb,
+  grouping_preference varchar(16) CHECK (grouping_preference IS NULL OR grouping_preference IN ('pool', 'solo')),
   submitted_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
@@ -85,6 +86,7 @@ CREATE TABLE teacher_personal_class_teams (
   sort_order int NOT NULL DEFAULT 0,
   introduction text NOT NULL DEFAULT '',
   leader_student_id bigint REFERENCES users (id) ON DELETE SET NULL,
+  is_solo boolean NOT NULL DEFAULT false,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );

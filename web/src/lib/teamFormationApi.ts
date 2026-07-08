@@ -54,6 +54,7 @@ export type TeamFormationSubmission = {
   dimensionProfile?: TeamDimensionProfile;
   analysisText?: string | null;
   submittedAt: string | null;
+  groupingPreference?: 'pool' | 'solo' | null;
 };
 
 export type TeamRoleKey =
@@ -212,11 +213,19 @@ export async function analyzeTeamFormationStream(classId: string, handlers: Team
   }
 }
 
-export async function submitTeamFormation(classId: string) {
+export async function submitTeamFormation(
+  classId: string,
+  groupingPreference: 'pool' | 'solo' = 'pool'
+) {
   return portalAuthenticatedFetch('student', '/api/student/team-formation/submit', {
     method: 'POST',
-    body: JSON.stringify({ classId }),
-  });
+    body: JSON.stringify({ classId, groupingPreference }),
+  }) as Promise<{
+    status: string;
+    groupingPreference?: 'pool' | 'solo';
+    teamId?: string;
+    solo?: boolean;
+  }>;
 }
 
 /** 清空答题与 AI 结果，保留已上传视频 */
@@ -304,7 +313,8 @@ export type GroupingTeam = {
   introduction?: string;
   leaderStudentId?: string | null;
   groupingStatus?: string;
-  complementScore: number;
+  isSolo?: boolean;
+  complementScore: number | null;
   aiRationale?: string;
   createdAt?: string;
   members: GroupingTeamMember[];

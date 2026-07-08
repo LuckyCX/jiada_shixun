@@ -150,6 +150,7 @@ async function listPendingStudentsForClass(pool, classId) {
      FROM student_team_formation_submissions s
      JOIN users u ON u.id = s.student_id
      WHERE s.teacher_personal_class_id = $1 AND s.status = 'pending_teacher'
+       AND COALESCE(s.grouping_preference, 'pool') = 'pool'
      ORDER BY s.submitted_at ASC NULLS LAST, u.id ASC`,
     [classId]
   );
@@ -169,6 +170,100 @@ async function listPendingStudentsForClass(pool, classId) {
       profile,
     };
   });
+}
+
+/** 学生是否已在该班入队 */
+async function findStudentTeamIdInClass(pool, classId, studentId) {
+  const { rows } = await pool.query(
+    `SELECT t.id
+     FROM teacher_personal_class_team_members m
+     JOIN teacher_personal_class_teams t ON t.id = m.team_id
+     WHERE t.teacher_personal_class_id = $1 AND m.student_id = $2
+     LIMIT 1`,
+    [classId, studentId]
+  );
+  return rows[0]?.id != null ? String(rows[0].id) : null;
+}
+
+/**
+ * 成立单人公司：即时创建 1 人 confirmed 队，不参与 AI 待组队池
+ */
+async function createSoloTeamForStudent(pool, classId, studentId) {
+  const existingTeamId = await findStudentTeamIdInClass(pool, classId, studentId);
+  if (existingTeamId) {
+    return { status: 'confirmed', teamId: existingTeamId, solo: true, alreadyExisted: true };
+  }
+
+  const { rows: subRows } = await pool.query(
+    `SELECT status, ai_matched_role AS "aiMatchedRole", ai_analysis_raw AS "aiAnalysisRaw"
+     FROM student_team_formation_submissions
+     WHERE teacher_personal_class_id = $1 AND student_id = $2`,
+    [classId, studentId]
+  );
+  if (!subRows.length || !subRows[0].aiMatchedRole) {
+    const err = new Error('请先完成答题并完成 AI 分析');
+    err.code = 40010;
+    throw err;
+  }
+  const sub = subRows[0];
+  if (sub.status === 'confirmed' || sub.status === 'grouped') {
+    const tid = await findStudentTeamIdInClass(pool, classId, studentId);
+    return { status: sub.status, teamId: tid, solo: true, alreadyExisted: true };
+  }
+
+  const { rows: userRows } = await pool.query(
+    `SELECT real_name, email FROM users WHERE id = $1`,
+    [studentId]
+  );
+  const displayName = String(userRows[0]?.real_name || userRows[0]?.email || '同学').trim() || '同学';
+  const teamName = `${displayName}的工作室`.slice(0, 128);
+  const profile = profileFromAnalysisRaw(sub.aiAnalysisRaw);
+  const aiRole = sub.aiMatchedRole;
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows: sortRows } = await client.query(
+      `SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_sort
+       FROM teacher_personal_class_teams WHERE teacher_personal_class_id = $1`,
+      [classId]
+    );
+    const nextSort = Number(sortRows[0]?.next_sort ?? 0);
+
+    const { rows: ins } = await client.query(
+      `INSERT INTO teacher_personal_class_teams
+         (teacher_personal_class_id, name, grouping_status, complement_score, ai_rationale, sort_order, is_solo, leader_student_id)
+       VALUES ($1, $2, 'confirmed', NULL, $3, $4, true, $5)
+       RETURNING id`,
+      [classId, teamName, '学生选择成立单人公司，不参与智能组队。', nextSort, studentId]
+    );
+    const teamId = ins[0].id;
+
+    await client.query(
+      `INSERT INTO teacher_personal_class_team_members
+         (team_id, student_id, ai_matched_role, dimension_profile)
+       VALUES ($1, $2, $3, $4::jsonb)`,
+      [teamId, studentId, aiRole, JSON.stringify(profile)]
+    );
+
+    await client.query(
+      `UPDATE student_team_formation_submissions SET
+         status = 'confirmed',
+         grouping_preference = 'solo',
+         submitted_at = COALESCE(submitted_at, now()),
+         updated_at = now()
+       WHERE teacher_personal_class_id = $1 AND student_id = $2`,
+      [classId, studentId]
+    );
+
+    await client.query('COMMIT');
+    return { status: 'confirmed', teamId: String(teamId), solo: true };
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
 }
 
 async function persistAiTeamsToDb(pool, classId, pending, aiTeams) {
@@ -319,10 +414,11 @@ function existingTeamsWithMembers(allTeams) {
 }
 
 async function loadTeamsWithMembers(pool, classId, statuses = ['draft', 'confirmed']) {
-  const { rows: teamRows } = await pool.query(
+    const { rows: teamRows } = await pool.query(
     `SELECT id, name, COALESCE(introduction, '') AS introduction, grouping_status AS "groupingStatus",
             complement_score AS "complementScore", ai_rationale AS "aiRationale", sort_order AS "sortOrder",
-            created_at AS "createdAt", leader_student_id AS "leaderStudentId"
+            created_at AS "createdAt", leader_student_id AS "leaderStudentId",
+            COALESCE(is_solo, false) AS "isSolo"
      FROM teacher_personal_class_teams
      WHERE teacher_personal_class_id = $1 AND grouping_status = ANY($2::text[])
      ORDER BY sort_order ASC, id ASC`,
@@ -384,7 +480,12 @@ async function loadTeamsWithMembers(pool, classId, statuses = ['draft', 'confirm
       leaderStudentId: leaderId,
       groupingStatus: t.groupingStatus,
       sortOrder: t.sortOrder != null ? Number(t.sortOrder) : 0,
-      complementScore: computeComplementScore(profiles),
+      isSolo: Boolean(t.isSolo),
+      complementScore: t.isSolo
+        ? t.complementScore != null
+          ? Number(t.complementScore)
+          : null
+        : computeComplementScore(profiles),
       aiRationale: t.aiRationale || '',
       createdAt,
       members: membersWithLeader,
@@ -650,6 +751,7 @@ router.get('/student/team-formation/submission', requireAuth(), requireStudent()
     const { rows } = await pool.query(
       `SELECT status, answers, video_storage_key AS "videoStorageKey", video_transcript AS "videoTranscript",
               ai_matched_role AS "aiMatchedRole", ai_analysis_raw AS "aiAnalysisRaw",
+              grouping_preference AS "groupingPreference",
               submitted_at AS "submittedAt"
        FROM student_team_formation_submissions
        WHERE teacher_personal_class_id = $1 AND student_id = $2`,
@@ -665,6 +767,7 @@ router.get('/student/team-formation/submission', requireAuth(), requireStudent()
         aiMatchedRoleLabel: null,
         dimensionProfile: { strategic: 0, market: 0, techRisk: 0 },
         submittedAt: null,
+        groupingPreference: null,
       });
     }
     const r = rows[0];
@@ -686,6 +789,7 @@ router.get('/student/team-formation/submission', requireAuth(), requireStudent()
       dimensionProfile,
       analysisText,
       submittedAt: r.submittedAt ? new Date(r.submittedAt).toISOString() : null,
+      groupingPreference: r.groupingPreference || null,
     });
   } catch (e) {
     logError(`GET student submission traceId=${req.traceId}`, e);
@@ -849,7 +953,6 @@ router.post('/student/team-formation/analyze', requireAuth(), requireStudent(), 
     );
     if (!sRows.length) return bad(req, res, 400, 40010, '请先保存答题');
     const sub = sRows[0];
-    if (!sub.video_storage_key) return bad(req, res, 400, 40010, '请先上传视频');
 
     const answers = sub.answers || {};
     const qaText = formatAnswersForLlm(questions, answers);
@@ -1096,30 +1199,47 @@ router.post('/student/team-formation/submit', requireAuth(), requireStudent(), a
   try {
     const sid = studentIdFromReq(req);
     const classId = parseClassId(req.body?.classId);
+    const groupingPreference = req.body?.groupingPreference === 'solo' ? 'solo' : 'pool';
     if (!sid || !classId) return bad(req, res, 400, 40003, '参数无效');
     const pool = getPool();
     if (!(await studentEnrolledInClass(pool, sid, classId))) {
       return bad(req, res, 403, 40301, '未加入该班级');
     }
     const { rows } = await pool.query(
-      `SELECT ai_matched_role, video_storage_key FROM student_team_formation_submissions
+      `SELECT status, ai_matched_role FROM student_team_formation_submissions
        WHERE teacher_personal_class_id = $1 AND student_id = $2`,
       [classId, sid]
     );
-    if (!rows.length || !rows[0].ai_matched_role || !rows[0].video_storage_key) {
-      return bad(req, res, 400, 40010, '请先完成答题、上传视频并完成 AI 分析');
+    if (!rows.length || !rows[0].ai_matched_role) {
+      return bad(req, res, 400, 40010, '请先完成答题并完成 AI 分析');
     }
+    const status = rows[0].status;
+    if (status === 'confirmed' || status === 'grouped') {
+      const teamId = await findStudentTeamIdInClass(pool, classId, sid);
+      return ok(req, res, { status, teamId, solo: groupingPreference === 'solo' });
+    }
+    if (status === 'pending_teacher' && groupingPreference === 'pool') {
+      return ok(req, res, { status: 'pending_teacher', groupingPreference: 'pool' });
+    }
+
+    if (groupingPreference === 'solo') {
+      const soloResult = await createSoloTeamForStudent(pool, classId, sid);
+      return ok(req, res, { ...soloResult, groupingPreference: 'solo' });
+    }
+
     await pool.query(
       `UPDATE student_team_formation_submissions SET
          status = 'pending_teacher',
+         grouping_preference = 'pool',
          submitted_at = now(),
          updated_at = now()
        WHERE teacher_personal_class_id = $1 AND student_id = $2`,
       [classId, sid]
     );
-    return ok(req, res, { status: 'pending_teacher' });
+    return ok(req, res, { status: 'pending_teacher', groupingPreference: 'pool' });
   } catch (e) {
     logError(`POST submit traceId=${req.traceId}`, e);
+    if (e.code === 40010) return bad(req, res, 400, 40010, e.message);
     return bad(req, res, 500, 50000, e.message);
   }
 });

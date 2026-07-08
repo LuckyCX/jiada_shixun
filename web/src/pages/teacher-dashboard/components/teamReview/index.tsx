@@ -46,9 +46,10 @@ type Team = {
   id: string;
   name: string;
   groupingStatus?: 'draft' | 'confirmed';
+  isSolo?: boolean;
   members: Student[];
   avgProfile: AbilityProfile;
-  complementScore: number;
+  complementScore: number | null;
 };
 
 // 已分组等演示数据（待组队走 API）
@@ -247,9 +248,10 @@ function mapGroupingToUi(data: TeacherGroupingState): { students: Student[]; tea
       id: t.id,
       name: t.name,
       groupingStatus: 'confirmed' as const,
+      isSolo: Boolean(t.isSolo),
       members,
       avgProfile: normalizeTeamDimensionProfile(t.avgProfile),
-      complementScore: t.complementScore ?? 0,
+      complementScore: t.isSolo ? null : (t.complementScore ?? 0),
     };
   });
   return { students: [...pending, ...teams.flatMap((t) => t.members)], teams };
@@ -800,13 +802,25 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
                           {index + 1}
                         </div>
                         <div>
-                          <h3 className="text-base font-bold">{team.name}</h3>
+                          <h3 className="text-base font-bold flex items-center gap-2 flex-wrap">
+                            {team.name}
+                            {team.isSolo ? (
+                              <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-white/25 border border-white/30">
+                                单人公司
+                              </span>
+                            ) : null}
+                          </h3>
                           <p className="text-xs text-white/80">{team.members.length} 名成员</p>
                         </div>
                       </div>
                       <div className="text-right">
                         <div className="text-xs text-white/80 mb-1">互补得分</div>
-                        <div className="text-2xl font-bold">{team.complementScore}</div>
+                        <div className="text-2xl font-bold">
+                          {team.isSolo ? '—' : team.complementScore ?? 0}
+                        </div>
+                        {team.isSolo ? (
+                          <div className="text-[10px] text-white/70">单人公司不适用</div>
+                        ) : null}
                       </div>
                     </div>
                   </div>
