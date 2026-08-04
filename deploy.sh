@@ -75,7 +75,8 @@ check_docker() {
 check_prerequisites() {
   echo -e "${BLUE}检查项目文件...${NC}"
   for f in .env.example docker-compose.yml Dockerfile.gateway node/Dockerfile \
-    deploy/nginx/default.conf web/package.json web/pnpm-lock.yaml docs/sql/init/20_schema.sql; do
+    deploy/nginx/default.conf web/package.json web/pnpm-lock.yaml \
+    game/package.json game/pnpm-lock.yaml docs/sql/init/20_schema.sql; do
     if [[ ! -f "$f" ]]; then
       echo -e "${RED}缺少文件: $f（请在仓库根目录执行本脚本）${NC}"
       exit 1

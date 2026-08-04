@@ -2,3 +2,5 @@ node_modules
 out
 .env
 *.gz
+game/node_modules
+game/dist

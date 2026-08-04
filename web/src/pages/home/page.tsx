@@ -182,6 +182,12 @@ export default function Home() {
 
   // 点击模块时：未登录先弹登录框，已登录直接跳转
   const handleModuleClick = (link: string, preferRole?: 'student' | 'teacher') => {
+    // 创想小镇沙盒：独立子应用，匿名可玩，不走课程解锁
+    if (link.startsWith('/town-sandbox')) {
+      // 开发：Vite 代理到 game:5174；生产：gateway 同域 /town-sandbox/
+      window.location.assign(link.endsWith('/') ? link : `${link}/`);
+      return;
+    }
     if (!isLoggedIn || !userInfo) {
       setPendingNavTarget(link);
       if (preferRole) setLoginRole(preferRole);
@@ -229,6 +235,14 @@ export default function Home() {
     color: 'from-indigo-500 to-purple-500',
   };
 
+  const townSandboxModule: HomeModuleCard = {
+    icon: 'ri-map-2-line',
+    title: '创业小镇 · 沙盒',
+    desc: '2D 小镇演练创业七阶段：走动、对话、轻量任务。独立于课程解锁，进度仅保存在本机。',
+    link: '/town-sandbox/',
+    color: 'from-cyan-500 to-teal-600',
+  };
+
   const studentStageModules: HomeModuleCard[] = [
     { icon: 'ri-team-line', title: '组队与团队管理', desc: '完成组队测评与团队组建，教师确认后解锁后续阶段。', link: '/student-center?module=team-formation', color: 'from-purple-500 to-purple-600' },
     { icon: 'ri-lightbulb-line', title: '创新思维与创意生成', desc: '选题与创意生成，配合教师审核确定项目方向。', link: '/student-center?module=ideation', color: 'from-teal-500 to-teal-600' },
@@ -274,7 +288,9 @@ export default function Home() {
       <p className="text-sm text-gray-600 leading-relaxed mb-4">{module.desc}</p>
       <div className="flex items-center justify-between">
         <div className="flex items-center text-teal-500 text-sm font-medium">
-          <span>{isLoggedIn ? '进入' : '登录后进入'}</span>
+          <span>
+            {module.link.startsWith('/town-sandbox') ? '立即进入' : isLoggedIn ? '进入' : '登录后进入'}
+          </span>
           <i className="ri-arrow-right-line ml-2 group-hover:translate-x-1 transition-transform"></i>
         </div>
         {module.isTeacher && (
@@ -305,6 +321,13 @@ export default function Home() {
           </div>
           <div className="flex items-center gap-8">
             <a href="#modules" className={`text-sm font-medium transition-colors hover:text-teal-500 cursor-pointer ${scrolled ? 'text-gray-700' : 'text-white'}`}>实训模块</a>
+            <button
+              type="button"
+              onClick={() => handleModuleClick('/town-sandbox/')}
+              className={`text-sm font-medium transition-colors hover:text-teal-500 cursor-pointer whitespace-nowrap ${scrolled ? 'text-gray-700' : 'text-white'}`}
+            >
+              <i className="ri-map-2-line mr-1"></i>创业小镇
+            </button>
             <a href="#features" className={`text-sm font-medium transition-colors hover:text-teal-500 cursor-pointer ${scrolled ? 'text-gray-700' : 'text-white'}`}>平台特色</a>
             <Link to={USER_GUIDE_PATH} className={`text-sm font-medium transition-colors hover:text-teal-500 cursor-pointer whitespace-nowrap ${scrolled ? 'text-gray-700' : 'text-white'}`}>
               <i className="ri-question-line mr-1"></i>帮助中心
@@ -338,6 +361,14 @@ export default function Home() {
               className="inline-flex items-center justify-center min-h-[3.5rem] min-w-[11rem] px-8 py-3.5 rounded-xl border-2 border-transparent bg-teal-500 text-white font-bold text-lg hover:bg-teal-600 hover:shadow-2xl hover:scale-105 transition-all whitespace-nowrap box-border"
             >
               现在开始
+            </button>
+            <button
+              type="button"
+              onClick={() => handleModuleClick('/town-sandbox/')}
+              className="inline-flex items-center justify-center gap-2 min-h-[3.5rem] min-w-[11rem] px-8 py-3.5 rounded-xl border-2 border-cyan-300/80 bg-cyan-500/90 backdrop-blur-sm text-white font-bold text-lg hover:bg-cyan-400 hover:shadow-2xl hover:scale-105 transition-all whitespace-nowrap box-border"
+            >
+              <i className="ri-map-2-line"></i>
+              <span>创业小镇沙盒</span>
             </button>
             <Link
               to={USER_GUIDE_PATH}
@@ -388,6 +419,17 @@ export default function Home() {
                 <span>点击卡片登录后即可进入对应功能</span>
               </div>
             )}
+          </div>
+
+          <div className="mb-10">
+            <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2">
+              <i className="ri-map-2-line text-cyan-600"></i>
+              体验 · 创业小镇沙盒
+              <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-cyan-50 text-cyan-700 border border-cyan-200">无需登录</span>
+            </h3>
+            <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
+              {renderModuleCard(townSandboxModule, 'town-sandbox')}
+            </div>
           </div>
 
           <div className="mb-10">
@@ -498,6 +540,13 @@ export default function Home() {
             >
               学生入口
             </button>
+            <button
+              type="button"
+              onClick={() => handleModuleClick('/town-sandbox/')}
+              className="px-8 py-3 bg-cyan-500/90 text-white text-base font-semibold rounded-full hover:bg-cyan-400 transition-all hover:scale-105 whitespace-nowrap cursor-pointer"
+            >
+              创业小镇沙盒
+            </button>
           </div>
           <p className="text-sm text-white/80">
             平台管理员请访问
@@ -528,6 +577,7 @@ export default function Home() {
             <div>
               <h4 className="text-sm font-bold mb-4">实训入口</h4>
               <ul className="space-y-2 text-sm text-gray-400">
+                <li><button onClick={() => handleModuleClick('/town-sandbox/')} className="hover:text-teal-400 transition-colors cursor-pointer">创业小镇沙盒</button></li>
                 <li><button onClick={() => handleModuleClick('/student-center?tab=knowledge')} className="hover:text-teal-400 transition-colors cursor-pointer">实践课程</button></li>
                 <li><button onClick={() => handleModuleClick('/student-center?module=team-formation')} className="hover:text-teal-400 transition-colors cursor-pointer">组队测评</button></li>
                 <li><button onClick={() => handleModuleClick('/student-center?module=ideation')} className="hover:text-teal-400 transition-colors cursor-pointer">创意选题</button></li>

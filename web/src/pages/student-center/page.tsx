@@ -65,6 +65,7 @@ import {
   type GroupingTeam,
 } from '../../lib/teamFormationApi';
 import UserAvatar from '../../components/UserAvatar';
+import { openTownSandbox } from '../../lib/townSandboxUrl';
 import {
   completeStudentTodoTask,
   downloadStudentTaskAttachment,
@@ -2065,6 +2066,32 @@ export default function StudentCenterPage() {
 
           {!sidebarCollapsed && <div className="mx-4 my-2 border-t border-gray-100"></div>}
           {sidebarCollapsed && <div className="mx-2 my-2 border-t border-gray-100"></div>}
+          {!sidebarCollapsed && (
+            <div className="px-4 py-2">
+              <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">体验</span>
+            </div>
+          )}
+          <div className="px-2 space-y-0.5 mb-2">
+            <button
+              type="button"
+              onClick={() => openTownSandbox()}
+              title={sidebarCollapsed ? '创业小镇 · 沙盒' : undefined}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all cursor-pointer whitespace-nowrap text-cyan-700 hover:text-cyan-900 hover:bg-cyan-50 border border-transparent hover:border-cyan-100 ${sidebarCollapsed ? 'justify-center' : ''}`}
+            >
+              <div className="w-5 h-5 flex items-center justify-center flex-shrink-0">
+                <i className="ri-map-2-line text-base"></i>
+              </div>
+              {!sidebarCollapsed && (
+                <span className="text-sm font-medium flex-1 text-left">创业小镇 · 沙盒</span>
+              )}
+              {!sidebarCollapsed && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-cyan-100 text-cyan-700 flex-shrink-0">免登录流程</span>
+              )}
+            </button>
+          </div>
+
+          {!sidebarCollapsed && <div className="mx-4 my-2 border-t border-gray-100"></div>}
+          {sidebarCollapsed && <div className="mx-2 my-2 border-t border-gray-100"></div>}
           {!sidebarCollapsed && <div className="px-4 py-2"><span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">实训模块</span></div>}
 
           <div className="px-2 space-y-0.5">
@@ -2176,6 +2203,15 @@ export default function StudentCenterPage() {
               <span className="font-medium text-gray-700">{getCurrentLabel()}</span>
             </div>
             <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => openTownSandbox()}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-cyan-700 bg-cyan-50 border border-cyan-200 rounded-lg hover:bg-cyan-100 transition-colors cursor-pointer whitespace-nowrap"
+                title="进入创业小镇沙盒（独立于课程解锁）"
+              >
+                <i className="ri-map-2-line"></i>
+                <span>创业小镇</span>
+              </button>
               <StudentClassSwitcher
                 enrollments={enrollments}
                 selectedClassId={selectedClassId}
@@ -2393,6 +2429,33 @@ export default function StudentCenterPage() {
                   </div>
                 </div>
               </div>
+
+              <button
+                type="button"
+                onClick={() => openTownSandbox()}
+                className="w-full text-left bg-gradient-to-r from-cyan-50 to-teal-50 border border-cyan-200 rounded-2xl p-5 hover:shadow-md hover:border-cyan-300 transition-all cursor-pointer"
+              >
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-cyan-500 to-teal-600 flex items-center justify-center flex-shrink-0">
+                    <i className="ri-map-2-line text-2xl text-white"></i>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h3 className="text-base font-bold text-gray-900">创业小镇 · 沙盒</h3>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-cyan-100 text-cyan-700 border border-cyan-200">
+                        独立于课程解锁
+                      </span>
+                    </div>
+                    <p className="text-sm text-gray-600 mt-1">
+                      2D 小镇演练创业七阶段：走动、对话、轻量任务。进度仅保存在本机，不写入正式作业。
+                    </p>
+                  </div>
+                  <span className="text-cyan-600 text-sm font-medium flex items-center gap-1 flex-shrink-0">
+                    立即进入
+                    <i className="ri-arrow-right-line"></i>
+                  </span>
+                </div>
+              </button>
 
               {/* 实训模块步骤条 */}
               <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 overflow-hidden relative z-0">

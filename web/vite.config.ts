@@ -110,6 +110,12 @@ export default defineConfig(({ mode }) => {
         target: "http://127.0.0.1:4000",
         changeOrigin: true,
       },
+      // 创想小镇独立 Vite 应用（pnpm --dir game dev，端口 5174）
+      "/town-sandbox": {
+        target: "http://127.0.0.1:5174",
+        changeOrigin: true,
+        ws: true,
+      },
     },
   },
   };
