@@ -1,8 +1,6 @@
 node_modules
 web/node_modules
 web/out
-game/node_modules
-game/dist
 .git
 **/.DS_Store
 docs/otherProject

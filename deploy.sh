@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # 创业实训平台 — 一键部署（在仓库根目录执行: chmod +x deploy.sh && ./deploy.sh）
 # 自动：检查 Docker → 生成/补全 .env → 预拉镜像 → 构建 node/gateway → 启动并验收
+# Docker/宿主机重启后容器异常退出：./deploy.sh --recover（配合 compose restart: unless-stopped）
 
 set -euo pipefail
 
@@ -16,6 +17,8 @@ NC='\033[0m'
 NO_CACHE=""
 SKIP_BUILD=0
 PULL_ONLY=0
+# Docker 守护进程重启后容器 Exited(255) 时：不 down/不构建，仅拉起并验收
+RECOVER=0
 # 基础镜像：online=始终 docker pull；local=本地已有则跳过（适合 docker load 导入）
 CLI_BASE_IMAGES_MODE=""
 
@@ -24,6 +27,7 @@ usage() {
   echo "  直接执行 $0 后按提示输入数字选择基础镜像方式"
   echo "  --no-cache     构建 gateway/node 时不使用缓存"
   echo "  --skip-build   不构建镜像，仅 docker compose up -d"
+  echo "  --recover      快速恢复：不 down/不构建，拉起已退出容器并验收（Docker 重启后优先用）"
   echo "  --pull-only    仅预拉基础镜像（不构建、不启动）"
   echo "  -h, --help     显示帮助"
   echo ""
@@ -34,6 +38,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-cache) NO_CACHE="--no-cache"; shift ;;
     --skip-build) SKIP_BUILD=1; shift ;;
+    --recover) RECOVER=1; SKIP_BUILD=1; shift ;;
     --pull-only) PULL_ONLY=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo -e "${RED}未知参数: $1${NC}"; usage; exit 1 ;;
@@ -76,7 +81,7 @@ check_prerequisites() {
   echo -e "${BLUE}检查项目文件...${NC}"
   for f in .env.example docker-compose.yml Dockerfile.gateway node/Dockerfile \
     deploy/nginx/default.conf web/package.json web/pnpm-lock.yaml \
-    game/package.json game/pnpm-lock.yaml docs/sql/init/20_schema.sql; do
+    docs/sql/init/20_schema.sql; do
     if [[ ! -f "$f" ]]; then
       echo -e "${RED}缺少文件: $f（请在仓库根目录执行本脚本）${NC}"
       exit 1
@@ -301,31 +306,73 @@ wait_api() {
   return 1
 }
 
+# 检测本项目是否有 Exited 容器（Docker 重启后常见 255）
+has_exited_containers() {
+  if compose ps -a --status exited -q 2>/dev/null | grep -q .; then
+    return 0
+  fi
+  # 兼容旧版 compose（无 --status）
+  compose ps -a 2>/dev/null | grep -qiE 'Exit(ed)?|Exited' 
+}
+
+# 确认 restart 策略已落到运行中的容器（unless-stopped）
+verify_restart_policy() {
+  local svc name policy
+  echo -e "${BLUE}校验容器 restart 策略...${NC}"
+  for svc in postgres redis node gateway; do
+    name="$(compose ps -q "$svc" 2>/dev/null | head -1 || true)"
+    if [[ -z "$name" ]]; then
+      echo -e "${YELLOW}  ${svc}: 未运行，跳过${NC}"
+      continue
+    fi
+    policy="$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' "$name" 2>/dev/null || echo unknown)"
+    if [[ "$policy" == "unless-stopped" || "$policy" == "always" ]]; then
+      echo -e "  ${GREEN}${svc}: restart=${policy}${NC}"
+    else
+      echo -e "  ${YELLOW}${svc}: restart=${policy}（期望 unless-stopped；请执行 docker compose up -d 使配置生效）${NC}"
+    fi
+  done
+}
+
+warn_if_exited() {
+  if has_exited_containers; then
+    echo -e "${YELLOW}检测到已退出容器。若刚经历 Docker/宿主机重启，优先：${NC}"
+    echo -e "${YELLOW}  ./deploy.sh --recover${NC}"
+    echo ""
+  fi
+}
+
 deploy() {
   export GATEWAY_PORT NODE_IMAGE WEB_BUILD_NODE_IMAGE NGINX_IMAGE POSTGRES_IMAGE REDIS_IMAGE
 
-  echo -e "${YELLOW}停止旧容器（保留数据卷）...${NC}"
-  compose down --remove-orphans 2>/dev/null || true
-
-  if [[ "${DEPLOY_PRUNE_IMAGES:-0}" == "1" ]]; then
-    docker image prune -f || true
-  fi
-
-  if [[ "$SKIP_BUILD" -eq 0 ]]; then
-    pre_pull_base_images
-    echo -e "${YELLOW}构建 node → gateway（先 API 后前端，共用 Node 基础层；Vite 打包仍可能较久）...${NC}"
-    export DOCKER_BUILDKIT=1
-    export COMPOSE_DOCKER_CLI_BUILD=1
-    # shellcheck disable=SC2086
-    compose build $NO_CACHE node
-    # shellcheck disable=SC2086
-    compose build $NO_CACHE gateway
+  if [[ "$RECOVER" -eq 1 ]]; then
+    # 恢复模式：不动数据卷、不重建镜像，直接按 compose 配置拉起（含 restart 策略）
+    echo -e "${YELLOW}恢复模式：跳过 down/构建，直接拉起服务...${NC}"
+    compose up -d --remove-orphans
   else
-    echo -e "${YELLOW}跳过构建，直接启动...${NC}"
-  fi
+    echo -e "${YELLOW}停止旧容器（保留数据卷）...${NC}"
+    compose down --remove-orphans 2>/dev/null || true
 
-  echo -e "${YELLOW}启动全部服务...${NC}"
-  compose up -d
+    if [[ "${DEPLOY_PRUNE_IMAGES:-0}" == "1" ]]; then
+      docker image prune -f || true
+    fi
+
+    if [[ "$SKIP_BUILD" -eq 0 ]]; then
+      pre_pull_base_images
+      echo -e "${YELLOW}构建 node → gateway（先 API 后前端，共用 Node 基础层；Vite 打包仍可能较久）...${NC}"
+      export DOCKER_BUILDKIT=1
+      export COMPOSE_DOCKER_CLI_BUILD=1
+      # shellcheck disable=SC2086
+      compose build $NO_CACHE node
+      # shellcheck disable=SC2086
+      compose build $NO_CACHE gateway
+    else
+      echo -e "${YELLOW}跳过构建，直接启动...${NC}"
+    fi
+
+    echo -e "${YELLOW}启动全部服务...${NC}"
+    compose up -d
+  fi
 
   wait_healthy postgres 60 || true
   wait_healthy redis 40 || true
@@ -334,6 +381,7 @@ deploy() {
 
   echo ""
   compose ps
+  verify_restart_policy
 
   if wait_api; then
     curl -fsS "http://127.0.0.1:${GATEWAY_PORT}/api/health/ready" 2>/dev/null || true
@@ -348,7 +396,11 @@ deploy() {
   echo ""
   if curl -fsS "http://127.0.0.1:${GATEWAY_PORT}/api/health/live" 2>/dev/null | grep -q '"code"'; then
     echo -e "${GREEN}========================================${NC}"
-    echo -e "${GREEN}部署完成${NC}"
+    if [[ "$RECOVER" -eq 1 ]]; then
+      echo -e "${GREEN}恢复完成${NC}"
+    else
+      echo -e "${GREEN}部署完成${NC}"
+    fi
     echo -e "${GREEN}========================================${NC}"
     echo ""
     echo -e "${BLUE}访问地址:${NC}"
@@ -368,13 +420,15 @@ deploy() {
     echo "  查看日志: docker compose logs -f gateway node"
     echo "  停止服务: docker compose down"
     echo "  再次部署: ./deploy.sh"
-    echo "  仅更新应用: ./deploy.sh   # 或 DEPLOY_PRUNE_IMAGES=0 ./deploy.sh --skip-build 后手动 build"
+    echo "  异常退出快速恢复: ./deploy.sh --recover"
+    echo "  仅更新应用: ./deploy.sh --skip-build"
     echo ""
     echo -e "${YELLOW}勿对生产环境使用 compose down -v（会清空数据库与上传文件）${NC}"
     show_baota_hint
   else
     echo -e "${RED}服务可能未就绪，请检查日志:${NC}"
     echo "  docker compose logs -f gateway node postgres redis"
+    echo "  若容器为 Exited：./deploy.sh --recover"
     exit 1
   fi
 }
@@ -393,10 +447,18 @@ main() {
   check_docker
   check_prerequisites
   setup_env
-  prompt_base_images_mode
+  warn_if_exited
+  # 恢复模式不拉基础镜像，跳过交互选择
+  if [[ "$RECOVER" -eq 0 && "$PULL_ONLY" -eq 0 ]]; then
+    prompt_base_images_mode
+  fi
   resolve_base_images_mode
   echo "  基础镜像方式: ${BASE_IMAGES_MODE}"
-  print_mirror_hint_once
+  if [[ "$RECOVER" -eq 1 ]]; then
+    echo -e "  ${GREEN}模式: recover（仅拉起 + 验收）${NC}"
+  else
+    print_mirror_hint_once
+  fi
   if [[ "$PULL_ONLY" -eq 1 ]]; then
     pre_pull_base_images
     exit 0

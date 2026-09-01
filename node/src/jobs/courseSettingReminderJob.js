@@ -35,9 +35,10 @@ async function notifySetting(client, setting) {
 export async function runCourseSettingReminderScan() {
   if (running) return;
   running = true;
-  const pool = getPool();
-  const client = await pool.connect();
+  let client;
   try {
+    // connect 必须在 try 内：PG 重启/断连时否则会变成未捕获异常打垮整个 API 进程
+    client = await getPool().connect();
     const { rows } = await client.query(
       `SELECT cs.id, cs.teacher_personal_class_id, cs.teacher_id, cs.module_key,
               cs.deadline_date, cs.reminder_days, tpc.name AS class_name
@@ -63,14 +64,24 @@ export async function runCourseSettingReminderScan() {
         );
         await client.query('COMMIT');
       } catch (e) {
-        await client.query('ROLLBACK');
+        try {
+          await client.query('ROLLBACK');
+        } catch (rollbackErr) {
+          logError(`course setting reminder rollback settingId=${setting.id}`, rollbackErr);
+        }
         logError(`course setting reminder settingId=${setting.id}`, e);
       }
     }
   } catch (e) {
     logError('course setting reminder scan', e);
   } finally {
-    client.release();
+    if (client) {
+      try {
+        client.release();
+      } catch (releaseErr) {
+        logError('course setting reminder release', releaseErr);
+      }
+    }
     running = false;
   }
 }
@@ -79,10 +90,9 @@ export function startCourseSettingReminderJob() {
   if (started) return;
   started = true;
   const intervalMs = 60 * 60 * 1000;
-  setTimeout(() => {
-    void runCourseSettingReminderScan();
-  }, 10000);
-  setInterval(() => {
-    void runCourseSettingReminderScan();
-  }, intervalMs);
+  const tick = () => {
+    void runCourseSettingReminderScan().catch((e) => logError('course setting reminder tick', e));
+  };
+  setTimeout(tick, 10000);
+  setInterval(tick, intervalMs);
 }

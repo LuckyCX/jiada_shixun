@@ -6,6 +6,8 @@
 services:
   postgres:
     image: ${POSTGRES_IMAGE:-postgres:15-alpine}
+    # Docker/宿主机重启后自动拉起，避免 Exited(255) 后整站躺平
+    restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-jiada_shixun}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-jiuan@123}
@@ -27,11 +29,19 @@ services:
 
   redis:
     image: ${REDIS_IMAGE:-redis:7-alpine}
-    command: redis-server --appendonly yes
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?请在 .env 设置 REDIS_PASSWORD}
+    command:
+      - sh
+      - -c
+      - exec redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"
     volumes:
       - redisdata:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -42,9 +52,11 @@ services:
       dockerfile: Dockerfile
       args:
         NODE_IMAGE: ${NODE_IMAGE:-docker.1ms.run/library/node:20-bookworm-slim}
+    restart: unless-stopped
     environment:
       DB_HOST: postgres
       REDIS_HOST: redis
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
       PORT: ${PORT:-4000}
       PG_POOL_MAX: ${PG_POOL_MAX:-30}
       LIBREOFFICE_BIN: ${LIBREOFFICE_BIN:-/usr/bin/soffice}
@@ -66,6 +78,7 @@ services:
       args:
         WEB_BUILD_NODE_IMAGE: ${WEB_BUILD_NODE_IMAGE:-${NODE_IMAGE:-docker.1ms.run/library/node:20-bookworm-slim}}
         NGINX_IMAGE: ${NGINX_IMAGE:-docker.1ms.run/library/nginx:1.27-alpine}
+    restart: unless-stopped
     ports:
       - "${GATEWAY_PORT:-18081}:80"
     depends_on:
