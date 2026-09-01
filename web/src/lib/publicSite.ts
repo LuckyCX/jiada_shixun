@@ -12,6 +12,8 @@ export type PublicSite = {
   logoUrl: string;
   /** 对外访问根地址，用于问卷外链等（如 https://train.example.com） */
   publicBaseUrl: string;
+  /** 创世纪 EconoVerse 学生端根地址（如 http://localhost:5173 或线上域名） */
+  econoverseOrigin: string;
   /** 首页 Hero 背景图（data URL 或 https 地址）；空则用内置默认图 */
   heroBackgroundUrl: string;
   /** 首页 Hero 主标题（与导航站点标题独立；留空则不展示） */
@@ -24,6 +26,7 @@ const empty: PublicSite = {
   siteTitle: '',
   logoUrl: '',
   publicBaseUrl: '',
+  econoverseOrigin: '',
   heroBackgroundUrl: '',
   heroTitle: '',
   heroSubtitle: '',
@@ -64,6 +67,7 @@ export async function fetchPublicSite(force = false): Promise<PublicSite> {
       siteTitle: String(d.siteTitle ?? '').trim(),
       logoUrl: String(d.logoUrl ?? '').trim(),
       publicBaseUrl: String(d.publicBaseUrl ?? '').trim().replace(/\/$/, ''),
+      econoverseOrigin: String(d.econoverseOrigin ?? '').trim().replace(/\/$/, ''),
       heroBackgroundUrl: String(d.heroBackgroundUrl ?? '').trim(),
       heroTitle: String(d.heroTitle ?? '').trim(),
       heroSubtitle: String(d.heroSubtitle ?? '').trim(),

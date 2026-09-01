@@ -184,6 +184,7 @@ export default function SystemConfigPanel() {
     siteTitle: '',
     logoUrl: '',
     publicBaseUrl: '',
+    econoverseOrigin: '',
     heroBackgroundUrl: '',
     heroTitle: '',
     heroSubtitle: '',
@@ -250,6 +251,7 @@ export default function SystemConfigPanel() {
       siteTitle: String(s.siteTitle || ''),
       logoUrl: String(s.logoUrl || ''),
       publicBaseUrl: String(s.publicBaseUrl || '').trim().replace(/\/$/, ''),
+      econoverseOrigin: String(s.econoverseOrigin || '').trim().replace(/\/$/, ''),
       heroBackgroundUrl: String(s.heroBackgroundUrl || ''),
       heroTitle: String(s.heroTitle || ''),
       heroSubtitle: String(s.heroSubtitle || ''),
@@ -362,6 +364,7 @@ export default function SystemConfigPanel() {
         siteTitle: site.siteTitle.trim(),
         logoUrl: site.logoUrl.trim(),
         publicBaseUrl: site.publicBaseUrl.trim().replace(/\/$/, ''),
+        econoverseOrigin: site.econoverseOrigin.trim().replace(/\/$/, ''),
         heroBackgroundUrl: site.heroBackgroundUrl.trim(),
         heroTitle: site.heroTitle.trim(),
         heroSubtitle: site.heroSubtitle.trim(),
@@ -836,6 +839,16 @@ export default function SystemConfigPanel() {
                 value={site.publicBaseUrl}
                 onChange={(e) => setSite((s) => ({ ...s, publicBaseUrl: e.target.value.trim() }))}
                 placeholder="https://train.jiuanci.com"
+              />
+            </Form.Item>
+            <Form.Item
+              label="创世纪游戏地址"
+              extra="学生端「创世纪 · 建城」跳转根地址（独立 EconoVerse 站点）。本地默认示例 http://localhost:5173；生产填实际域名，勿带末尾 /"
+            >
+              <Input
+                value={site.econoverseOrigin}
+                onChange={(e) => setSite((s) => ({ ...s, econoverseOrigin: e.target.value.trim() }))}
+                placeholder="http://localhost:5173"
               />
             </Form.Item>
             <Form.Item>

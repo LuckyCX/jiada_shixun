@@ -16,6 +16,7 @@ export function getRedis() {
       client = new Redis({
         host: r.host,
         port: r.port,
+        password: r.password,
         maxRetriesPerRequest: 2,
         enableReadyCheck: true,
       });

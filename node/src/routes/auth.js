@@ -2,11 +2,55 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { query } from '../lib/db.js';
 import { logError } from '../lib/logError.js';
-import { signAccessToken, signRefreshToken, verifyAndRevokeRefreshToken } from '../lib/authTokens.js';
+import {
+  signAccessToken,
+  signRefreshToken,
+  signEconoverseHopTicket,
+  verifyAndConsumeEconoverseHopTicket,
+  verifyAndRevokeRefreshToken,
+} from '../lib/authTokens.js';
 import { randomInt } from 'crypto';
 import { sendSmtpMail } from '../lib/mailProvider.js';
+import { requireAuth, requireStudent } from '../middleware/auth.js';
 
 const router = Router();
+
+/** 组装创世纪跳转后给游戏用的学生档案 */
+async function loadEconoverseProfile(userId) {
+  const { rows } = await query(
+    `SELECT u.id, u.username, u.real_name AS "realName", u.student_no AS "studentNo", u.role, u.status,
+            cls.name AS "className",
+            COALESCE(col_u.name, col_c.name) AS "collegeName"
+     FROM users u
+     LEFT JOIN colleges col_u ON col_u.id = CASE
+         WHEN trim(COALESCE(u.department, '')) ~ '^[0-9]+$' THEN trim(u.department)::bigint
+         ELSE NULL
+       END
+     LEFT JOIN LATERAL (
+       SELECT c.id, c.name, c.college_id
+       FROM class_students cs
+       JOIN classes c ON c.id = cs.class_id
+       WHERE cs.student_id = u.id
+       ORDER BY cs.joined_at DESC, cs.id DESC
+       LIMIT 1
+     ) cls ON (true)
+     LEFT JOIN colleges col_c ON col_c.id = cls.college_id
+     WHERE u.id = $1 AND u.role = 'student'`,
+    [userId]
+  );
+  if (!rows.length) return null;
+  const r = rows[0];
+  if (r.status !== 'active') return null;
+  return {
+    userId: String(r.id),
+    username: r.username || '',
+    studentNo: r.studentNo != null ? String(r.studentNo).trim() : '',
+    realName: r.realName || '',
+    className: r.className || '',
+    collegeName: r.collegeName || '',
+    role: r.role,
+  };
+}
 
 function normalizeEmail(value) {
   const s = String(value || '').trim().toLowerCase();
@@ -169,6 +213,75 @@ router.post('/password-reset/confirm', async (req, res) => {
     return res.json({ code: 0, message: '已重置', data: { saved: true }, traceId: req.traceId });
   } catch (e) {
     logError(`POST /api/auth/password-reset/confirm traceId=${req.traceId}`, e);
+    return res.status(500).json({ code: 50000, message: e.message, data: null, traceId: req.traceId });
+  }
+});
+
+/** 已登录学生签发创世纪跨站 hop（可反复点击） */
+router.post('/econoverse-ticket', requireAuth(), requireStudent(), async (req, res) => {
+  try {
+    const userId = Number(String(req.user?.sub || '').trim());
+    if (!Number.isFinite(userId) || userId <= 0) {
+      return res.status(400).json({ code: 40001, message: '无效用户', data: null, traceId: req.traceId });
+    }
+    const { rows } = await query(
+      `SELECT id, username, role, status FROM users WHERE id = $1 AND role = 'student'`,
+      [userId]
+    );
+    if (!rows.length || rows[0].status !== 'active') {
+      return res.status(401).json({ code: 40102, message: '账号不可用', data: null, traceId: req.traceId });
+    }
+    const u = rows[0];
+    const { ticket, expiresIn } = await signEconoverseHopTicket({
+      id: u.id,
+      username: u.username,
+      role: u.role,
+    });
+    return res.json({
+      code: 0,
+      message: 'OK',
+      data: { ticket, expiresIn },
+      traceId: req.traceId,
+    });
+  } catch (e) {
+    logError(`POST /api/auth/econoverse-ticket traceId=${req.traceId}`, e);
+    return res.status(500).json({ code: 50000, message: e.message, data: null, traceId: req.traceId });
+  }
+});
+
+/**
+ * 兑换 hop 为游戏会话（access + refresh）与学生档案。
+ * hop 消费后不可复用；学生绑定与云档不受影响。
+ */
+router.post('/econoverse-ticket/exchange', async (req, res) => {
+  try {
+    const ticket = typeof req.body?.ticket === 'string' ? req.body.ticket.trim() : '';
+    if (!ticket) {
+      return res.status(400).json({ code: 40001, message: '缺少 ticket', data: null, traceId: req.traceId });
+    }
+    const hopped = await verifyAndConsumeEconoverseHopTicket(ticket);
+    if (!hopped) {
+      return res.status(401).json({ code: 40102, message: '跳转已失效，请从嘉大实训重新进入', data: null, traceId: req.traceId });
+    }
+    const profile = await loadEconoverseProfile(hopped.id);
+    if (!profile) {
+      return res.status(401).json({ code: 40102, message: '账号不可用', data: null, traceId: req.traceId });
+    }
+    const fresh = { id: profile.userId, username: profile.username, role: profile.role };
+    const token = await signAccessToken(fresh);
+    const refreshToken = await signRefreshToken(fresh);
+    return res.json({
+      code: 0,
+      message: 'OK',
+      data: {
+        token,
+        refreshToken,
+        user: profile,
+      },
+      traceId: req.traceId,
+    });
+  } catch (e) {
+    logError(`POST /api/auth/econoverse-ticket/exchange traceId=${req.traceId}`, e);
     return res.status(500).json({ code: 50000, message: e.message, data: null, traceId: req.traceId });
   }
 });
