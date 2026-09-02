@@ -5,11 +5,12 @@ export function useMajorOptions(enabled: boolean, collegeId?: string) {
   const [rows, setRows] = useState<PublicMajorRow[]>([]);
   const [loading, setLoading] = useState(false);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (collegeIdOverride?: string) => {
     if (!enabled) return;
+    const cid = collegeIdOverride ?? collegeId;
     setLoading(true);
     try {
-      const data = await fetchPublicMajors(collegeId);
+      const data = await fetchPublicMajors(cid);
       setRows(data);
     } catch {
       setRows([]);
@@ -32,5 +33,5 @@ export function useMajorOptions(enabled: boolean, collegeId?: string) {
     [rows]
   );
 
-  return { options, loading, labelByValue, rows };
+  return { options, loading, labelByValue, rows, reload: load };
 }

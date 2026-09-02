@@ -36,6 +36,13 @@ export type PublicMajorRow = {
   collegeName: string;
 };
 
+export async function createAdminMajor(collegeId: string, name: string): Promise<PublicMajorRow> {
+  return adminFetch('/api/admin/majors', {
+    method: 'POST',
+    body: JSON.stringify({ collegeId, name }),
+  });
+}
+
 export async function fetchPublicMajors(collegeId?: string): Promise<PublicMajorRow[]> {
   const q = collegeId ? `?collegeId=${encodeURIComponent(collegeId)}` : '';
   const res = await fetch(`/api/public/majors${q}`, { credentials: 'include' });

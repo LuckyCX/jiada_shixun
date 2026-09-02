@@ -153,6 +153,49 @@ router.post('/admin/colleges', requireAuth(), requireAdmin(), async (req, res) =
   }
 });
 
+/** 管理端：在指定学院下新建专业 */
+router.post('/admin/majors', requireAuth(), requireAdmin(), async (req, res) => {
+  try {
+    const collegeId = Number(req.body?.collegeId);
+    const name = String(req.body?.name || '').trim();
+    if (!Number.isFinite(collegeId) || collegeId <= 0) {
+      return bad(req, res, 400, 40001, '请选择学院');
+    }
+    if (!name) return bad(req, res, 400, 40002, '专业名称不能为空');
+    const { rows: col } = await getPool().query(`SELECT id, name FROM colleges WHERE id = $1`, [collegeId]);
+    if (!col.length) return bad(req, res, 404, 40401, '学院不存在');
+    const { rows } = await getPool().query(
+      `INSERT INTO majors (college_id, name, status) VALUES ($1, $2, 'active')
+       ON CONFLICT (college_id, name) DO UPDATE SET status = 'active', updated_at = now()
+       RETURNING id, name, college_id AS "collegeId"`,
+      [collegeId, name]
+    );
+    const r = rows[0];
+    await insertAdminOperationLog({
+      operatorId: req.user?.sub,
+      module: 'admin_college',
+      action: 'create_major',
+      targetType: 'major',
+      targetId: r?.id,
+      detailText: `创建专业：${col[0].name} / ${r?.name || name}`,
+    });
+    return ok(
+      req,
+      res,
+      {
+        id: String(r.id),
+        name: r.name,
+        collegeId: String(r.collegeId),
+        collegeName: col[0].name,
+      },
+      '已创建'
+    );
+  } catch (e) {
+    logError(`POST /api/admin/majors traceId=${req.traceId}`, e);
+    return bad(req, res, 500, 50000, e.message);
+  }
+});
+
 router.patch('/admin/colleges/:id', requireAuth(), requireAdmin(), async (req, res) => {
   try {
     const id = Number(req.params.id);
