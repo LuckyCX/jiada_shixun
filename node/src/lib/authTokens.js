@@ -43,35 +43,42 @@ export async function signRefreshToken(user) {
   return token;
 }
 
-/** 跨站进入创世纪的短 hop（仅开门用，不作废学生绑定） */
+/** 跨站进入创世纪的短 hop TTL */
 const ECONOVERSE_HOP_TTL_SEC = 120;
 
 /**
- * 为学生签发创世纪跳转 hop（每次点击都可签发）。
+ * 签发创世纪跳转 hop（学生或教师管理端）。
  * @param {{ id: string|number, username: string, role: string }} user
+ * @param {{ typ: string, personalClassId: string|number }} meta
  */
-export async function signEconoverseHopTicket(user) {
+export async function signEconoverseHopTicket(user, meta) {
   const secret = await getJwtSecret();
   const jti = randomUUID();
   const userId = String(user.id);
+  const personalClassId = String(meta.personalClassId);
   const token = jwt.sign(
     {
       sub: userId,
       username: user.username,
       role: user.role,
-      typ: 'econoverse_jump',
+      typ: meta.typ,
+      personalClassId,
       jti,
     },
     secret,
     { expiresIn: ECONOVERSE_HOP_TTL_SEC }
   );
-  await cacheSetJson(`auth:econoverse-ticket:${jti}`, { userId, role: user.role }, ECONOVERSE_HOP_TTL_SEC);
+  await cacheSetJson(
+    `auth:econoverse-ticket:${jti}`,
+    { userId, role: user.role, typ: meta.typ, personalClassId },
+    ECONOVERSE_HOP_TTL_SEC
+  );
   return { ticket: token, expiresIn: ECONOVERSE_HOP_TTL_SEC };
 }
 
 /**
- * 校验并一次性消费 hop，返回用户身份（调用方再签发长期 access/refresh）。
- * @returns {{ id: string, username: string, role: string } | null}
+ * 校验并一次性消费 hop。
+ * @returns {{ id: string, username: string, role: string, typ: string, personalClassId: string } | null}
  */
 export async function verifyAndConsumeEconoverseHopTicket(ticket) {
   const secret = await getJwtSecret();
@@ -81,8 +88,17 @@ export async function verifyAndConsumeEconoverseHopTicket(ticket) {
   } catch {
     return null;
   }
-  if (payload.typ !== 'econoverse_jump' || !payload.jti || !payload.sub) return null;
-  if (payload.role !== 'student') return null;
+  const typ = String(payload.typ || '');
+  if (
+    (typ !== 'econoverse_jump' && typ !== 'econoverse_admin_jump') ||
+    !payload.jti ||
+    !payload.sub ||
+    !payload.personalClassId
+  ) {
+    return null;
+  }
+  if (typ === 'econoverse_jump' && payload.role !== 'student') return null;
+  if (typ === 'econoverse_admin_jump' && payload.role !== 'teacher') return null;
   const key = `auth:econoverse-ticket:${payload.jti}`;
   const sess = await cacheGetJson(key);
   if (!sess) return null;
@@ -95,6 +111,8 @@ export async function verifyAndConsumeEconoverseHopTicket(ticket) {
     id: String(payload.sub),
     username: String(payload.username || ''),
     role: String(payload.role || ''),
+    typ,
+    personalClassId: String(payload.personalClassId),
   };
 }
 

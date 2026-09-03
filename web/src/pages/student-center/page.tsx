@@ -2074,7 +2074,7 @@ export default function StudentCenterPage() {
           <div className="px-2 space-y-0.5 mb-2">
             <button
               type="button"
-              onClick={() => void openEconoverse()}
+              onClick={() => selectedClassId && void openEconoverse(selectedClassId)}
               title={sidebarCollapsed ? '创世纪 · 建城' : undefined}
               className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all cursor-pointer whitespace-nowrap text-emerald-700 hover:text-emerald-900 hover:bg-emerald-50 border border-transparent hover:border-emerald-100 ${sidebarCollapsed ? 'justify-center' : ''}`}
             >
@@ -2205,7 +2205,7 @@ export default function StudentCenterPage() {
             <div className="flex items-center gap-3">
               <button
                 type="button"
-                onClick={() => void openEconoverse()}
+                onClick={() => selectedClassId && void openEconoverse(selectedClassId)}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition-colors cursor-pointer whitespace-nowrap"
                 title="进入创世纪建城（学号云档，可续玩）"
               >
@@ -2432,7 +2432,7 @@ export default function StudentCenterPage() {
 
               <button
                 type="button"
-                onClick={() => void openEconoverse()}
+                onClick={() => selectedClassId && void openEconoverse(selectedClassId)}
                 className="w-full text-left bg-gradient-to-r from-emerald-50 to-green-50 border border-emerald-200 rounded-2xl p-5 hover:shadow-md hover:border-emerald-300 transition-all cursor-pointer"
               >
                 <div className="flex items-center gap-4">

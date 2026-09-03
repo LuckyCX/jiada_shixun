@@ -22,6 +22,8 @@ import ClassProjectOverview from '../class-project-overview/page';
 import TeacherGuide from '../teacher-guide/page';
 import CourseSettings from '../course-settings/page';
 import EvaluationPanel from './components/EvaluationPanel';
+import { openEconoverseAdmin } from '../../lib/econoverseUrl';
+import { usePublicDictOptions } from '../admin-dashboard/components/classManagement/usePublicDictOptions';
 import {
   getTeacherProfile,
   listTeacherPersonalClasses,
@@ -199,6 +201,9 @@ export default function TeacherDashboard() {
   const [monitorTeamsLoading, setMonitorTeamsLoading] = useState(false);
   const [teamQuestionsSavedTick, setTeamQuestionsSavedTick] = useState(0);
   const [teamQuestionsDirty, setTeamQuestionsDirty] = useState(false);
+  const [econoverseAdminModalOpen, setEconoverseAdminModalOpen] = useState(false);
+  const [econoverseAdminJumpLoading, setEconoverseAdminJumpLoading] = useState(false);
+  const { labelByValue: semesterLabel } = usePublicDictOptions('semester', true);
 
   const leaveTeamQuestionsPreset = () => {
     setTeamQuestionsDirty(false);
@@ -345,6 +350,17 @@ export default function TeacherDashboard() {
       ? selectedPersonalClass?.id ?? null
       : null;
     setTeacherTab(key, { classId, sub: null });
+  };
+
+  /** 创世纪管理后台：先确认当前个性化班，再签发 hop 跳转 */
+  const confirmOpenEconoverseAdmin = async () => {
+    if (!selectedPersonalClass?.id) return;
+    setEconoverseAdminJumpLoading(true);
+    try {
+      await openEconoverseAdmin(selectedPersonalClass.id);
+    } finally {
+      setEconoverseAdminJumpLoading(false);
+    }
   };
 
   const renderContent = () => {
@@ -707,6 +723,17 @@ export default function TeacherDashboard() {
                 </button>
               </Dropdown>
             )}
+            {selectedPersonalClass && (
+              <button
+                type="button"
+                onClick={() => setEconoverseAdminModalOpen(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition-colors cursor-pointer whitespace-nowrap"
+                title="配置本班创世纪地图与实训节奏"
+              >
+                <i className="ri-building-2-line" />
+                创世纪配置
+              </button>
+            )}
             {/* <button className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors cursor-pointer relative">
               <i className="ri-notification-3-line text-base"></i>
               <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>
@@ -721,6 +748,39 @@ export default function TeacherDashboard() {
             </button>
           </div>
         </header>
+
+        <Modal
+          title="进入创世纪 · 地图配置"
+          open={econoverseAdminModalOpen}
+          onCancel={() => !econoverseAdminJumpLoading && setEconoverseAdminModalOpen(false)}
+          onOk={() => void confirmOpenEconoverseAdmin()}
+          okText="确认进入"
+          cancelText="取消"
+          confirmLoading={econoverseAdminJumpLoading}
+          destroyOnClose
+          width={480}
+        >
+          {selectedPersonalClass ? (
+            <div className="flex flex-col gap-4 text-sm text-gray-700">
+              <p className="leading-relaxed m-0">
+                创世纪游戏的<strong className="font-semibold text-gray-900">地图与实训节奏</strong>
+                与您创建的<strong className="font-semibold text-gray-900">个性化班级</strong>
+                一一绑定。在本后台发布的内容，仅对下方班级生效；学生需在该班内进入创世纪才会加载对应配置。
+              </p>
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50/80 p-4">
+                <div className="text-xs font-medium text-emerald-800 mb-2">当前选择的班级</div>
+                <div className="text-base font-bold text-gray-900">{selectedPersonalClass.name}</div>
+                <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-sm">
+                  <dt className="text-gray-500">学生人数</dt>
+                  <dd className="m-0 font-medium text-gray-800">{selectedPersonalClass.studentCount ?? 0} 人</dd>
+                </dl>
+              </div>
+              <p className="text-xs text-gray-500 m-0">
+                若需配置其他班级，请先在页头切换班级后再点击「创世纪配置」。
+              </p>
+            </div>
+          ) : null}
+        </Modal>
 
         <Drawer
           open={profileModalOpen}

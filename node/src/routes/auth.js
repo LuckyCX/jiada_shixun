@@ -11,32 +11,44 @@ import {
 } from '../lib/authTokens.js';
 import { randomInt } from 'crypto';
 import { sendSmtpMail } from '../lib/mailProvider.js';
-import { requireAuth, requireStudent } from '../middleware/auth.js';
+import { requireAuth, requireStudent, requireTeacher } from '../middleware/auth.js';
+import { getPool } from '../lib/db.js';
 
 const router = Router();
 
-/** 组装创世纪跳转后给游戏用的学生档案 */
-async function loadEconoverseProfile(userId) {
+function parsePersonalClassId(body) {
+  const id = Number(String(body?.personalClassId ?? '').trim());
+  return Number.isFinite(id) && id > 0 ? id : null;
+}
+
+async function studentEnrolledInPersonalClass(studentId, classId) {
+  const { rows } = await getPool().query(
+    `SELECT 1 FROM teacher_personal_class_students
+     WHERE teacher_personal_class_id = $1 AND student_id = $2`,
+    [classId, studentId]
+  );
+  return rows.length > 0;
+}
+
+async function teacherOwnsPersonalClass(teacherId, classId) {
+  const { rows } = await getPool().query(
+    `SELECT id, name FROM teacher_personal_classes WHERE id = $1 AND teacher_id = $2`,
+    [classId, teacherId]
+  );
+  return rows[0] || null;
+}
+
+/** 学生创世纪档案（含教学班） */
+async function loadEconoverseStudentProfile(userId, personalClassId) {
   const { rows } = await query(
     `SELECT u.id, u.username, u.real_name AS "realName", u.student_no AS "studentNo", u.role, u.status,
-            cls.name AS "className",
-            COALESCE(col_u.name, col_c.name) AS "collegeName"
+            tpc.name AS "personalClassName"
      FROM users u
-     LEFT JOIN colleges col_u ON col_u.id = CASE
-         WHEN trim(COALESCE(u.department, '')) ~ '^[0-9]+$' THEN trim(u.department)::bigint
-         ELSE NULL
-       END
-     LEFT JOIN LATERAL (
-       SELECT c.id, c.name, c.college_id
-       FROM class_students cs
-       JOIN classes c ON c.id = cs.class_id
-       WHERE cs.student_id = u.id
-       ORDER BY cs.joined_at DESC, cs.id DESC
-       LIMIT 1
-     ) cls ON (true)
-     LEFT JOIN colleges col_c ON col_c.id = cls.college_id
+     JOIN teacher_personal_class_students tpcs
+       ON tpcs.student_id = u.id AND tpcs.teacher_personal_class_id = $2
+     JOIN teacher_personal_classes tpc ON tpc.id = tpcs.teacher_personal_class_id
      WHERE u.id = $1 AND u.role = 'student'`,
-    [userId]
+    [userId, personalClassId]
   );
   if (!rows.length) return null;
   const r = rows[0];
@@ -46,8 +58,32 @@ async function loadEconoverseProfile(userId) {
     username: r.username || '',
     studentNo: r.studentNo != null ? String(r.studentNo).trim() : '',
     realName: r.realName || '',
-    className: r.className || '',
-    collegeName: r.collegeName || '',
+    personalClassId: String(personalClassId),
+    personalClassName: r.personalClassName || '',
+    role: r.role,
+  };
+}
+
+/** 教师创世纪档案（含教学班） */
+async function loadEconoverseTeacherProfile(userId, personalClassId) {
+  const { rows } = await query(
+    `SELECT u.id, u.username, u.real_name AS "realName", u.role, u.status,
+            tpc.name AS "personalClassName"
+     FROM users u
+     JOIN teacher_personal_classes tpc ON tpc.teacher_id = u.id AND tpc.id = $2
+     WHERE u.id = $1 AND u.role = 'teacher'`,
+    [userId, personalClassId]
+  );
+  if (!rows.length) return null;
+  const r = rows[0];
+  if (r.status !== 'active') return null;
+  return {
+    userId: String(r.id),
+    username: r.username || '',
+    studentNo: '',
+    realName: r.realName || r.username || '',
+    personalClassId: String(personalClassId),
+    personalClassName: r.personalClassName || '',
     role: r.role,
   };
 }
@@ -217,12 +253,19 @@ router.post('/password-reset/confirm', async (req, res) => {
   }
 });
 
-/** 已登录学生签发创世纪跨站 hop（可反复点击） */
+/** 已登录学生签发创世纪跨站 hop（须指定已加入的教学班） */
 router.post('/econoverse-ticket', requireAuth(), requireStudent(), async (req, res) => {
   try {
     const userId = Number(String(req.user?.sub || '').trim());
+    const personalClassId = parsePersonalClassId(req.body);
     if (!Number.isFinite(userId) || userId <= 0) {
       return res.status(400).json({ code: 40001, message: '无效用户', data: null, traceId: req.traceId });
+    }
+    if (!personalClassId) {
+      return res.status(400).json({ code: 40002, message: '缺少 personalClassId', data: null, traceId: req.traceId });
+    }
+    if (!(await studentEnrolledInPersonalClass(userId, personalClassId))) {
+      return res.status(403).json({ code: 40301, message: '未加入该教学班', data: null, traceId: req.traceId });
     }
     const { rows } = await query(
       `SELECT id, username, role, status FROM users WHERE id = $1 AND role = 'student'`,
@@ -232,15 +275,14 @@ router.post('/econoverse-ticket', requireAuth(), requireStudent(), async (req, r
       return res.status(401).json({ code: 40102, message: '账号不可用', data: null, traceId: req.traceId });
     }
     const u = rows[0];
-    const { ticket, expiresIn } = await signEconoverseHopTicket({
-      id: u.id,
-      username: u.username,
-      role: u.role,
-    });
+    const { ticket, expiresIn } = await signEconoverseHopTicket(
+      { id: u.id, username: u.username, role: u.role },
+      { typ: 'econoverse_jump', personalClassId }
+    );
     return res.json({
       code: 0,
       message: 'OK',
-      data: { ticket, expiresIn },
+      data: { ticket, expiresIn, personalClassId: String(personalClassId) },
       traceId: req.traceId,
     });
   } catch (e) {
@@ -249,9 +291,47 @@ router.post('/econoverse-ticket', requireAuth(), requireStudent(), async (req, r
   }
 });
 
+/** 已登录教师签发创世纪管理后台 hop */
+router.post('/econoverse-admin-ticket', requireAuth(), requireTeacher(), async (req, res) => {
+  try {
+    const userId = Number(String(req.user?.sub || '').trim());
+    const personalClassId = parsePersonalClassId(req.body);
+    if (!Number.isFinite(userId) || userId <= 0) {
+      return res.status(400).json({ code: 40001, message: '无效用户', data: null, traceId: req.traceId });
+    }
+    if (!personalClassId) {
+      return res.status(400).json({ code: 40002, message: '缺少 personalClassId', data: null, traceId: req.traceId });
+    }
+    const owned = await teacherOwnsPersonalClass(userId, personalClassId);
+    if (!owned) {
+      return res.status(403).json({ code: 40301, message: '无权管理该教学班', data: null, traceId: req.traceId });
+    }
+    const { rows } = await query(
+      `SELECT id, username, role, status FROM users WHERE id = $1 AND role = 'teacher'`,
+      [userId]
+    );
+    if (!rows.length || rows[0].status !== 'active') {
+      return res.status(401).json({ code: 40102, message: '账号不可用', data: null, traceId: req.traceId });
+    }
+    const u = rows[0];
+    const { ticket, expiresIn } = await signEconoverseHopTicket(
+      { id: u.id, username: u.username, role: u.role },
+      { typ: 'econoverse_admin_jump', personalClassId }
+    );
+    return res.json({
+      code: 0,
+      message: 'OK',
+      data: { ticket, expiresIn, personalClassId: String(personalClassId) },
+      traceId: req.traceId,
+    });
+  } catch (e) {
+    logError(`POST /api/auth/econoverse-admin-ticket traceId=${req.traceId}`, e);
+    return res.status(500).json({ code: 50000, message: e.message, data: null, traceId: req.traceId });
+  }
+});
+
 /**
- * 兑换 hop 为游戏会话（access + refresh）与学生档案。
- * hop 消费后不可复用；学生绑定与云档不受影响。
+ * 兑换 hop 为游戏会话（access + refresh）与用户档案。
  */
 router.post('/econoverse-ticket/exchange', async (req, res) => {
   try {
@@ -263,9 +343,15 @@ router.post('/econoverse-ticket/exchange', async (req, res) => {
     if (!hopped) {
       return res.status(401).json({ code: 40102, message: '跳转已失效，请从嘉大实训重新进入', data: null, traceId: req.traceId });
     }
-    const profile = await loadEconoverseProfile(hopped.id);
+    const classId = Number(hopped.personalClassId);
+    let profile = null;
+    if (hopped.typ === 'econoverse_jump') {
+      profile = await loadEconoverseStudentProfile(hopped.id, classId);
+    } else if (hopped.typ === 'econoverse_admin_jump') {
+      profile = await loadEconoverseTeacherProfile(hopped.id, classId);
+    }
     if (!profile) {
-      return res.status(401).json({ code: 40102, message: '账号不可用', data: null, traceId: req.traceId });
+      return res.status(401).json({ code: 40102, message: '账号或班级不可用', data: null, traceId: req.traceId });
     }
     const fresh = { id: profile.userId, username: profile.username, role: profile.role };
     const token = await signAccessToken(fresh);
@@ -277,6 +363,7 @@ router.post('/econoverse-ticket/exchange', async (req, res) => {
         token,
         refreshToken,
         user: profile,
+        hopTyp: hopped.typ,
       },
       traceId: req.traceId,
     });

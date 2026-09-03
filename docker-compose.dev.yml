@@ -1,0 +1,10 @@
+# 本地 Node 进程（pnpm dev:local）直连：PG 15433、Redis 16380
+# 用法：docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d postgres redis
+services:
+  postgres:
+    ports:
+      - "15433:5432"
+
+  redis:
+    ports:
+      - "16380:6379"

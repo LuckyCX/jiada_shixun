@@ -16,7 +16,6 @@ import {
 import { studentHasActivePersonalClassWithToken } from '../../lib/studentPortalApi';
 import { useSiteBrand } from '../../lib/publicSite';
 import { USER_GUIDE_PATH } from '../../lib/appPaths';
-import { openEconoverse } from '../../lib/econoverseUrl';
 import bg from '../../assets/images/bg.jpg';
 
 function getRequiredPortalRole(link: string): PortalRole | null {
@@ -158,7 +157,8 @@ export default function Home() {
             navigate(expected === 'admin' ? '/admin-dashboard' : '/teacher-dashboard');
             return;
           }
-          void openEconoverse();
+          message.info('请先在学生中心选择教学班，再进入创世纪');
+          navigate('/student-center');
           return;
         }
         const req = getRequiredPortalRole(pendingNavTarget);
@@ -205,7 +205,8 @@ export default function Home() {
         message.warning('请使用学生账号进入创世纪');
         return;
       }
-      void openEconoverse();
+      message.info('请先在学生中心选择教学班，再进入创世纪');
+      navigate('/student-center');
       return;
     }
     if (!isLoggedIn || !userInfo) {

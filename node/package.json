@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "dev:local": "DB_HOST=localhost DB_PORT=15433 REDIS_HOST=localhost REDIS_PORT=16380 node --watch src/server.js",
+    "dev:local": "sh -c 'set -a; [ -f ../.env ] && . ../.env; set +a; export DB_HOST=localhost DB_PORT=15433 REDIS_HOST=localhost REDIS_PORT=16380; exec node --watch src/server.js'",
     "dev:remote": "DB_HOST=47.99.96.4 DB_PORT=15433 REDIS_HOST=47.99.96.4 REDIS_PORT=16380 node --watch src/server.js"
   },
   "dependencies": {

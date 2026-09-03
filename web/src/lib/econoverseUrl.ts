@@ -23,11 +23,18 @@ export async function resolveEconoverseOrigin(): Promise<string> {
   return DEV_FALLBACK_ORIGIN;
 }
 
+function normalizeClassId(personalClassId: string): string {
+  const id = String(personalClassId || '').trim();
+  if (!id) throw new Error('请先选择教学班');
+  return id;
+}
+
 /**
- * 已登录学生：申请 hop 并跳转到创世纪（可反复进入，云档跟学号走）。
+ * 已登录学生：申请 hop 并跳转到创世纪（须指定学生中心当前教学班）。
  */
-export async function openEconoverse(): Promise<void> {
+export async function openEconoverse(personalClassId: string): Promise<void> {
   try {
+    const classId = normalizeClassId(personalClassId);
     const origin = await resolveEconoverseOrigin();
     if (!origin) {
       message.error('未配置创世纪地址，请管理员在「系统配置 → 站点」填写游戏外链');
@@ -35,16 +42,43 @@ export async function openEconoverse(): Promise<void> {
     }
     const data = (await portalAuthenticatedFetch('student', '/api/auth/econoverse-ticket', {
       method: 'POST',
-      body: '{}',
+      body: JSON.stringify({ personalClassId: classId }),
     })) as { ticket?: string };
     const ticket = typeof data?.ticket === 'string' ? data.ticket.trim() : '';
     if (!ticket) {
       message.error('未能签发跳转凭证，请稍后重试');
       return;
     }
-    const url = `${origin}/?ticket=${encodeURIComponent(ticket)}`;
+    const url = `${origin}/?ticket=${encodeURIComponent(ticket)}&personalClassId=${encodeURIComponent(classId)}`;
     window.location.assign(url);
   } catch (err) {
     message.error((err as Error).message || '进入创世纪失败');
+  }
+}
+
+/**
+ * 已登录教师：进入创世纪地图管理后台（须指定当前个性化班）。
+ */
+export async function openEconoverseAdmin(personalClassId: string): Promise<void> {
+  try {
+    const classId = normalizeClassId(personalClassId);
+    const origin = await resolveEconoverseOrigin();
+    if (!origin) {
+      message.error('未配置创世纪地址，请管理员在「系统配置 → 站点」填写游戏外链');
+      return;
+    }
+    const data = (await portalAuthenticatedFetch('teacher', '/api/auth/econoverse-admin-ticket', {
+      method: 'POST',
+      body: JSON.stringify({ personalClassId: classId }),
+    })) as { ticket?: string };
+    const ticket = typeof data?.ticket === 'string' ? data.ticket.trim() : '';
+    if (!ticket) {
+      message.error('未能签发跳转凭证，请稍后重试');
+      return;
+    }
+    const url = `${origin}/admin.html?ticket=${encodeURIComponent(ticket)}&personalClassId=${encodeURIComponent(classId)}`;
+    window.location.assign(url);
+  } catch (err) {
+    message.error((err as Error).message || '进入创世纪管理后台失败');
   }
 }
