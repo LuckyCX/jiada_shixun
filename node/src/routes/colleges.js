@@ -585,6 +585,21 @@ router.delete('/admin/classes/:id', requireAuth(), requireAdmin(), async (req, r
   try {
     const id = Number(req.params.id);
     if (!Number.isFinite(id) || id <= 0) return bad(req, res, 400, 40001, '无效班级 id');
+    // 有在班学生时禁止删除，避免只删班留下孤儿账号后无法再导入
+    const { rows: cntRows } = await getPool().query(
+      `SELECT COUNT(*)::int AS n FROM class_students WHERE class_id = $1`,
+      [id]
+    );
+    const studentCount = cntRows[0]?.n ?? 0;
+    if (studentCount > 0) {
+      return bad(
+        req,
+        res,
+        400,
+        40004,
+        `班级内仍有 ${studentCount} 名学生，请先移除学生或直接修改班级名称，勿删除后重建`
+      );
+    }
     const { rowCount } = await getPool().query(`DELETE FROM classes WHERE id = $1`, [id]);
     if (!rowCount) return bad(req, res, 404, 40401, '班级不存在');
     await insertAdminOperationLog({

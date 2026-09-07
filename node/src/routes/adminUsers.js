@@ -47,6 +47,78 @@ function mapUserRow(r) {
   };
 }
 
+/** 查询学生当前行政班列表（按入班时间倒序） */
+async function listStudentAdminClasses(poolOrClient, studentId) {
+  const { rows } = await poolOrClient.query(
+    `SELECT c.id AS "classId", c.name AS "className"
+     FROM class_students cs
+     JOIN classes c ON c.id = cs.class_id
+     WHERE cs.student_id = $1
+     ORDER BY cs.joined_at DESC`,
+    [studentId]
+  );
+  return rows.map((r) => ({
+    classId: String(r.classId),
+    className: r.className || '',
+  }));
+}
+
+/**
+ * 将已有学生挂到目标行政班。
+ * @returns {{ ok: true, action: 'already'|'linked'|'moved'|'skipped' } | { ok: false, conflict: object } | { ok: false, error: string }}
+ */
+async function attachExistingStudentToClass(poolOrClient, {
+  userId,
+  idNumber,
+  displayName,
+  targetClassId,
+  otherClassPolicy,
+  sourceRow,
+}) {
+  const memberships = await listStudentAdminClasses(poolOrClient, userId);
+  const inTarget = memberships.some((m) => m.classId === String(targetClassId));
+  if (inTarget) return { ok: true, action: 'already' };
+
+  const others = memberships.filter((m) => m.classId !== String(targetClassId));
+  if (!others.length) {
+    await poolOrClient.query(
+      `INSERT INTO class_students (class_id, student_id) VALUES ($1, $2)
+       ON CONFLICT (class_id, student_id) DO NOTHING`,
+      [targetClassId, userId]
+    );
+    return { ok: true, action: 'linked' };
+  }
+
+  const primary = others[0];
+  if (!otherClassPolicy) {
+    return {
+      ok: false,
+      conflict: {
+        row: sourceRow ?? null,
+        userId: String(userId),
+        idNumber,
+        name: displayName || '',
+        currentClassId: primary.classId,
+        currentClassName: primary.className,
+        targetClassId: String(targetClassId),
+      },
+    };
+  }
+  if (otherClassPolicy === 'skip') {
+    return { ok: true, action: 'skipped' };
+  }
+  if (otherClassPolicy === 'move') {
+    await poolOrClient.query(`DELETE FROM class_students WHERE student_id = $1`, [userId]);
+    await poolOrClient.query(
+      `INSERT INTO class_students (class_id, student_id) VALUES ($1, $2)
+       ON CONFLICT (class_id, student_id) DO NOTHING`,
+      [targetClassId, userId]
+    );
+    return { ok: true, action: 'moved' };
+  }
+  return { ok: false, error: '无效的 otherClassPolicy' };
+}
+
 /** 列表 + 全局统计 */
 router.get('/admin/users', requireAuth(), requireAdmin(), async (req, res) => {
   try {
@@ -173,7 +245,8 @@ router.get('/admin/users', requireAuth(), requireAdmin(), async (req, res) => {
 
 router.post('/admin/users', requireAuth(), requireAdmin(), async (req, res) => {
   try {
-    const { name, role, idNumber, email, department, majorId, password } = req.body || {};
+    const { name, role, idNumber, email, department, majorId, password, classId, otherClassPolicy } =
+      req.body || {};
     const rn = String(name || '').trim();
     const id = String(idNumber || '').trim();
     const dept = String(department || '').trim();
@@ -181,6 +254,11 @@ router.post('/admin/users', requireAuth(), requireAdmin(), async (req, res) => {
       majorId != null && String(majorId).trim() !== '' ? Number(String(majorId).trim()) : null;
     const em = email != null && String(email).trim() !== '' ? String(email).trim() : null;
     const pwd = String(password || '');
+    const classIdNum =
+      classId != null && String(classId).trim() !== '' ? Number(String(classId).trim()) : null;
+    const policyRaw = otherClassPolicy != null ? String(otherClassPolicy).trim() : '';
+    const policy =
+      policyRaw === 'skip' || policyRaw === 'move' ? policyRaw : undefined;
 
     if (!rn) return bad(req, res, 400, 40001, '请输入姓名');
     if (!['student', 'teacher'].includes(role)) return bad(req, res, 400, 40002, '角色仅支持学生或教师');
@@ -210,26 +288,99 @@ router.post('/admin/users', requireAuth(), requireAdmin(), async (req, res) => {
       }
       majorIdDb = majorIdNum;
     }
-    if (!pwd) return bad(req, res, 400, 40005, '缺少初始密码');
+    if (role === 'student' && classIdNum != null) {
+      if (!Number.isFinite(classIdNum) || classIdNum <= 0) {
+        return bad(req, res, 400, 40012, '无效的班级 ID');
+      }
+      const { rows: cl } = await getPool().query(`SELECT id, college_id FROM classes WHERE id = $1`, [
+        classIdNum,
+      ]);
+      if (!cl.length) return bad(req, res, 400, 40013, '班级不存在');
+      if (Number(cl[0].college_id) !== collegeIdNum) {
+        return bad(req, res, 400, 40014, '班级不属于所选学院');
+      }
+    }
     if (em && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) {
       return bad(req, res, 400, 40006, '邮箱格式错误');
     }
 
-    const { rows: dup } = await getPool().query(`SELECT id FROM users WHERE username = $1`, [id]);
-    if (dup.length) return bad(req, res, 409, 40901, '学号/工号已存在');
+    const pool = getPool();
+    const { rows: dup } = await pool.query(
+      `SELECT id, username, real_name, email, role, status, student_no, employee_no, department, major_id,
+              last_login_at, created_at, COALESCE(avatar_url, '') AS avatar_url
+       FROM users WHERE username = $1`,
+      [id]
+    );
+
+    // 学号已存在：学生可挂到目标班；教师仍报冲突
+    if (dup.length) {
+      const exist = dup[0];
+      if (role === 'student' && exist.role === 'student' && classIdNum) {
+        const attach = await attachExistingStudentToClass(pool, {
+          userId: exist.id,
+          idNumber: id,
+          displayName: exist.real_name || rn,
+          targetClassId: classIdNum,
+          otherClassPolicy: policy,
+        });
+        if (!attach.ok && attach.conflict) {
+          return res.status(409).json({
+            code: 40902,
+            message: `该学号已在行政班「${attach.conflict.currentClassName || attach.conflict.currentClassId}」`,
+            data: { conflict: attach.conflict },
+            traceId: req.traceId,
+          });
+        }
+        if (!attach.ok) return bad(req, res, 400, 40015, attach.error || '入班失败');
+        if (attach.action === 'skipped') {
+          return bad(req, res, 400, 40016, '已按选择跳过该学号，未加入目标班级');
+        }
+        const memberships = await listStudentAdminClasses(pool, exist.id);
+        const primary = memberships[0];
+        return ok(
+          req,
+          res,
+          mapUserRow({
+            ...exist,
+            class_id: primary ? Number(primary.classId) : null,
+            class_name: primary?.className || null,
+          }),
+          attach.action === 'moved'
+            ? '已从原行政班挪入目标班级'
+            : attach.action === 'already'
+              ? '该生已在目标班级'
+              : '已将已有账号加入目标班级'
+        );
+      }
+      return bad(req, res, 409, 40901, '学号/工号已存在');
+    }
+
+    if (!pwd) return bad(req, res, 400, 40005, '缺少初始密码');
 
     const password_hash = await bcrypt.hash(pwd, 10);
     const student_no = role === 'student' ? id : null;
     const employee_no = role === 'teacher' ? id : null;
 
-    const { rows } = await getPool().query(
+    const { rows } = await pool.query(
       `INSERT INTO users (username, password_hash, real_name, email, role, status, student_no, employee_no, department, major_id)
        VALUES ($1, $2, $3, $4, $5, 'active', $6, $7, $8, $9)
        RETURNING id, username, real_name, email, role, status, student_no, employee_no, department, major_id, last_login_at, created_at`,
       [id, password_hash, rn, em, role, student_no, employee_no, dept, majorIdDb]
     );
     const u = rows[0];
-    return ok(req, res, mapUserRow({ ...u, class_id: null, class_name: null }));
+    let class_id = null;
+    let class_name = null;
+    if (role === 'student' && classIdNum) {
+      await pool.query(
+        `INSERT INTO class_students (class_id, student_id) VALUES ($1, $2)
+         ON CONFLICT (class_id, student_id) DO NOTHING`,
+        [classIdNum, u.id]
+      );
+      const { rows: cn } = await pool.query(`SELECT name FROM classes WHERE id = $1`, [classIdNum]);
+      class_id = classIdNum;
+      class_name = cn[0]?.name || null;
+    }
+    return ok(req, res, mapUserRow({ ...u, class_id, class_name }));
   } catch (e) {
     logError(`POST /api/admin/users traceId=${req.traceId}`, e);
     return bad(req, res, 500, 50000, e.message);
@@ -440,6 +591,85 @@ router.delete('/admin/users/:id', requireAuth(), requireAdmin(), async (req, res
   }
 });
 
+/** 批量删除学生：先移出教师个性化班级，再删账号 */
+router.post('/admin/users/batch-delete', requireAuth(), requireAdmin(), async (req, res) => {
+  try {
+    const rawIds = req.body?.ids;
+    if (!Array.isArray(rawIds) || !rawIds.length) return bad(req, res, 400, 40001, '请选择要删除的学生');
+    if (rawIds.length > 200) return bad(req, res, 400, 40002, '单次最多删除 200 人');
+
+    const idSet = new Set();
+    for (const x of rawIds) {
+      const n = Number(String(x ?? '').trim());
+      if (Number.isFinite(n) && n > 0) idSet.add(n);
+    }
+    const ids = [...idSet];
+    if (!ids.length) return bad(req, res, 400, 40001, '请选择要删除的学生');
+
+    const selfId = Number(req.user?.sub);
+    if (Number.isFinite(selfId) && ids.includes(selfId)) {
+      return bad(req, res, 400, 40003, '不能删除当前登录账号');
+    }
+
+    const classIdRaw = req.body?.classId != null ? String(req.body.classId).trim() : '';
+    const classIdNum = classIdRaw ? Number(classIdRaw) : NaN;
+
+    const pool = getPool();
+    let targetIds = ids;
+
+    // 限定本班学生：避免误删未在该行政班的账号
+    if (classIdRaw) {
+      if (!Number.isFinite(classIdNum) || classIdNum <= 0) {
+        return bad(req, res, 400, 40004, '无效的班级 ID');
+      }
+      const { rows: inClass } = await pool.query(
+        `SELECT u.id
+         FROM users u
+         INNER JOIN class_students cs ON cs.student_id = u.id AND cs.class_id = $1
+         WHERE u.id = ANY($2::bigint[]) AND u.role = 'student'`,
+        [classIdNum, ids]
+      );
+      targetIds = inClass.map((r) => Number(r.id));
+      if (!targetIds.length) {
+        return bad(req, res, 400, 40005, '所选用户均不在本班或不存在');
+      }
+    } else {
+      const { rows: students } = await pool.query(
+        `SELECT id FROM users WHERE id = ANY($1::bigint[]) AND role = 'student'`,
+        [ids]
+      );
+      targetIds = students.map((r) => Number(r.id));
+      if (!targetIds.length) return bad(req, res, 400, 40006, '未找到可删除的学生账号');
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      // 先移出教师个性化班级（即使 users 有 CASCADE，也便于统计并保证入班关系先清）
+      const rem = await client.query(
+        `DELETE FROM teacher_personal_class_students WHERE student_id = ANY($1::bigint[])`,
+        [targetIds]
+      );
+      const del = await client.query(`DELETE FROM users WHERE id = ANY($1::bigint[]) AND role = 'student'`, [
+        targetIds,
+      ]);
+      await client.query('COMMIT');
+      return ok(req, res, {
+        deleted: del.rowCount ?? 0,
+        removedFromPersonalClasses: rem.rowCount ?? 0,
+      });
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+  } catch (e) {
+    logError(`POST /api/admin/users/batch-delete traceId=${req.traceId}`, e);
+    return bad(req, res, 500, 50000, e.message);
+  }
+});
+
 function normalizeRole(r) {
   const s = String(r || '').trim().toLowerCase();
   if (s === '学生' || s === 'student') return 'student';
@@ -453,21 +683,26 @@ router.post('/admin/users/batch', requireAuth(), requireAdmin(), async (req, res
     if (!Array.isArray(rows) || !rows.length) return bad(req, res, 400, 40001, '缺少导入数据');
     if (rows.length > 500) return bad(req, res, 400, 40002, '单次最多 500 条');
 
+    const policyRaw = req.body?.otherClassPolicy != null ? String(req.body.otherClassPolicy).trim() : '';
+    const otherClassPolicy =
+      policyRaw === 'skip' || policyRaw === 'move' ? policyRaw : undefined;
+
     const errors = [];
+    const conflicts = [];
     let success = 0;
+    let skipped = 0;
 
     const usernames = [
-      ...new Set(
-        rows.map((row) => String(row?.idNumber || '').trim()).filter(Boolean)
-      ),
+      ...new Set(rows.map((row) => String(row?.idNumber || '').trim()).filter(Boolean)),
     ];
-    const existingUsernames = new Set();
+    /** username -> 已有用户摘要 */
+    const existingByUsername = new Map();
     if (usernames.length) {
       const { rows: dupRows } = await getPool().query(
-        `SELECT username FROM users WHERE username = ANY($1::text[])`,
+        `SELECT id, username, real_name, role FROM users WHERE username = ANY($1::text[])`,
         [usernames]
       );
-      for (const d of dupRows) existingUsernames.add(d.username);
+      for (const d of dupRows) existingByUsername.set(d.username, d);
     }
 
     const collegeActiveCache = new Map();
@@ -480,9 +715,9 @@ router.post('/admin/users/batch', requireAuth(), requireAdmin(), async (req, res
         `SELECT id FROM colleges WHERE id = $1 AND status = 'active'`,
         [collegeIdNum]
       );
-      const ok = co.length > 0;
-      collegeActiveCache.set(collegeIdNum, ok);
-      return ok;
+      const okCollege = co.length > 0;
+      collegeActiveCache.set(collegeIdNum, okCollege);
+      return okCollege;
     }
 
     async function majorCollegeId(majorIdNum) {
@@ -505,6 +740,9 @@ router.post('/admin/users/batch', requireAuth(), requireAdmin(), async (req, res
       classCollegeCache.set(classIdNum, cid);
       return cid;
     }
+
+    // 本批次内已处理的学号，避免同文件重复行二次创建
+    const seenInBatch = new Set();
 
     for (let idx = 0; idx < rows.length; idx++) {
       const row = rows[idx] || {};
@@ -594,10 +832,39 @@ router.post('/admin/users/batch', requireAuth(), requireAdmin(), async (req, res
           }
         }
 
-        if (existingUsernames.has(idNumber)) {
+        const exist = existingByUsername.get(idNumber);
+        if (exist) {
+          if (role === 'student' && exist.role === 'student') {
+            const attach = await attachExistingStudentToClass(getPool(), {
+              userId: exist.id,
+              idNumber,
+              displayName: exist.real_name || name,
+              targetClassId: classIdNum,
+              otherClassPolicy,
+              sourceRow: rowNo,
+            });
+            if (!attach.ok && attach.conflict) {
+              conflicts.push(attach.conflict);
+              continue;
+            }
+            if (!attach.ok) {
+              errors.push({ row: rowNo, reason: attach.error || '入班失败' });
+              continue;
+            }
+            if (attach.action === 'skipped') skipped++;
+            else success++;
+            seenInBatch.add(idNumber);
+            continue;
+          }
           errors.push({ row: rowNo, reason: '学号/工号已存在' });
           continue;
         }
+
+        if (seenInBatch.has(idNumber)) {
+          errors.push({ row: rowNo, reason: '本文件内学号/工号重复' });
+          continue;
+        }
+
         const password_hash = await bcrypt.hash(pwd, 10);
         const student_no = role === 'student' ? idNumber : null;
         const employee_no = role === 'teacher' ? idNumber : null;
@@ -606,24 +873,32 @@ router.post('/admin/users/batch', requireAuth(), requireAdmin(), async (req, res
         const ins = await getPool().query(
           `INSERT INTO users (username, password_hash, real_name, email, role, status, student_no, employee_no, department, major_id)
            VALUES ($1, $2, $3, $4, $5, 'active', $6, $7, $8, $9)
-           RETURNING id`,
+           RETURNING id, username, real_name, role`,
           [idNumber, password_hash, name, email, role, student_no, employee_no, department, majorIdDb]
         );
-        const newUserId = ins.rows[0].id;
+        const newUser = ins.rows[0];
         if (role === 'student' && classIdNum) {
           await getPool().query(
             `INSERT INTO class_students (class_id, student_id) VALUES ($1, $2) ON CONFLICT (class_id, student_id) DO NOTHING`,
-            [classIdNum, newUserId]
+            [classIdNum, newUser.id]
           );
         }
-        existingUsernames.add(idNumber);
+        existingByUsername.set(idNumber, newUser);
+        seenInBatch.add(idNumber);
         success++;
       } catch (e) {
         errors.push({ row: rowNo, reason: e.message || '写入失败' });
       }
     }
 
-    return ok(req, res, { success, failed: errors.length, errors });
+    return ok(req, res, {
+      success,
+      failed: errors.length,
+      skipped,
+      errors,
+      conflicts,
+      needsDecision: conflicts.length > 0 && !otherClassPolicy,
+    });
   } catch (e) {
     logError(`POST /api/admin/users/batch traceId=${req.traceId}`, e);
     return bad(req, res, 500, 50000, e.message);

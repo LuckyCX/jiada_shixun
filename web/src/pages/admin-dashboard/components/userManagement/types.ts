@@ -29,11 +29,24 @@ export interface UserStats {
   activeUsers: number;
 }
 
+export interface ImportConflict {
+  row: number | null;
+  userId: string;
+  idNumber: string;
+  name: string;
+  currentClassId: string;
+  currentClassName: string;
+  targetClassId: string;
+}
+
 export interface ImportResult {
   success: number;
   failed: number;
+  skipped?: number;
   errors: Array<{
     row: number;
     reason: string;
   }>;
+  conflicts?: ImportConflict[];
+  needsDecision?: boolean;
 }

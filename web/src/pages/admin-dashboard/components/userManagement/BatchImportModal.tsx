@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Button, Cascader, message, Select, Space } from 'antd';
-import type { ImportResult } from './types';
+import type { ImportConflict, ImportResult } from './types';
 import type { BatchImportRow } from './adminUsersApi';
 import { fetchAdminClasses } from './adminUsersApi';
 import { fetchAdminColleges, fetchPublicMajors, type AdminCollegeRow } from '../collegeApi';
@@ -8,7 +8,10 @@ import { fetchAdminColleges, fetchPublicMajors, type AdminCollegeRow } from '../
 interface BatchImportModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onImport: (rows: BatchImportRow[]) => Promise<ImportResult>;
+  onImport: (
+    rows: BatchImportRow[],
+    opts?: { otherClassPolicy?: 'skip' | 'move' }
+  ) => Promise<ImportResult>;
   /** 锁定学院 id，禁用学院选择 */
   lockedCollegeId?: string;
   /** 锁定班级 id（学生行入班）；教师批量时可不设 */
@@ -112,6 +115,9 @@ export default function BatchImportModal({
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
+  /** 已解析待导入行：他班冲突确认后带 policy 再提交 */
+  const [pendingRows, setPendingRows] = useState<BatchImportRow[] | null>(null);
+  const [pendingConflicts, setPendingConflicts] = useState<ImportConflict[] | null>(null);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -396,6 +402,17 @@ export default function BatchImportModal({
       }, 350);
 
       const result = await onImport(rows);
+      if (result.needsDecision && result.conflicts && result.conflicts.length > 0) {
+        setPendingRows(rows);
+        setPendingConflicts(result.conflicts);
+        importOk = true;
+        if (progressInterval) {
+          window.clearInterval(progressInterval);
+          progressInterval = undefined;
+        }
+        setUploadProgress(100);
+        return;
+      }
       importOk = true;
       if (progressInterval) {
         window.clearInterval(progressInterval);
@@ -412,11 +429,28 @@ export default function BatchImportModal({
     }
   };
 
+  const handleConflictDecision = async (policy: 'skip' | 'move') => {
+    if (!pendingRows?.length) return;
+    setIsUploading(true);
+    try {
+      const result = await onImport(pendingRows, { otherClassPolicy: policy });
+      setPendingRows(null);
+      setPendingConflicts(null);
+      setImportResult(result);
+    } catch (error: unknown) {
+      message.error(error instanceof Error ? error.message : '处理冲突失败');
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
   const handleClose = () => {
     setFile(null);
     setIsUploading(false);
     setUploadProgress(0);
     setImportResult(null);
+    setPendingRows(null);
+    setPendingConflicts(null);
     if (!lockedCollegeId) setTplCollegeId('');
     if (!lockedMajorId) setTplMajorId('');
     if (!lockedClassId) setTplClassId('');
@@ -438,7 +472,61 @@ export default function BatchImportModal({
         </div>
 
         <div className="p-6 space-y-5">
-          {!importResult ? (
+          {pendingConflicts && pendingConflicts.length > 0 ? (
+            <>
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+                <h4 className="text-base font-semibold text-amber-900 mb-1">部分学号已在其他行政班</h4>
+                <p className="text-sm text-amber-800">
+                  共 {pendingConflicts.length} 人。请选择：跳过这些人，或从原行政班挪到当前导入目标班。其他无冲突行已处理。
+                </p>
+              </div>
+              <div className="border border-gray-200 rounded-lg max-h-60 overflow-y-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50 sticky top-0">
+                    <tr className="text-left text-gray-600">
+                      <th className="px-3 py-2 font-medium">行号</th>
+                      <th className="px-3 py-2 font-medium">姓名</th>
+                      <th className="px-3 py-2 font-medium">学号</th>
+                      <th className="px-3 py-2 font-medium">当前行政班</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pendingConflicts.map((c, i) => (
+                      <tr key={`${c.idNumber}-${i}`} className="border-t border-gray-100">
+                        <td className="px-3 py-2 text-gray-500">{c.row ?? '—'}</td>
+                        <td className="px-3 py-2 text-gray-900">{c.name || '—'}</td>
+                        <td className="px-3 py-2 text-gray-900">{c.idNumber}</td>
+                        <td className="px-3 py-2 text-gray-700">{c.currentClassName || c.currentClassId}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="flex flex-col sm:flex-row gap-3 pt-2">
+                <Button block size="large" disabled={isUploading} onClick={handleClose}>
+                  取消（保留已导入部分）
+                </Button>
+                <Button
+                  block
+                  size="large"
+                  disabled={isUploading}
+                  onClick={() => void handleConflictDecision('skip')}
+                >
+                  {isUploading ? '处理中...' : '过滤（跳过这些人）'}
+                </Button>
+                <Button
+                  type="primary"
+                  block
+                  size="large"
+                  className="!bg-teal-600 hover:!bg-teal-700"
+                  disabled={isUploading}
+                  onClick={() => void handleConflictDecision('move')}
+                >
+                  {isUploading ? '处理中...' : '从旧班挪过来'}
+                </Button>
+              </div>
+            </>
+          ) : !importResult ? (
             <>
               <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
                 <div className="text-sm font-medium text-gray-800 mb-2">{preSelectTitle}</div>
@@ -676,6 +764,12 @@ export default function BatchImportModal({
                   <span>
                     成功 <span className="text-green-600 font-semibold text-base">{importResult.success}</span> 条
                   </span>
+                  {(importResult.skipped ?? 0) > 0 && (
+                    <span>
+                      跳过{' '}
+                      <span className="text-amber-600 font-semibold text-base">{importResult.skipped}</span> 条
+                    </span>
+                  )}
                   <span>
                     失败 <span className="text-red-600 font-semibold text-base">{importResult.failed}</span> 条
                   </span>

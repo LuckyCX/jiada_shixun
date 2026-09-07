@@ -386,7 +386,13 @@ export async function portalAuthenticatedFetch(
     throw new Error(typeof j.message === 'string' ? j.message : msg);
   }
   if (!r.ok || j.code !== 0) {
-    throw new Error(typeof j.message === 'string' ? j.message : `HTTP ${r.status}`);
+    const err = new Error(typeof j.message === 'string' ? j.message : `HTTP ${r.status}`) as Error & {
+      code?: number;
+      data?: unknown;
+    };
+    if (typeof j.code === 'number') err.code = j.code;
+    if (j.data !== undefined) err.data = j.data;
+    throw err;
   }
   return j.data;
 }

@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Button, Card, Cascader, Input, message, Select, Space, Spin, Statistic, Table, Tag } from 'antd';
+import { useCallback, useEffect, useMemo, useState, type Key } from 'react';
+import { Button, Card, Cascader, Input, Modal, message, Select, Space, Spin, Statistic, Table, Tag } from 'antd';
 import type { TableProps } from 'antd';
 import { User, UserRole, UserStatus } from './types';
 import { useCollegeDictOptions } from './useCollegeDictOptions';
@@ -11,6 +11,7 @@ import ResetPasswordModal from './ResetPasswordModal';
 import type { AdminUserStats } from './adminUsersApi';
 import {
   createAdminUser,
+  batchDeleteAdminUsers,
   deleteAdminUser,
   fetchAdminUsers,
   patchAdminUserPassword,
@@ -20,6 +21,11 @@ import {
 } from './adminUsersApi';
 import { useMajorOptions } from './useMajorOptions';
 import UserAvatar from '../../../../components/UserAvatar';
+
+type ApiErrorWithData = Error & {
+  code?: number;
+  data?: { conflict?: { currentClassName?: string; currentClassId?: string; name?: string; idNumber?: string } };
+};
 
 export type AdminUsersPanelScope = 'all' | 'college-teachers' | 'class-students';
 
@@ -65,6 +71,8 @@ export default function AdminUsersPanel({ scope, collegeId = '', classId = '', m
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isResetPasswordOpen, setIsResetPasswordOpen] = useState(false);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
+  const [selectedRowKeys, setSelectedRowKeys] = useState<Key[]>([]);
+  const [batchDeleting, setBatchDeleting] = useState(false);
 
   const fixedRole = scope === 'college-teachers' ? ('teacher' as const) : scope === 'class-students' ? ('student' as const) : undefined;
 
@@ -75,6 +83,7 @@ export default function AdminUsersPanel({ scope, collegeId = '', classId = '', m
 
   useEffect(() => {
     setPage(1);
+    setSelectedRowKeys([]);
   }, [debouncedQ, roleFilter, statusFilter, collegeFilter, majorFilter, scope, collegeId, classId]);
 
   const filterCollegeId = scope === 'college-teachers' ? collegeId : collegeFilter;
@@ -140,8 +149,10 @@ export default function AdminUsersPanel({ scope, collegeId = '', classId = '', m
     majorId?: string;
     password: string;
   }) => {
-    try {
-      const created = await createAdminUser({
+    const targetClassId = scope === 'class-students' && userData.role === 'student' ? classId : undefined;
+
+    const submitOnce = async (otherClassPolicy?: 'skip' | 'move') => {
+      return createAdminUser({
         name: userData.name,
         role: userData.role,
         idNumber: userData.idNumber,
@@ -151,15 +162,53 @@ export default function AdminUsersPanel({ scope, collegeId = '', classId = '', m
           ? { majorId: userData.majorId.trim() }
           : {}),
         ...(userData.email?.trim() ? { email: userData.email.trim() } : {}),
+        ...(targetClassId ? { classId: targetClassId } : {}),
+        ...(otherClassPolicy ? { otherClassPolicy } : {}),
       });
-      if (scope === 'class-students' && userData.role === 'student' && classId) {
-        await updateAdminUser(created.id, { classId });
-      }
-      message.success(`用户 ${userData.name} 已成功创建`);
+    };
+
+    try {
+      const created = await submitOnce();
+      message.success(
+        targetClassId ? `学生 ${userData.name} 已加入本班` : `用户 ${userData.name} 已成功创建`
+      );
       setIsAddModalOpen(false);
       await loadUsers();
+      return created;
     } catch (e: unknown) {
-      message.error(e instanceof Error ? e.message : '创建失败');
+      const err = e as ApiErrorWithData;
+      // 已在其他行政班：弹窗选择过滤（取消）或挪班
+      if (err?.code === 40902 && targetClassId && err.data?.conflict) {
+        const c = err.data.conflict;
+        const classLabel = c.currentClassName || c.currentClassId || '其他班级';
+        return new Promise<void>((resolve, reject) => {
+          Modal.confirm({
+            title: '学号已在其他行政班',
+            content: `「${c.name || userData.name}」（${c.idNumber || userData.idNumber}）当前在「${classLabel}」。请选择过滤（不添加）或从旧班挪到本班。`,
+            okText: '从旧班挪过来',
+            cancelText: '过滤（不添加）',
+            onOk: async () => {
+              try {
+                await submitOnce('move');
+                message.success(`已将 ${userData.name} 从原班挪入本班`);
+                setIsAddModalOpen(false);
+                await loadUsers();
+                resolve();
+              } catch (e2: unknown) {
+                message.error(e2 instanceof Error ? e2.message : '挪班失败');
+                reject(e2);
+              }
+            },
+            onCancel: () => {
+              reject(Object.assign(new Error('已取消添加'), { silent: true }));
+            },
+          });
+        });
+      }
+      if (!(err as { silent?: boolean })?.silent) {
+        message.error(err instanceof Error ? err.message : '创建失败');
+      }
+      throw e;
     }
   };
 
@@ -205,10 +254,64 @@ export default function AdminUsersPanel({ scope, collegeId = '', classId = '', m
       message.success(`用户 ${selectedUser.name} 已删除`);
       setIsDeleteModalOpen(false);
       setSelectedUser(null);
+      setSelectedRowKeys((keys) => keys.filter((k) => String(k) !== selectedUser.id));
       await loadUsers();
     } catch (e: unknown) {
       message.error(e instanceof Error ? e.message : '删除失败');
     }
+  };
+
+  const handleBatchDeleteStudents = () => {
+    if (scope !== 'class-students' || !classId) return;
+    const ids = selectedRowKeys.map((k) => String(k)).filter(Boolean);
+    if (!ids.length) {
+      message.warning('请先勾选要删除的学生');
+      return;
+    }
+    const preview = users.filter((u) => ids.includes(u.id)).slice(0, 8);
+    const more = ids.length - preview.length;
+    Modal.confirm({
+      title: `确认批量删除 ${ids.length} 名学生？`,
+      width: 480,
+      content: (
+        <div className="text-sm text-gray-600 space-y-2">
+          <p>将永久删除所选学生账号，不可恢复。</p>
+          <p>
+            若这些学生曾被加入教师创建的<strong>个性化班级</strong>，将自动从对应班级中移除。
+          </p>
+          <ul className="list-disc pl-5 text-gray-700 max-h-40 overflow-y-auto">
+            {preview.map((u) => (
+              <li key={u.id}>
+                {u.name}
+                {(u.studentId || u.username) ? `（${u.studentId || u.username}）` : ''}
+              </li>
+            ))}
+            {more > 0 ? <li>…另有 {more} 人</li> : null}
+          </ul>
+        </div>
+      ),
+      okText: '确认删除',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        setBatchDeleting(true);
+        try {
+          const result = await batchDeleteAdminUsers(ids, { classId });
+          const tip =
+            result.removedFromPersonalClasses > 0
+              ? `已删除 ${result.deleted} 人，并从个性化班级移出 ${result.removedFromPersonalClasses} 条入班记录`
+              : `已删除 ${result.deleted} 人`;
+          message.success(tip);
+          setSelectedRowKeys([]);
+          await loadUsers();
+        } catch (e: unknown) {
+          message.error(e instanceof Error ? e.message : '批量删除失败');
+          throw e;
+        } finally {
+          setBatchDeleting(false);
+        }
+      },
+    });
   };
 
   const handleResetPassword = async (userId: string, newPassword: string) => {
@@ -234,15 +337,32 @@ export default function AdminUsersPanel({ scope, collegeId = '', classId = '', m
   const showMajorCol = scope === 'all' || scope === 'class-students' || scope === 'college-teachers';
   const showClassCol = scope === 'all';
   const actionColWidth = scope === 'all' ? 220 : 260;
+  const nameColWidth = scope === 'class-students' ? 270 : 240;
 
   const columns: TableProps<User>['columns'] = [
         {
           title: '姓名',
           key: 'name',
-          width: 240,
-          ellipsis: true,
+          width: nameColWidth,
+          ellipsis: scope !== 'class-students',
           render: (_, u) => {
             const idNo = (u.studentId || u.employeeId || u.username || '').trim();
+            // 班级学生管理：加宽姓名列并完整展示学号，避免截断
+            if (scope === 'class-students') {
+              return (
+                <div className="flex items-center gap-3 min-w-0">
+                  <UserAvatar name={u.name} avatarUrl={u.avatarUrl} size="sm" className="shrink-0" />
+                  <div className="min-w-0 leading-snug">
+                    <div className="text-sm font-medium text-gray-900 break-all">{u.name}</div>
+                    {idNo ? (
+                      <div className="text-xs text-gray-500 break-all mt-0.5" title={idNo}>
+                        {idNo}
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              );
+            }
             return (
               <div className="flex items-center gap-3 min-w-0">
                 <UserAvatar name={u.name} avatarUrl={u.avatarUrl} size="sm" className="shrink-0" />
@@ -506,6 +626,17 @@ export default function AdminUsersPanel({ scope, collegeId = '', classId = '', m
             <i className="ri-upload-2-line mr-1.5" />
             批量导入
           </Button>
+          {scope === 'class-students' ? (
+            <Button
+              danger
+              disabled={!selectedRowKeys.length || batchDeleting}
+              loading={batchDeleting}
+              onClick={handleBatchDeleteStudents}
+            >
+              <i className="ri-delete-bin-line mr-1.5" />
+              批量删除{selectedRowKeys.length ? `（${selectedRowKeys.length}）` : ''}
+            </Button>
+          ) : null}
           <Button type="primary" className="!bg-teal-600 hover:!bg-teal-700" onClick={() => setIsAddModalOpen(true)}>
             <i className="ri-add-line mr-1.5" />
             {scope === 'all' ? '新增用户' : scope === 'college-teachers' ? '新增教师' : '新增学生'}
@@ -519,7 +650,16 @@ export default function AdminUsersPanel({ scope, collegeId = '', classId = '', m
             rowKey="id"
             columns={columns}
             dataSource={users}
-            scroll={{ x: scope === 'all' ? 1180 : 920 }}
+            rowSelection={
+              scope === 'class-students'
+                ? {
+                    selectedRowKeys,
+                    onChange: (keys) => setSelectedRowKeys(keys),
+                    preserveSelectedRowKeys: true,
+                  }
+                : undefined
+            }
+            scroll={{ x: scope === 'all' ? 1180 : scope === 'class-students' ? 980 : 920 }}
             locale={{ emptyText: '暂无用户数据' }}
             pagination={{
               current: page,
@@ -555,8 +695,8 @@ export default function AdminUsersPanel({ scope, collegeId = '', classId = '', m
         lockedMajorId={scope === 'class-students' ? majorId : undefined}
         lockedMajorLabel={scope === 'class-students' ? majorName : undefined}
         lockedRole={fixedRole}
-        onImport={async (rows) => {
-          const result = await postAdminUsersBatch(rows);
+        onImport={async (rows, opts) => {
+          const result = await postAdminUsersBatch(rows, opts);
           void loadUsers();
           return result;
         }}

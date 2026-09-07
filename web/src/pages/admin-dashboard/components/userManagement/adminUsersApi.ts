@@ -84,6 +84,10 @@ export async function createAdminUser(body: {
   department: string;
   majorId?: string;
   password: string;
+  /** 学生入班：创建或挂到已有账号时使用 */
+  classId?: string;
+  /** 已在其他行政班时：skip 跳过 / move 挪班 */
+  otherClassPolicy?: 'skip' | 'move';
 }): Promise<User> {
   const payload: Record<string, unknown> = {
     name: body.name,
@@ -94,6 +98,8 @@ export async function createAdminUser(body: {
   };
   if (body.majorId?.trim()) payload.majorId = body.majorId.trim();
   if (body.email?.trim()) payload.email = body.email.trim();
+  if (body.classId?.trim()) payload.classId = body.classId.trim();
+  if (body.otherClassPolicy) payload.otherClassPolicy = body.otherClassPolicy;
   return adminFetch('/api/admin/users', { method: 'POST', body: JSON.stringify(payload) });
 }
 
@@ -124,18 +130,53 @@ export async function deleteAdminUser(userId: string): Promise<void> {
   await adminFetch(`/api/admin/users/${userId}`, { method: 'DELETE' });
 }
 
-export async function postAdminUsersBatch(rows: BatchImportRow[]): Promise<ImportResult> {
+export async function batchDeleteAdminUsers(
+  ids: string[],
+  opts?: { classId?: string }
+): Promise<{ deleted: number; removedFromPersonalClasses: number }> {
+  const data = (await adminFetch('/api/admin/users/batch-delete', {
+    method: 'POST',
+    body: JSON.stringify({
+      ids,
+      ...(opts?.classId?.trim() ? { classId: opts.classId.trim() } : {}),
+    }),
+  })) as { deleted?: number; removedFromPersonalClasses?: number } | null;
+  return {
+    deleted: Number(data?.deleted ?? 0),
+    removedFromPersonalClasses: Number(data?.removedFromPersonalClasses ?? 0),
+  };
+}
+
+export async function postAdminUsersBatch(
+  rows: BatchImportRow[],
+  opts?: { otherClassPolicy?: 'skip' | 'move' }
+): Promise<ImportResult> {
+  const body: Record<string, unknown> = { rows };
+  if (opts?.otherClassPolicy) body.otherClassPolicy = opts.otherClassPolicy;
   const data = (await adminFetch('/api/admin/users/batch', {
     method: 'POST',
-    body: JSON.stringify({ rows }),
+    body: JSON.stringify(body),
   })) as Partial<ImportResult> | null;
   return {
     success: Number(data?.success ?? 0),
     failed: Number(data?.failed ?? 0),
+    skipped: Number(data?.skipped ?? 0),
+    needsDecision: Boolean(data?.needsDecision),
     errors: Array.isArray(data?.errors)
       ? data.errors.map((e) => ({
           row: Number(e?.row ?? 0),
           reason: String(e?.reason ?? '未知错误'),
+        }))
+      : [],
+    conflicts: Array.isArray(data?.conflicts)
+      ? data.conflicts.map((c) => ({
+          row: c?.row == null ? null : Number(c.row),
+          userId: String(c?.userId ?? ''),
+          idNumber: String(c?.idNumber ?? ''),
+          name: String(c?.name ?? ''),
+          currentClassId: String(c?.currentClassId ?? ''),
+          currentClassName: String(c?.currentClassName ?? ''),
+          targetClassId: String(c?.targetClassId ?? ''),
         }))
       : [],
   };
