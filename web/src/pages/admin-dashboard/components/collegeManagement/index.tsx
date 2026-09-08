@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Button, Form, Input, Modal, Popconfirm, Space, Table, Tag, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { createAdminCollege, deleteAdminCollege, fetchAdminColleges, type AdminCollegeRow } from '../collegeApi';
+import LocateUserSearch from '../LocateUserSearch';
 
 export default function CollegeManagement() {
   const navigate = useNavigate();
@@ -115,8 +116,11 @@ export default function CollegeManagement() {
   return (
     <div className="min-h-0 bg-gray-50">
       <div className="bg-white rounded-xl border border-gray-200 p-6 mb-4 flex flex-wrap items-center justify-between gap-4">
-        <div>
-        </div>
+        <LocateUserSearch
+          roleMode="teacher"
+          className="flex-1 max-w-md"
+          placeholder="按教师姓名或工号定位，直达所属学院"
+        />
         <Button type="primary" className="!bg-teal-600" onClick={() => setCreateOpen(true)}>
           新建学院
         </Button>

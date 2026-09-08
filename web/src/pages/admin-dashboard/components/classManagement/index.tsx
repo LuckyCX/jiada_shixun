@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { Button, Cascader, Input, Select, Space, message } from 'antd';
+import { Button, Cascader, Input, Space, message } from 'antd';
 import { Class, Student } from './types';
 import type { User } from '../userManagement/types';
 import { useCollegeDictOptions } from '../userManagement/useCollegeDictOptions';
@@ -13,6 +13,7 @@ import {
   type AdminClassListRow,
 } from './classesApi';
 import { fetchAdminUsers } from '../userManagement/adminUsersApi';
+import LocateUserSearch from '../LocateUserSearch';
 import CreateClassModal from './CreateClassModal';
 import type { CreateClassFormValues } from './CreateClassModal';
 import EditClassModal from './EditClassModal';
@@ -253,11 +254,16 @@ export default function ClassManagement() {
         <div className="flex flex-wrap items-center gap-4">
           <Input
             allowClear
-            className="flex-1 min-w-[200px] max-w-xl"
+            className="flex-1 min-w-[180px] max-w-sm"
             prefix={<i className="ri-search-line text-gray-400" />}
             placeholder="搜索班级名称或编码"
             value={searchKeyword}
             onChange={(e) => setSearchKeyword(e.target.value)}
+          />
+          <LocateUserSearch
+            roleMode="all"
+            className="flex-1 min-w-[240px] max-w-md"
+            placeholder="按姓名/学号/工号定位师生，直达班级或学院"
           />
           <Cascader
             allowClear

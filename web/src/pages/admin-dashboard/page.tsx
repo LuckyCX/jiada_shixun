@@ -327,6 +327,7 @@ export default function AdminDashboard() {
               scope="college-teachers"
               collegeId={collegeTeachersId}
               subtitle={collegeTeachersHint || `学院 ID ${collegeTeachersId}`}
+              initialQ={searchParams.get('q') || ''}
               onBack={() => navigate('/admin-dashboard?tab=college-management')}
             />
           )}
@@ -339,6 +340,7 @@ export default function AdminDashboard() {
                 classId={classStudentsId}
                 majorId={classStudentsMajorId}
                 majorName={classStudentsMajorName}
+                initialQ={searchParams.get('q') || ''}
                 subtitle={
                   searchParams.get('className')
                     ? decodeURIComponent(searchParams.get('className') || '')

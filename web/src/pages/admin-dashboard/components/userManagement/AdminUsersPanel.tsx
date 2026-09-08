@@ -42,6 +42,8 @@ export type AdminUsersPanelProps = {
   /** class-students：专业名称展示 */
   majorName?: string;
   onBack?: () => void;
+  /** 从定位搜索带入的初始关键词 */
+  initialQ?: string;
 };
 
 const emptyStats: AdminUserStats = {
@@ -51,7 +53,16 @@ const emptyStats: AdminUserStats = {
   activeUsers: 0,
 };
 
-export default function AdminUsersPanel({ scope, collegeId = '', classId = '', majorId = '', subtitle, majorName = '', onBack }: AdminUsersPanelProps) {
+export default function AdminUsersPanel({
+  scope,
+  collegeId = '',
+  classId = '',
+  majorId = '',
+  subtitle,
+  majorName = '',
+  onBack,
+  initialQ = '',
+}: AdminUsersPanelProps) {
   const { options: collegeFilterOptions, labelByValue: deptLabel } = useCollegeDictOptions(true);
   const [users, setUsers] = useState<User[]>([]);
   const [stats, setStats] = useState<AdminUserStats>(emptyStats);
@@ -59,8 +70,8 @@ export default function AdminUsersPanel({ scope, collegeId = '', classId = '', m
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [total, setTotal] = useState(0);
-  const [qInput, setQInput] = useState('');
-  const [debouncedQ, setDebouncedQ] = useState('');
+  const [qInput, setQInput] = useState(initialQ);
+  const [debouncedQ, setDebouncedQ] = useState(initialQ);
   const [roleFilter, setRoleFilter] = useState<UserRole | 'all'>('all');
   const [statusFilter, setStatusFilter] = useState<UserStatus | 'all'>('all');
   const [collegeFilter, setCollegeFilter] = useState('');
@@ -80,6 +91,13 @@ export default function AdminUsersPanel({ scope, collegeId = '', classId = '', m
     const t = window.setTimeout(() => setDebouncedQ(qInput.trim()), 350);
     return () => window.clearTimeout(t);
   }, [qInput]);
+
+  // 定位跳转带入的 q 变化时同步到搜索框
+  useEffect(() => {
+    const next = initialQ.trim();
+    setQInput(next);
+    setDebouncedQ(next);
+  }, [initialQ, scope, collegeId, classId]);
 
   useEffect(() => {
     setPage(1);
