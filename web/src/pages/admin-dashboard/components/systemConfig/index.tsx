@@ -39,7 +39,13 @@ type ConfigEntry = {
 
 type AdminConfigResponse = Record<string, ConfigEntry>;
 
-type TabValue = 'site' | 'smtp' | 'sms' | 'llm' | (typeof SHOW_RTC_TAB extends true ? 'rtc' : never);
+type TabValue =
+  | 'site'
+  | 'smtp'
+  | 'sms'
+  | 'llm'
+  | 'password'
+  | (typeof SHOW_RTC_TAB extends true ? 'rtc' : never);
 
 type LlmCategory = 'multimodal' | 'file_processing';
 
@@ -102,7 +108,7 @@ const CONFIG_TAB_MAP: Record<string, TabValue> = {
   rtc_config: 'site',
 };
 
-const TAB_ORDER: TabValue[] = ['site', 'smtp', 'sms', 'llm'];
+const TAB_ORDER: TabValue[] = ['site', 'smtp', 'sms', 'llm', 'password'];
 
 const ALIYUN_SMS_REGION_OPTIONS = [
   { key: 'cn-hangzhou|dysmsapi.aliyuncs.com', label: '华东1（杭州）— dysmsapi.aliyuncs.com', regionId: 'cn-hangzhou', endpoint: 'dysmsapi.aliyuncs.com' },
@@ -235,6 +241,13 @@ export default function SystemConfigPanel() {
     enabled: false,
     isNew: true,
   });
+  /** 正在测试连通性的模型配置 id 或类型 key */
+  const [llmTestingKey, setLlmTestingKey] = useState('');
+
+  const [pwdOld, setPwdOld] = useState('');
+  const [pwdNew, setPwdNew] = useState('');
+  const [pwdConfirm, setPwdConfirm] = useState('');
+  const [pwdSaving, setPwdSaving] = useState(false);
 
   const [rtc, setRtc] = useState('{}');
 
@@ -638,6 +651,72 @@ export default function SystemConfigPanel() {
     }
   };
 
+  /** 调用本系统 2 个连通性测试接口之一；仅按钮点击触发 */
+  const testLlmConnectivity = async (category: LlmCategory, providerId?: string) => {
+    if (!token) return;
+    const path =
+      category === 'file_processing'
+        ? '/api/admin/system-config/test-llm-file-processing'
+        : '/api/admin/system-config/test-llm-multimodal';
+    const key = providerId ? `row:${providerId}` : `cat:${category}`;
+    setLlmTestingKey(key);
+    try {
+      const res = await apiFetch(path, {
+        method: 'POST',
+        token,
+        body: JSON.stringify(providerId ? { providerId } : {}),
+      });
+      const d = (res as { data?: { providerName?: string; modelId?: string; latencyMs?: number } }).data;
+      const name = d?.providerName || '';
+      const model = d?.modelId || '';
+      const ms = typeof d?.latencyMs === 'number' ? d.latencyMs : null;
+      messageApi.success(
+        ms != null
+          ? `连通成功${name ? `（${name}${model ? ` / ${model}` : ''}，${ms}ms）` : `（${ms}ms）`}`
+          : '连通成功'
+      );
+    } catch (e) {
+      messageApi.error((e as Error).message || '连通失败');
+    } finally {
+      setLlmTestingKey('');
+    }
+  };
+
+  const changeAdminPassword = async () => {
+    if (!token) return;
+    const oldPassword = pwdOld;
+    const newPassword = pwdNew;
+    const confirmPassword = pwdConfirm;
+    if (!oldPassword) {
+      messageApi.warning('请输入旧密码');
+      return;
+    }
+    if (!newPassword || newPassword.length < 6) {
+      messageApi.warning('新密码至少 6 位');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      messageApi.warning('两次输入的新密码不一致');
+      return;
+    }
+    setPwdSaving(true);
+    try {
+      await apiFetch('/api/admin/me/password', {
+        method: 'POST',
+        token,
+        body: JSON.stringify({ oldPassword, newPassword, confirmPassword }),
+      });
+      messageApi.success('密码已更新');
+      setPwdOld('');
+      setPwdNew('');
+      setPwdConfirm('');
+    } catch (e) {
+      messageApi.error((e as Error).message || '修改失败');
+    } finally {
+      setPwdSaving(false);
+    }
+  };
+
   const regionSelectOptions = ALIYUN_SMS_REGION_OPTIONS.map((o) => ({ label: o.label, value: o.key }));
 
   const llmColumns: TableColumnsType<LlmProviderRow> = [
@@ -667,10 +746,20 @@ export default function SystemConfigPanel() {
     {
       title: '操作',
       key: 'act',
-      width: 150,
+      width: 220,
       fixed: 'right' as const,
       render: (_: unknown, row: LlmProviderRow) => (
         <Space size="small">
+          <Button
+            type="link"
+            size="small"
+            className="!px-0"
+            loading={llmTestingKey === `row:${row.id}`}
+            disabled={Boolean(llmTestingKey) && llmTestingKey !== `row:${row.id}`}
+            onClick={() => void testLlmConnectivity(row.category, row.id)}
+          >
+            测试连通性
+          </Button>
           <Button type="link" size="small" className="!px-0" onClick={() => openLlmEdit(row)}>
             编辑
           </Button>
@@ -1122,10 +1211,20 @@ export default function SystemConfigPanel() {
           </div>
           {(['multimodal', 'file_processing'] as const).map((cat) => (
             <section key={cat} className="min-w-0 border border-gray-100 rounded-lg p-4 bg-white">
-              <h4 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
-                {LLM_CATEGORY_TAG[cat].text}
-                <Tag color={LLM_CATEGORY_TAG[cat].color}>{cat}</Tag>
-              </h4>
+              <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+                <h4 className="text-sm font-semibold text-gray-900 m-0 flex items-center gap-2">
+                  {LLM_CATEGORY_TAG[cat].text}
+                  <Tag color={LLM_CATEGORY_TAG[cat].color}>{cat}</Tag>
+                </h4>
+                <Button
+                  size="small"
+                  loading={llmTestingKey === `cat:${cat}`}
+                  disabled={Boolean(llmTestingKey) && llmTestingKey !== `cat:${cat}`}
+                  onClick={() => void testLlmConnectivity(cat)}
+                >
+                  测试连通性
+                </Button>
+              </div>
               <Table<LlmProviderRow>
                 rowKey="id"
                 size="small"
@@ -1133,7 +1232,7 @@ export default function SystemConfigPanel() {
                 columns={llmColumns}
                 dataSource={llmProviders.filter((r) => r.category === cat)}
                 locale={{ emptyText: '该类型暂无配置' }}
-                scroll={{ x: 900 }}
+                scroll={{ x: 980 }}
               />
             </section>
           ))}
@@ -1213,6 +1312,47 @@ export default function SystemConfigPanel() {
               </Form.Item>
             </Form>
           </Modal>
+        </div>
+      ),
+    },
+    {
+      key: 'password',
+      label: '更改密码',
+      forceRender: true,
+      children: (
+        <div className="p-6 max-w-lg">
+          <p className="text-sm text-gray-500 mb-4">修改当前登录管理员的密码。需验证旧密码，并输入两次新密码确认。</p>
+          <Form {...formItemLayout} layout="vertical" requiredMark={false}>
+            <Form.Item label="旧密码" required>
+              <Input.Password
+                value={pwdOld}
+                onChange={(e) => setPwdOld(e.target.value)}
+                placeholder="当前登录密码"
+                autoComplete="current-password"
+              />
+            </Form.Item>
+            <Form.Item label="新密码" required extra="至少 6 位">
+              <Input.Password
+                value={pwdNew}
+                onChange={(e) => setPwdNew(e.target.value)}
+                placeholder="新密码"
+                autoComplete="new-password"
+              />
+            </Form.Item>
+            <Form.Item label="确认新密码" required>
+              <Input.Password
+                value={pwdConfirm}
+                onChange={(e) => setPwdConfirm(e.target.value)}
+                placeholder="再次输入新密码"
+                autoComplete="new-password"
+              />
+            </Form.Item>
+            <Form.Item>
+              <Button type="primary" loading={pwdSaving} onClick={() => void changeAdminPassword()}>
+                确认修改
+              </Button>
+            </Form.Item>
+          </Form>
         </div>
       ),
     },

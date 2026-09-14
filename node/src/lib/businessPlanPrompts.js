@@ -26,6 +26,56 @@ export const BUSINESS_PLAN_FILL_SECTION_SYSTEM_PROMPT = `你是创业实训课�
 要求：
 - content 可含 \\n 与列表；内容须基于给定资料，勿编造与资料明显矛盾的数据；资料不足处可简要说明合理假设。`;
 
+/** 仅生成章节大纲（标题结构），不写正文 */
+export const BUSINESS_PLAN_OUTLINE_SYSTEM_PROMPT = `你是创业实训课程的商业计划书助教。根据小组前期实训产出，设计合适的商业计划书章节大纲。
+
+#Objective#
+只输出章节结构（key + title），不要撰写任何章节正文。
+
+#Schema#
+{
+  "sections": [
+    { "key": "英文蛇形命名，如 executive_summary", "title": "中文章节标题" }
+  ]
+}
+
+#Rules#
+1. 章节数量建议 6～10 个，按商业计划书常见逻辑排序。
+2. 必须贴合项目资料（选题、市场、产品、商业模式、团队等）；资料不足处用通用但合理的章节，勿编造与资料矛盾的标题。
+3. key 仅用小写字母、数字与下划线；同一份大纲内 key 唯一。
+4. title 简洁明确，禁止空标题。
+5. 禁止输出 content 字段；禁止 markdown 代码块；只能输出上述 JSON。`;
+
+export function buildBusinessPlanOutlineUserPrompt(contextBundle) {
+  return `请基于以下前期实训资料，生成商业计划书章节大纲（仅 key + title）。
+
+【前期实训参考资料】
+${String(contextBundle || '').trim() || '（暂无资料，请输出通用创业商业计划书章节结构）'}`;
+}
+
+export function normalizeOutlinePayload(raw) {
+  const src = raw && typeof raw === 'object' ? raw : null;
+  const list = Array.isArray(src?.sections) ? src.sections : Array.isArray(src) ? src : null;
+  if (!list?.length) throw new Error('AI 返回章节大纲无效');
+  const used = new Set();
+  const out = [];
+  for (let i = 0; i < list.length; i++) {
+    const item = list[i] || {};
+    let key = String(item.key || '')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_]+/g, '_')
+      .replace(/^_+|_+$/g, '');
+    if (!key) key = `sec_${i + 1}`;
+    if (used.has(key)) key = `${key}_${i + 1}`;
+    used.add(key);
+    const title = String(item.title || item.name || '').trim() || `章节${i + 1}`;
+    out.push({ key, title, content: '' });
+  }
+  if (!out.length) throw new Error('AI 返回章节大纲为空');
+  return out;
+}
+
 export function buildBusinessPlanGenerateUserPrompt(contextBundle, sections) {
   const list = coerceSections(sections).map((s) => ({ key: s.key, title: s.title }));
   return `请基于以下资料，为「输入章节列表」生成对应章节内容。严格按 system 中的 JSON schema 输出。
@@ -79,14 +129,20 @@ export const BUSINESS_PLAN_ANALYZE_SYSTEM_PROMPT = `你是创业实训课程的�
 
 语言简洁专业，勿空泛套话。`;
 
-export const BUSINESS_PLAN_ANALYZE_JSON_SYSTEM_PROMPT = `你是创业实训课程的商业计划书评审助教。你需要输出结构化评审数据（JSON），用于页面展示。
+export const BUSINESS_PLAN_ANALYZE_JSON_SYSTEM_PROMPT = `你是创业实训课程的商业计划书评审助教。
 
-最终必须输出且仅输出一个 JSON 对象（不要用 markdown 代码块包裹）。字段：
+#Context#
+根据计划书正文与前期实训资料输出结构化评审数据。
+
+#Objective#
+输出页面可直接渲染的评审 JSON。
+
+#Schema#
 {
-  "score": 0-100 的整数,
-  "overall": "整体评价（1-3句话）",
-  "strengths": ["优点1", "优点2", "..."],
-  "improvements": ["改进建议1", "改进建议2", "..."],
+  "score": 0-100 整数,
+  "overall": "整体评价（1-3句，非空）",
+  "strengths": ["优点1", "优点2", "优点3"],
+  "improvements": ["改进1", "改进2", "改进3"],
   "metrics": [
     { "name": "市场分析", "stars": 1-5, "comment": "一句简评" },
     { "name": "产品服务", "stars": 1-5, "comment": "一句简评" },
@@ -95,12 +151,13 @@ export const BUSINESS_PLAN_ANALYZE_JSON_SYSTEM_PROMPT = `你是创业实训课�
     { "name": "财务规划", "stars": 1-5, "comment": "一句简评" },
     { "name": "团队介绍", "stars": 1-5, "comment": "一句简评" }
   ],
-  "nextActions": ["下一步行动1", "下一步行动2", "..."]
+  "nextActions": ["行动1", "行动2", "行动3"]
 }
+固定约束：strengths / improvements / nextActions 均恰好 3 条；metrics 必须恰好上述 6 个 name，顺序一致，禁止增删。
 
-要求：
-- strengths/improvements/nextActions 每项为可执行的具体表述，避免空泛。
-- metrics 必须包含上述 6 个 name，stars 为整数 1-5。`;
+#Response#
+- 只能输出上述键的 JSON，禁止 markdown。
+- 表述具体可执行，避免空泛套话。`;
 
 export function buildBusinessPlanAnalyzeUserPrompt(analyzeBundle) {
   return String(analyzeBundle || '').trim();

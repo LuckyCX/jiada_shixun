@@ -513,12 +513,12 @@ router.get('/student/personal-classes/:classId/role-simulation/records', require
       byStudent.set(sid, bucket);
     }
 
-    // 进度：有效轮次 = max(run_index - 1, 0)
+    // 进度：有效轮次 = 已完成模拟次数（max run_index）；全员 ≥ 3 轮即达标
     const progress = [];
     let allQualified = true;
     for (const bucket of byStudent.values()) {
       const maxRun = bucket.records.reduce((mx, r) => Math.max(mx, Number(r.runIndex || 0)), 0);
-      const effective = Math.max(0, maxRun - 1);
+      const effective = Math.max(0, maxRun);
       const qualified = effective >= 3;
       if (!qualified) allQualified = false;
       progress.push({

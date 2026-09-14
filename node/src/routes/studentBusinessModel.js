@@ -5,7 +5,8 @@ import { randomUUID } from 'crypto';
 import { getPool } from '../lib/db.js';
 import { logError } from '../lib/logError.js';
 import { requireAuth, requireStudent } from '../middleware/auth.js';
-import { chatCompletion, getEnabledProvider, friendlyLlmErrorMessage, logPromptToConsole } from '../lib/llmGateway.js';
+import { chatCompletion, getEnabledProvider, friendlyLlmErrorMessage, logPromptToConsole, buildNoThinkingExtraBody } from '../lib/llmGateway.js';
+// 思考模式关闭逻辑统一由 llmGateway.buildNoThinkingExtraBody 提供
 import { assembleBusinessModelAiBundle } from '../lib/businessModelContext.js';
 import {
   BUSINESS_MODEL_FINANCE_ITEMS_SYSTEM_PROMPT,
@@ -523,20 +524,6 @@ async function studentOnTeam(pool, teamId, studentId) {
     [teamId, studentId]
   );
   return rows.length > 0;
-}
-
-function buildNoThinkingExtraBody(provider) {
-  const hay = `${String(provider.vendor || '').toLowerCase()} ${String(provider.baseUrl || '').toLowerCase()} ${String(provider.modelId || '').toLowerCase()}`;
-  if (/volc|volcano|ark|doubao|豆包|字节/.test(hay)) {
-    return { thinking: { type: 'disabled' } };
-  }
-  if (/dashscope|aliyun|通义|qwen|bailian|百炼/.test(hay)) {
-    return { enable_thinking: false };
-  }
-  if (/openai|gpt|o1|o3|reasoning/.test(hay)) {
-    return { reasoning_effort: 'none' };
-  }
-  return {};
 }
 
 function appendRoundMessages(transcript, roundMessages, roundIndex) {

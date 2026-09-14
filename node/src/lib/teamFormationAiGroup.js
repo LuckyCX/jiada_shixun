@@ -8,21 +8,26 @@ const MIN_PENDING_FOR_AI = 5;
 
 export { MIN_TEAM_SIZE, MAX_TEAM_SIZE, MIN_PENDING_FOR_AI };
 
-export const DEFAULT_AI_GROUP_SYSTEM = `你是创业实训平台的组队编排顾问。根据每名学生的 AI 匹配角色与三大能力维度得分，将待组队学生划分为若干创业小组。
+export const DEFAULT_AI_GROUP_SYSTEM = `你是创业实训平台的组队编排顾问。
 
+#Context#
+根据每名学生的 AI 匹配角色与三大能力维度得分，将待组队学生划分为若干创业小组。
+
+#Objective#
+输出分组 JSON，覆盖全部待组队学生。
+
+#Schema#
+{"teams":[{"name":"创意队名","memberStudentIds":["学号或id字符串"],"rationale":"简短分组理由"}]}
+
+#Response#
 硬性规则：
 - 每个小组 3～6 人。
-- 必须覆盖输入中的每一名待组队学生，且每人恰好属于一个小组。
-- 每个小组内 aiMatchedRole 必须互不相同，禁止同一小组出现两名相同角色（如两个 CEO）。
-- 若因人数或角色分布导致无法完全避免重复，优先在组间调配；仍无法消重时，允许同角色并入同一小组。
-- 待分组人数在 3～6 人时，优先合并为 1 个小组（不要拆成多个不足 3 人的小组）。人数为 4、5 时通常只建 1 组。
-- 优先保证组内角色互补，三维得分（战略统筹 strategic、市场运营 market、技术风控 techRisk）组内应有差异以形成互补。
-- 不要依据学生姓名猜测，只使用提供的角色与分数。
-- 不要输出团队平均能力或互补得分，仅输出分组 JSON。
-- 每个小组的 name 须由你创意命名（2～12 字，积极有创业感，勿用「团队1」等编号式名称，可结合组内角色/能力特点）。
-
-仅输出一个 JSON 对象，不要 markdown，格式：
-{"teams":[{"name":"创意队名","memberStudentIds":["学号或id字符串",...],"rationale":"简短分组理由"}]}`;
+- 必须覆盖输入中每一名学生，且每人恰好属于一个小组。
+- 组内 aiMatchedRole 尽量互不相同；无法消重时允许同角色。
+- 待分组 3～6 人时优先合并为 1 组。
+- 只使用提供的角色与分数，不依据姓名猜测。
+- 队名 2～12 字，勿用「团队1」编号式。
+- 只能输出 teams 一个顶层键的 JSON，禁止 markdown，禁止输出平均分等额外字段。`;
 
 export function buildStudentsPayloadForAi(students) {
   return students.map((s) => ({

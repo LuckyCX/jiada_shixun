@@ -8,31 +8,48 @@ interface Props {
 }
 
 function PieChart({ items }: { items: { label: string; value: number; color: string }[] }) {
-  const total = items.reduce((s, i) => s + i.value, 0);
+  const total = items.reduce((s, i) => s + i.value, 0) || 1;
   let cumulative = 0;
   const radius = 80;
   const cx = 100;
   const cy = 100;
 
+  // 单项 100% 时 SVG 弧起止点重合无法绘制，需改用整圆
   const slices = items.map((item) => {
     const startAngle = (cumulative / total) * 360;
     cumulative += item.value;
     const endAngle = (cumulative / total) * 360;
-    const start = polarToCartesian(cx, cy, radius, startAngle - 90);
-    const end = polarToCartesian(cx, cy, radius, endAngle - 90);
-    const largeArc = endAngle - startAngle > 180 ? 1 : 0;
-    const d = `M ${cx} ${cy} L ${start.x} ${start.y} A ${radius} ${radius} 0 ${largeArc} 1 ${end.x} ${end.y} Z`;
-    return { ...item, d, percent: Math.round((item.value / total) * 100) };
+    const sweep = endAngle - startAngle;
+    const isFullCircle = sweep >= 359.9 || items.length === 1;
+    let d = '';
+    if (!isFullCircle) {
+      const start = polarToCartesian(cx, cy, radius, startAngle - 90);
+      const end = polarToCartesian(cx, cy, radius, endAngle - 90);
+      const largeArc = sweep > 180 ? 1 : 0;
+      d = `M ${cx} ${cy} L ${start.x} ${start.y} A ${radius} ${radius} 0 ${largeArc} 1 ${end.x} ${end.y} Z`;
+    }
+    return {
+      ...item,
+      d,
+      isFullCircle,
+      percent: Math.round((item.value / total) * 100),
+    };
   });
 
   return (
     <div className="flex items-center gap-6">
       <svg width="200" height="200" viewBox="0 0 200 200">
-        {slices.map((s, i) => (
-          <path key={i} d={s.d} fill={s.color} stroke="white" strokeWidth="2">
-            <title>{s.label}: {s.percent}%</title>
-          </path>
-        ))}
+        {slices.map((s, i) =>
+          s.isFullCircle ? (
+            <circle key={i} cx={cx} cy={cy} r={radius} fill={s.color} stroke="white" strokeWidth="2">
+              <title>{s.label}: {s.percent}%</title>
+            </circle>
+          ) : (
+            <path key={i} d={s.d} fill={s.color} stroke="white" strokeWidth="2">
+              <title>{s.label}: {s.percent}%</title>
+            </path>
+          )
+        )}
       </svg>
       <div className="space-y-2">
         {slices.map((s, i) => (

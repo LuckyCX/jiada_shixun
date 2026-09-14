@@ -290,12 +290,12 @@ async function stageProgressForTeam(pool, classId, teamId, memberIds) {
     })();
   stageProgress.businessModel = bm?.bmc_canvas_saved_at || bmDone >= 5 ? 100 : 0;
 
-  // 角色推荐：对齐学生端 teamQualified（全员有效轮次 >= 3）
+  // 角色推荐：对齐学生端 teamQualified（全员有效轮次 >= 3，有效轮次 = max run_index）
   const byStudent = new Map((simRunRows || []).map((r) => [String(r.student_id), Number(r.max_run || 0)]));
   let simAllQualified = memberIds.length > 0;
   for (const sid of memberIds) {
     const maxRun = byStudent.get(String(sid)) || 0;
-    const effective = Math.max(0, maxRun - 1);
+    const effective = Math.max(0, maxRun);
     if (effective < 3) {
       simAllQualified = false;
       break;

@@ -65,7 +65,6 @@ import {
   type GroupingTeam,
 } from '../../lib/teamFormationApi';
 import UserAvatar from '../../components/UserAvatar';
-import { openEconoverse } from '../../lib/econoverseUrl';
 import {
   completeStudentTodoTask,
   downloadStudentTaskAttachment,
@@ -513,7 +512,10 @@ export default function StudentCenterPage() {
 
         if (simRecords && studentId) {
           const threshold = MODULE_COMPLETE_THRESHOLD.simulation ?? 4;
-          const my = (simRecords.progress || []).find((p: any) => p.studentId === studentId);
+          // studentId 统一字符串比较，避免 JWT sub 与接口类型不一致导致进度取不到
+          const my = (simRecords.progress || []).find(
+            (p: any) => String(p.studentId || '') === String(studentId)
+          );
           const myEffective = Math.max(0, Number(my?.effectiveRounds || 0));
           const done = simRecords.teamQualified ? threshold : Math.min(threshold - 1, myEffective);
           setModuleProgressState((s) => (s.simulation === done ? s : { ...s, simulation: done }));
@@ -2003,7 +2005,11 @@ export default function StudentCenterPage() {
             key={selectedClassId}
             classId={selectedClassId}
             trainingEnded={trainingEnded}
-            onTaskComplete={() => completeActiveTrainingTask('simulation')}
+            onTaskComplete={() => {
+              // 无待办任务时 completeActive 会直接 return，仍需刷新阶段进度以解锁商业计划书
+              completeActiveTrainingTask('simulation');
+              refreshTrainingStageSnapshot();
+            }}
           />
         );
       case 'module-plan':
@@ -2062,32 +2068,6 @@ export default function StudentCenterPage() {
                 )}
               </button>
             ))}
-          </div>
-
-          {!sidebarCollapsed && <div className="mx-4 my-2 border-t border-gray-100"></div>}
-          {sidebarCollapsed && <div className="mx-2 my-2 border-t border-gray-100"></div>}
-          {!sidebarCollapsed && (
-            <div className="px-4 py-2">
-              <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">体验</span>
-            </div>
-          )}
-          <div className="px-2 space-y-0.5 mb-2">
-            <button
-              type="button"
-              onClick={() => selectedClassId && void openEconoverse(selectedClassId)}
-              title={sidebarCollapsed ? '创世纪 · 建城' : undefined}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all cursor-pointer whitespace-nowrap text-emerald-700 hover:text-emerald-900 hover:bg-emerald-50 border border-transparent hover:border-emerald-100 ${sidebarCollapsed ? 'justify-center' : ''}`}
-            >
-              <div className="w-5 h-5 flex items-center justify-center flex-shrink-0">
-                <i className="ri-building-2-line text-base"></i>
-              </div>
-              {!sidebarCollapsed && (
-                <span className="text-sm font-medium flex-1 text-left">创世纪 · 建城</span>
-              )}
-              {!sidebarCollapsed && (
-                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 flex-shrink-0">学号云档</span>
-              )}
-            </button>
           </div>
 
           {!sidebarCollapsed && <div className="mx-4 my-2 border-t border-gray-100"></div>}
@@ -2203,15 +2183,6 @@ export default function StudentCenterPage() {
               <span className="font-medium text-gray-700">{getCurrentLabel()}</span>
             </div>
             <div className="flex items-center gap-3">
-              <button
-                type="button"
-                onClick={() => selectedClassId && void openEconoverse(selectedClassId)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition-colors cursor-pointer whitespace-nowrap"
-                title="进入创世纪建城（学号云档，可续玩）"
-              >
-                <i className="ri-building-2-line"></i>
-                <span>创世纪</span>
-              </button>
               <StudentClassSwitcher
                 enrollments={enrollments}
                 selectedClassId={selectedClassId}
@@ -2429,33 +2400,6 @@ export default function StudentCenterPage() {
                   </div>
                 </div>
               </div>
-
-              <button
-                type="button"
-                onClick={() => selectedClassId && void openEconoverse(selectedClassId)}
-                className="w-full text-left bg-gradient-to-r from-emerald-50 to-green-50 border border-emerald-200 rounded-2xl p-5 hover:shadow-md hover:border-emerald-300 transition-all cursor-pointer"
-              >
-                <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-emerald-500 to-green-600 flex items-center justify-center flex-shrink-0">
-                    <i className="ri-building-2-line text-2xl text-white"></i>
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <h3 className="text-base font-bold text-gray-900">创世纪 · 建城</h3>
-                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 border border-emerald-200">
-                        学号云档 · 可续玩
-                      </span>
-                    </div>
-                    <p className="text-sm text-gray-600 mt-1">
-                      回合制城市棋盘与企业经营仿真。进度绑定学号保存在实训平台，换设备也能继续玩。
-                    </p>
-                  </div>
-                  <span className="text-emerald-600 text-sm font-medium flex items-center gap-1 flex-shrink-0">
-                    立即进入
-                    <i className="ri-arrow-right-line"></i>
-                  </span>
-                </div>
-              </button>
 
               {/* 实训模块步骤条 */}
               <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 overflow-hidden relative z-0">

@@ -113,31 +113,48 @@ function polarToCartesian(cx: number, cy: number, r: number, angleDeg: number) {
 }
 
 function PieChart({ items }: { items: { label: string; value: number; color: string }[] }) {
-  const total = items.reduce((s, i) => s + i.value, 0);
+  const total = items.reduce((s, i) => s + i.value, 0) || 1;
   let cumulative = 0;
   const radius = 75;
   const cx = 95;
   const cy = 95;
 
+  // 单项 100% 时 SVG 弧起止点重合无法绘制，需改用整圆
   const slices = items.map((item) => {
     const startAngle = (cumulative / total) * 360;
     cumulative += item.value;
     const endAngle = (cumulative / total) * 360;
-    const start = polarToCartesian(cx, cy, radius, startAngle - 90);
-    const end = polarToCartesian(cx, cy, radius, endAngle - 90);
-    const largeArc = endAngle - startAngle > 180 ? 1 : 0;
-    const d = `M ${cx} ${cy} L ${start.x} ${start.y} A ${radius} ${radius} 0 ${largeArc} 1 ${end.x} ${end.y} Z`;
-    return { ...item, d, percent: Math.round((item.value / total) * 100) };
+    const sweep = endAngle - startAngle;
+    const isFullCircle = sweep >= 359.9 || items.length === 1;
+    let d = '';
+    if (!isFullCircle) {
+      const start = polarToCartesian(cx, cy, radius, startAngle - 90);
+      const end = polarToCartesian(cx, cy, radius, endAngle - 90);
+      const largeArc = sweep > 180 ? 1 : 0;
+      d = `M ${cx} ${cy} L ${start.x} ${start.y} A ${radius} ${radius} 0 ${largeArc} 1 ${end.x} ${end.y} Z`;
+    }
+    return {
+      ...item,
+      d,
+      isFullCircle,
+      percent: Math.round((item.value / total) * 100),
+    };
   });
 
   return (
     <div className="flex items-center gap-5">
       <svg width="190" height="190" viewBox="0 0 190 190" className="flex-shrink-0">
-        {slices.map((s, i) => (
-          <path key={i} d={s.d} fill={s.color} stroke="white" strokeWidth="2">
-            <title>{s.label}: {s.percent}%</title>
-          </path>
-        ))}
+        {slices.map((s, i) =>
+          s.isFullCircle ? (
+            <circle key={i} cx={cx} cy={cy} r={radius} fill={s.color} stroke="white" strokeWidth="2">
+              <title>{s.label}: {s.percent}%</title>
+            </circle>
+          ) : (
+            <path key={i} d={s.d} fill={s.color} stroke="white" strokeWidth="2">
+              <title>{s.label}: {s.percent}%</title>
+            </path>
+          )
+        )}
       </svg>
       <div className="space-y-2 flex-1">
         {slices.map((s, i) => (
@@ -312,18 +329,63 @@ function AIGeneratePersonaModal({
               </button>
             </div>
           ) : (
-            <div className="space-y-6">
+            <div className="space-y-6 py-4">
               <div className="grid md:grid-cols-2 gap-6">
                 {generatedPersonas.map((persona) => (
-                  <div key={persona.id} className={`bg-white border-2 ${persona.borderColor} rounded-2xl p-6`}>
-                    <div className="flex items-start gap-4 mb-4">
-                      <div className={`w-16 h-16 rounded-full bg-gradient-to-br from-purple-100 to-blue-100 flex items-center justify-center text-xl font-bold ${persona.accentColor}`}>
+                  <div key={persona.id} className={`bg-white border-2 ${persona.borderColor || 'border-green-200'} rounded-2xl p-6`}>
+                    <div className="flex items-start gap-4 mb-5">
+                      <div
+                        className={`w-16 h-16 rounded-full bg-gradient-to-br from-purple-100 to-blue-100 flex items-center justify-center text-xl font-bold ${persona.accentColor || 'text-green-500'} shrink-0`}
+                      >
                         {personaInitial(persona.name)}
                       </div>
-                      <div>
-                        <h4 className="text-lg font-bold">{persona.name}</h4>
-                        <p className="text-xs text-gray-600">{persona.age}岁 · {persona.occupation}</p>
+                      <div className="min-w-0 flex-1">
+                        <h4 className="text-lg font-bold text-gray-900">{persona.name || '未命名'}</h4>
+                        <div className="mt-1 space-y-0.5 text-xs text-gray-600">
+                          <p>
+                            <strong className="text-gray-800">年龄：</strong>
+                            {persona.age != null ? `${persona.age}岁` : '—'}
+                          </p>
+                          <p>
+                            <strong className="text-gray-800">职业：</strong>
+                            {persona.occupation || '—'}
+                          </p>
+                          <p>
+                            <strong className="text-gray-800">专业：</strong>
+                            {persona.major || '—'}
+                          </p>
+                        </div>
                       </div>
+                    </div>
+                    <div className="space-y-4">
+                      {(
+                        [
+                          { field: 'painPoints' as const, label: '核心痛点', icon: 'ri-heart-pulse-line' },
+                          { field: 'needs' as const, label: '核心诉求', icon: 'ri-star-line' },
+                          { field: 'habits' as const, label: '消费习惯', icon: 'ri-shopping-bag-line' },
+                        ] as const
+                      ).map(({ field, label, icon }) => {
+                        const items = Array.isArray(persona[field])
+                          ? persona[field].map((x) => String(x || '').trim()).filter(Boolean)
+                          : [];
+                        return (
+                          <div key={field}>
+                            <h5 className="text-sm font-bold text-gray-900 mb-2 flex items-center gap-2">
+                              <i className={`${icon} ${persona.accentColor || 'text-green-500'}`} />
+                              {label}
+                            </h5>
+                            {items.length ? (
+                              <ul className="text-sm text-gray-600 space-y-1">
+                                {items.map((item, i) => (
+                                  <li key={i}>• {item}</li>
+                                ))}
+                              </ul>
+                            ) : (
+                              <p className="text-sm text-gray-400">暂无</p>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 ))}

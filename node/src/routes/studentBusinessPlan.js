@@ -14,11 +14,14 @@ import {
   BUSINESS_PLAN_ANALYZE_JSON_SYSTEM_PROMPT,
   BUSINESS_PLAN_FILL_SECTION_SYSTEM_PROMPT,
   BUSINESS_PLAN_GENERATE_SYSTEM_PROMPT,
+  BUSINESS_PLAN_OUTLINE_SYSTEM_PROMPT,
   buildBusinessPlanAnalyzeUserPrompt,
   buildBusinessPlanFillSectionUserPrompt,
   buildBusinessPlanGenerateUserPrompt,
+  buildBusinessPlanOutlineUserPrompt,
   normalizeBusinessPlanAnalyzePayload,
   normalizeGeneratePayload,
+  normalizeOutlinePayload,
 } from '../lib/businessPlanPrompts.js';
 import {
   coerceSections,
@@ -222,7 +225,7 @@ async function isReadOnly(pool, teamId) {
 
 async function ensureWorkspace(pool, teamId, classId) {
   const { rows } = await pool.query(
-    `SELECT sections_json, updated_at, updated_by
+    `SELECT sections_json, revision, updated_at, updated_by
      FROM teacher_personal_class_team_business_plan_workspace
      WHERE team_id = $1`,
     [teamId]
@@ -230,13 +233,13 @@ async function ensureWorkspace(pool, teamId, classId) {
   if (rows.length) return rows[0];
   await pool.query(
     `INSERT INTO teacher_personal_class_team_business_plan_workspace
-       (team_id, teacher_personal_class_id, sections_json, updated_by)
-     VALUES ($1, $2, $3::jsonb, NULL)
+       (team_id, teacher_personal_class_id, sections_json, revision, updated_by)
+     VALUES ($1, $2, $3::jsonb, 1, NULL)
      ON CONFLICT (team_id) DO NOTHING`,
     [teamId, classId, JSON.stringify(defaultSections())]
   );
   const { rows: again } = await pool.query(
-    `SELECT sections_json, updated_at, updated_by
+    `SELECT sections_json, revision, updated_at, updated_by
      FROM teacher_personal_class_team_business_plan_workspace
      WHERE team_id = $1`,
     [teamId]
@@ -264,27 +267,155 @@ async function loadVersionSummaries(pool, teamId) {
   }));
 }
 
+/** 清理过期锁并返回当前有效锁列表 */
+async function loadActiveSectionLocks(pool, teamId) {
+  await pool.query(
+    `DELETE FROM teacher_personal_class_team_business_plan_section_locks
+     WHERE team_id = $1 AND heartbeat_at < now() - interval '15 seconds'`,
+    [teamId]
+  );
+  const { rows } = await pool.query(
+    `SELECT l.section_key, l.locked_by, l.locked_at, l.heartbeat_at,
+            COALESCE(u.real_name, u.username) AS "lockedByName"
+     FROM teacher_personal_class_team_business_plan_section_locks l
+     LEFT JOIN users u ON u.id = l.locked_by
+     WHERE l.team_id = $1
+     ORDER BY l.section_key ASC`,
+    [teamId]
+  );
+  return rows.map((r) => ({
+    sectionKey: String(r.section_key || ''),
+    lockedById: String(r.locked_by || ''),
+    lockedByName: String(r.lockedByName || '').trim() || '同学',
+    lockedAt: r.locked_at ? new Date(r.locked_at).toISOString() : '',
+    heartbeatAt: r.heartbeat_at ? new Date(r.heartbeat_at).toISOString() : '',
+  }));
+}
+
+async function getActiveLockForSection(pool, teamId, sectionKey) {
+  const locks = await loadActiveSectionLocks(pool, teamId);
+  return locks.find((l) => l.sectionKey === sectionKey) || null;
+}
+
 async function buildWorkspacePayload(ctx) {
   const row = await ensureWorkspace(ctx.pool, ctx.team.id, ctx.classId);
   const sections = coerceSections(row?.sections_json);
   const updatedByName = await userDisplayName(ctx.pool, row?.updated_by);
   const versions = await loadVersionSummaries(ctx.pool, ctx.team.id);
   const submission = await loadSubmission(ctx.pool, ctx.team.id);
+  const locks = await loadActiveSectionLocks(ctx.pool, ctx.team.id);
   const readOnly = submission?.status === 'approved';
   return {
     sections,
     fullText: sectionsToFullText(sections),
     completedSectionCount: countCompletedSections(sections),
     totalSectionCount: sections.length,
+    revision: Number(row?.revision || 1),
     updatedAt: row?.updated_at ? new Date(row.updated_at).toISOString() : '',
     updatedByName,
     versions,
+    locks,
     submission,
     readOnly,
     isTeamLeader: ctx.isTeamLeader,
     teamMemberCount: ctx.members.length,
     trainingEnded: submission?.status === 'approved',
   };
+}
+
+/**
+ * 按章合并写入 + revision 乐观锁
+ * - activeSectionKey：仅覆盖该章（持锁保存）
+ * - replaceAll：整份替换（生成大纲等）
+ */
+async function saveWorkspaceOptimistic(ctx, {
+  clientSections,
+  clientRevision,
+  activeSectionKey,
+  replaceAll = false,
+}) {
+  const expectedRevision = Number(clientRevision);
+  if (!Number.isFinite(expectedRevision) || expectedRevision < 1) {
+    const err = new Error('缺少文档版本号，请刷新后重试');
+    err.status = 400;
+    err.code = 40003;
+    throw err;
+  }
+
+  const row = await ensureWorkspace(ctx.pool, ctx.team.id, ctx.classId);
+  const serverSections = coerceSections(row?.sections_json);
+  const serverRevision = Number(row?.revision || 1);
+  if (serverRevision !== expectedRevision) {
+    const err = new Error('文档已被其他同学更新，请先拉取最新内容');
+    err.status = 409;
+    err.code = 40901;
+    err.payload = await buildWorkspacePayload(ctx);
+    throw err;
+  }
+
+  let nextSections;
+  if (replaceAll) {
+    nextSections = coerceSections(clientSections);
+  } else {
+    const key = String(activeSectionKey || '').trim();
+    if (!key) {
+      const err = new Error('请指定要保存的章节');
+      err.status = 400;
+      err.code = 40004;
+      throw err;
+    }
+    const lock = await getActiveLockForSection(ctx.pool, ctx.team.id, key);
+    if (!lock || String(lock.lockedById) !== String(ctx.sid)) {
+      const err = new Error(lock ? `章节已被 ${lock.lockedByName} 编辑中` : '请先进入章节编辑态再保存');
+      err.status = 409;
+      err.code = 40902;
+      err.payload = await buildWorkspacePayload(ctx);
+      throw err;
+    }
+    const incoming = coerceSections(clientSections);
+    const patch = incoming.find((s) => s.key === key);
+    if (!patch) {
+      const err = new Error('章节不存在');
+      err.status = 400;
+      err.code = 40004;
+      throw err;
+    }
+    const byKey = new Map(serverSections.map((s) => [s.key, s]));
+    // 结构变更（增删改序）仅允许持锁用户在保存时用客户端整份结构，但其他章 content 仍用服务端
+    const structure = incoming.length ? incoming : serverSections;
+    nextSections = structure.map((s) => {
+      if (s.key === key) return { key: patch.key, title: patch.title, content: patch.content };
+      const server = byKey.get(s.key);
+      return {
+        key: s.key,
+        title: server?.title ?? s.title,
+        content: server?.content ?? '',
+      };
+    });
+    // 服务端有、客户端结构里没有的章：保留（避免误删他人章）
+    for (const s of serverSections) {
+      if (!nextSections.some((x) => x.key === s.key)) nextSections.push(s);
+    }
+  }
+
+  const { rows: upd } = await ctx.pool.query(
+    `UPDATE teacher_personal_class_team_business_plan_workspace
+     SET sections_json = $2::jsonb,
+         revision = revision + 1,
+         updated_at = now(),
+         updated_by = $3
+     WHERE team_id = $1 AND revision = $4
+     RETURNING revision`,
+    [ctx.team.id, JSON.stringify(nextSections), ctx.sid, expectedRevision]
+  );
+  if (!upd.length) {
+    const err = new Error('文档已被其他同学更新，请先拉取最新内容');
+    err.status = 409;
+    err.code = 40901;
+    err.payload = await buildWorkspacePayload(ctx);
+    throw err;
+  }
+  return buildWorkspacePayload(ctx);
 }
 
 function stripHtmlText(s) {
@@ -360,25 +491,154 @@ router.put('/student/personal-classes/:classId/business-plan/workspace', require
     if (await isReadOnly(ctx.pool, ctx.team.id)) {
       return bad(req, res, 403, 40311, '商业计划书已审核通过，不可再编辑');
     }
-    const sections = coerceSections(req.body?.sections);
-    await ctx.pool.query(
-      `INSERT INTO teacher_personal_class_team_business_plan_workspace
-         (team_id, teacher_personal_class_id, sections_json, updated_at, updated_by)
-       VALUES ($1, $2, $3::jsonb, now(), $4)
-       ON CONFLICT (team_id)
-       DO UPDATE SET
-         sections_json = EXCLUDED.sections_json,
-         updated_at = now(),
-         updated_by = EXCLUDED.updated_by`,
-      [ctx.team.id, ctx.classId, JSON.stringify(sections), ctx.sid]
-    );
-    const payload = await buildWorkspacePayload(ctx);
+    const payload = await saveWorkspaceOptimistic(ctx, {
+      clientSections: req.body?.sections,
+      clientRevision: req.body?.revision,
+      activeSectionKey: req.body?.activeSectionKey,
+      replaceAll: Boolean(req.body?.replaceAll),
+    });
     return ok(req, res, payload);
   } catch (e) {
+    if (e?.status === 409) {
+      return res.status(409).json({
+        code: e.code || 40901,
+        message: e.message,
+        data: e.payload || null,
+        traceId: req.traceId,
+      });
+    }
+    if (e?.status === 400) return bad(req, res, 400, e.code || 40003, e.message);
     logError(`PUT business-plan workspace traceId=${req.traceId}`, e);
     return bad(req, res, 500, 50000, e.message);
   }
 });
+
+/** 抢占章节编辑锁（先到先得；同一用户同时只持一把章锁） */
+router.post(
+  '/student/personal-classes/:classId/business-plan/section-locks',
+  requireAuth(),
+  requireStudent(),
+  async (req, res) => {
+    try {
+      const ctx = await requireTeamContext(req, res);
+      if (!ctx) return;
+      if (!(await assertEntryAllowed(ctx, req, res))) return;
+      if (await isReadOnly(ctx.pool, ctx.team.id)) {
+        return bad(req, res, 403, 40311, '商业计划书已审核通过，不可再编辑');
+      }
+      const sectionKey = String(req.body?.sectionKey || '').trim();
+      if (!sectionKey) return bad(req, res, 400, 40004, '请选择章节');
+
+      // 释放自己持有的其他章锁
+      await ctx.pool.query(
+        `DELETE FROM teacher_personal_class_team_business_plan_section_locks
+         WHERE team_id = $1 AND locked_by = $2 AND section_key <> $3`,
+        [ctx.team.id, ctx.sid, sectionKey]
+      );
+      await loadActiveSectionLocks(ctx.pool, ctx.team.id); // 顺带清过期
+
+      const existing = await getActiveLockForSection(ctx.pool, ctx.team.id, sectionKey);
+      if (existing && String(existing.lockedById) !== String(ctx.sid)) {
+        return res.status(409).json({
+          code: 40902,
+          message: `章节已被 ${existing.lockedByName} 编辑中`,
+          data: { lock: existing, workspace: await buildWorkspacePayload(ctx) },
+          traceId: req.traceId,
+        });
+      }
+
+      await ctx.pool.query(
+        `INSERT INTO teacher_personal_class_team_business_plan_section_locks
+           (team_id, section_key, locked_by, locked_at, heartbeat_at)
+         VALUES ($1, $2, $3, now(), now())
+         ON CONFLICT (team_id, section_key)
+         DO UPDATE SET
+           locked_by = EXCLUDED.locked_by,
+           locked_at = CASE
+             WHEN teacher_personal_class_team_business_plan_section_locks.locked_by = EXCLUDED.locked_by
+               THEN teacher_personal_class_team_business_plan_section_locks.locked_at
+             ELSE now()
+           END,
+           heartbeat_at = now()`,
+        [ctx.team.id, sectionKey, ctx.sid]
+      );
+
+      const lock = await getActiveLockForSection(ctx.pool, ctx.team.id, sectionKey);
+      return ok(req, res, { lock, workspace: await buildWorkspacePayload(ctx) });
+    } catch (e) {
+      logError(`POST business-plan section-locks traceId=${req.traceId}`, e);
+      return bad(req, res, 500, 50000, e.message);
+    }
+  }
+);
+
+router.post(
+  '/student/personal-classes/:classId/business-plan/section-locks/heartbeat',
+  requireAuth(),
+  requireStudent(),
+  async (req, res) => {
+    try {
+      const ctx = await requireTeamContext(req, res);
+      if (!ctx) return;
+      const sectionKey = String(req.body?.sectionKey || '').trim();
+      if (!sectionKey) return bad(req, res, 400, 40004, '请选择章节');
+
+      const { rows } = await ctx.pool.query(
+        `UPDATE teacher_personal_class_team_business_plan_section_locks
+         SET heartbeat_at = now()
+         WHERE team_id = $1 AND section_key = $2 AND locked_by = $3
+           AND heartbeat_at >= now() - interval '15 seconds'
+         RETURNING section_key`,
+        [ctx.team.id, sectionKey, ctx.sid]
+      );
+      if (!rows.length) {
+        return res.status(409).json({
+          code: 40902,
+          message: '章节锁已失效，请重新进入编辑',
+          data: { workspace: await buildWorkspacePayload(ctx) },
+          traceId: req.traceId,
+        });
+      }
+      return ok(req, res, {
+        lock: await getActiveLockForSection(ctx.pool, ctx.team.id, sectionKey),
+        workspace: await buildWorkspacePayload(ctx),
+      });
+    } catch (e) {
+      logError(`POST business-plan section-locks/heartbeat traceId=${req.traceId}`, e);
+      return bad(req, res, 500, 50000, e.message);
+    }
+  }
+);
+
+router.delete(
+  '/student/personal-classes/:classId/business-plan/section-locks',
+  requireAuth(),
+  requireStudent(),
+  async (req, res) => {
+    try {
+      const ctx = await requireTeamContext(req, res);
+      if (!ctx) return;
+      const sectionKey = String(req.body?.sectionKey || req.query?.sectionKey || '').trim();
+      if (sectionKey) {
+        await ctx.pool.query(
+          `DELETE FROM teacher_personal_class_team_business_plan_section_locks
+           WHERE team_id = $1 AND section_key = $2 AND locked_by = $3`,
+          [ctx.team.id, sectionKey, ctx.sid]
+        );
+      } else {
+        await ctx.pool.query(
+          `DELETE FROM teacher_personal_class_team_business_plan_section_locks
+           WHERE team_id = $1 AND locked_by = $2`,
+          [ctx.team.id, ctx.sid]
+        );
+      }
+      return ok(req, res, { workspace: await buildWorkspacePayload(ctx) });
+    } catch (e) {
+      logError(`DELETE business-plan section-locks traceId=${req.traceId}`, e);
+      return bad(req, res, 500, 50000, e.message);
+    }
+  }
+);
 
 router.post('/student/personal-classes/:classId/business-plan/versions', requireAuth(), requireStudent(), async (req, res) => {
   try {
@@ -737,6 +997,94 @@ router.post('/student/personal-classes/:classId/business-plan/generate/stream', 
 });
 
 router.post(
+  '/student/personal-classes/:classId/business-plan/sections/outline',
+  requireAuth(),
+  requireStudent(),
+  async (req, res) => {
+    try {
+      const ctx = await requireTeamContext(req, res);
+      if (!ctx) return;
+      if (!(await assertEntryAllowed(ctx, req, res))) return;
+      if (await isReadOnly(ctx.pool, ctx.team.id)) {
+        return bad(req, res, 403, 40311, '商业计划书已审核通过，不可再生成');
+      }
+      const provider = await getEnabledProvider('multimodal');
+      if (!provider) return bad(req, res, 503, 50301, '未配置 AI 服务');
+
+      const bundle = await assembleBusinessPlanBundle(ctx.pool, ctx.team.id);
+      const userPrompt = buildBusinessPlanOutlineUserPrompt(bundle);
+      logPromptToConsole?.(provider, BUSINESS_PLAN_OUTLINE_SYSTEM_PROMPT, userPrompt);
+
+      let text = '';
+      try {
+        text = await chatCompletion({
+          provider,
+          system: BUSINESS_PLAN_OUTLINE_SYSTEM_PROMPT,
+          user: userPrompt,
+          jsonMode: true,
+        });
+      } catch (e) {
+        const sm = String(e?.message || '');
+        if (/response_format|json_object|json mode/i.test(sm)) {
+          text = await chatCompletion({
+            provider,
+            system: BUSINESS_PLAN_OUTLINE_SYSTEM_PROMPT,
+            user: userPrompt,
+            jsonMode: false,
+          });
+        } else {
+          throw e;
+        }
+      }
+
+      let parsed;
+      try {
+        parsed = typeof text === 'string' ? JSON.parse(text) : text;
+      } catch {
+        parsed = extractJsonFromLlmText(String(text || '')) || null;
+      }
+      const sections = normalizeOutlinePayload(parsed);
+
+      // 生成大纲前：不允许他人持有有效章节锁
+      const locks = await loadActiveSectionLocks(ctx.pool, ctx.team.id);
+      const others = locks.filter((l) => String(l.lockedById) !== String(ctx.sid));
+      if (others.length) {
+        return res.status(409).json({
+          code: 40902,
+          message: `有同学正在编辑章节（${others.map((o) => o.lockedByName).join('、')}），请稍后再生成大纲`,
+          data: { workspace: await buildWorkspacePayload(ctx) },
+          traceId: req.traceId,
+        });
+      }
+      await ctx.pool.query(
+        `DELETE FROM teacher_personal_class_team_business_plan_section_locks WHERE team_id = $1`,
+        [ctx.team.id]
+      );
+
+      const row = await ensureWorkspace(ctx.pool, ctx.team.id, ctx.classId);
+      const clientRevision = Number(req.body?.revision ?? row?.revision ?? 1);
+      const payload = await saveWorkspaceOptimistic(ctx, {
+        clientSections: sections,
+        clientRevision,
+        replaceAll: true,
+      });
+      return ok(req, res, payload);
+    } catch (e) {
+      if (e?.status === 409) {
+        return res.status(409).json({
+          code: e.code || 40901,
+          message: e.message,
+          data: e.payload || null,
+          traceId: req.traceId,
+        });
+      }
+      logError(`POST business-plan sections/outline traceId=${req.traceId}`, e);
+      return bad(req, res, 500, 50000, friendlyLlmErrorMessage(e) || e.message);
+    }
+  }
+);
+
+router.post(
   '/student/personal-classes/:classId/business-plan/sections/fill',
   requireAuth(),
   requireStudent(),
@@ -755,6 +1103,15 @@ router.post(
       if (!sections.length) return bad(req, res, 400, 40004, '章节内容为空');
       if (!sections.some((s) => String(s.key || '').trim() === sectionKey)) {
         return bad(req, res, 400, 40004, '章节不存在');
+      }
+      const lock = await getActiveLockForSection(ctx.pool, ctx.team.id, sectionKey);
+      if (!lock || String(lock.lockedById) !== String(ctx.sid)) {
+        return res.status(409).json({
+          code: 40902,
+          message: lock ? `章节已被 ${lock.lockedByName} 编辑中` : '请先进入章节编辑态再填充',
+          data: { workspace: await buildWorkspacePayload(ctx) },
+          traceId: req.traceId,
+        });
       }
       const provider = await getEnabledProvider('multimodal');
       if (!provider) return bad(req, res, 503, 50301, '未配置 AI 服务');
@@ -800,19 +1157,23 @@ router.post(
         return bad(req, res, 500, 50000, 'AI 返回格式无效，请稍后重试');
       }
       const nextSections = sections.map((s) => (s.key === sectionKey ? { ...s, content: filledContent } : s));
-
-      await ctx.pool.query(
-        `INSERT INTO teacher_personal_class_team_business_plan_workspace
-           (team_id, teacher_personal_class_id, sections_json, updated_at, updated_by)
-         VALUES ($1, $2, $3::jsonb, now(), $4)
-         ON CONFLICT (team_id)
-         DO UPDATE SET sections_json = EXCLUDED.sections_json, updated_at = now(), updated_by = EXCLUDED.updated_by`,
-        [ctx.team.id, ctx.classId, JSON.stringify(nextSections), ctx.sid]
-      );
-
-      const payload = await buildWorkspacePayload(ctx);
+      const row = await ensureWorkspace(ctx.pool, ctx.team.id, ctx.classId);
+      const clientRevision = Number(req.body?.revision ?? row?.revision ?? 1);
+      const payload = await saveWorkspaceOptimistic(ctx, {
+        clientSections: nextSections,
+        clientRevision,
+        activeSectionKey: sectionKey,
+      });
       return ok(req, res, payload);
     } catch (e) {
+      if (e?.status === 409) {
+        return res.status(409).json({
+          code: e.code || 40901,
+          message: e.message,
+          data: e.payload || null,
+          traceId: req.traceId,
+        });
+      }
       logError(`POST business-plan sections/fill traceId=${req.traceId}`, e);
       return bad(req, res, 500, 50000, friendlyLlmErrorMessage(e));
     }
@@ -1019,8 +1380,39 @@ router.post(
       if (!(await assertEntryAllowed(ctx, req, res))) return;
       if (!ctx.isTeamLeader) return bad(req, res, 403, 40303, '仅队长可提交最终商业计划书');
 
-      const versionId = parseId(req.body?.versionId);
-      if (!versionId) return bad(req, res, 400, 40003, '请选择要提交的版本');
+      // 优先用当前工作区隐式打提交快照；兼容旧客户端传 versionId
+      let versionId = parseId(req.body?.versionId);
+      if (!versionId) {
+        const row = await ensureWorkspace(ctx.pool, ctx.team.id, ctx.classId);
+        const sections = coerceSections(row?.sections_json);
+        if (!countCompletedSections(sections)) {
+          return bad(req, res, 400, 40004, '请先填写并保存商业计划书要点后再提交');
+        }
+        await ctx.pool.query(
+          `INSERT INTO teacher_personal_class_team_business_plan_workspace
+             (team_id, teacher_personal_class_id, sections_json, updated_at, updated_by)
+           VALUES ($1, $2, $3::jsonb, now(), $4)
+           ON CONFLICT (team_id)
+           DO UPDATE SET sections_json = EXCLUDED.sections_json, updated_at = now(), updated_by = EXCLUDED.updated_by`,
+          [ctx.team.id, ctx.classId, JSON.stringify(sections), ctx.sid]
+        );
+        const { rows: maxRows } = await ctx.pool.query(
+          `SELECT COALESCE(MAX(version_no), 0)::int AS m
+           FROM teacher_personal_class_team_business_plan_versions
+           WHERE team_id = $1`,
+          [ctx.team.id]
+        );
+        const nextNo = Number(maxRows[0]?.m || 0) + 1;
+        const { rows: ins } = await ctx.pool.query(
+          `INSERT INTO teacher_personal_class_team_business_plan_versions
+             (team_id, version_no, summary, sections_json, saved_by)
+           VALUES ($1, $2, $3, $4::jsonb, $5)
+           RETURNING id`,
+          [ctx.team.id, nextNo, '提交快照', JSON.stringify(sections), ctx.sid]
+        );
+        versionId = Number(ins[0]?.id);
+      }
+      if (!versionId) return bad(req, res, 400, 40003, '提交失败：无法创建快照');
 
       const files = Array.isArray(req.files) ? req.files : [];
       const allowedExt = new Set(['.ppt', '.pptx', '.doc', '.docx', '.pdf', '.xls', '.xlsx', '.zip']);

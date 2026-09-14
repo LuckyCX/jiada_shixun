@@ -1,51 +1,72 @@
 /** 商业模式设计 AI：提示词集中维护（勿写入前端） */
 import { extractJsonFromLlmText, findAllBalancedJsonObjects } from './marketResearchSse.js';
 
-export const BUSINESS_MODEL_SWOT_JSON_SCHEMA = `
-最终必须输出且仅输出一个 JSON 对象（不要用 markdown 代码块包裹）。字段：
-{
-  "strengths": "优势分析，多行可使用 \\n，可用 • 开头列表",
-  "weaknesses": "劣势分析",
-  "opportunities": "机会分析",
-  "threats": "威胁分析"
+export const BUSINESS_MODEL_SWOT_JSON_SCHEMA = `{
+  "strengths": "优势（非空，至少 2 条要点，可用 \\n 与 •）",
+  "weaknesses": "劣势（非空，至少 2 条要点）",
+  "opportunities": "机会（非空，至少 2 条要点）",
+  "threats": "威胁（非空，至少 2 条要点）"
 }
-四段均须为非空字符串，每段至少 2 条要点。`;
+四键必须齐全，禁止增删键，禁止空字符串。`;
 
-export const BUSINESS_MODEL_SWOT_SYSTEM_PROMPT = `你是创业实训课程的商业模式助教。根据给定的小组项目信息与前期资料，生成 SWOT 分析的四个维度文本。
+export const BUSINESS_MODEL_SWOT_SYSTEM_PROMPT = `你是创业实训课程的商业模式助教。
 
-工作方式：先理解项目定位与竞争环境，再按 schema 输出 JSON，语言简洁、可执行，避免空泛套话。
+#Context#
+根据小组项目信息与前期资料生成 SWOT。
 
-${BUSINESS_MODEL_SWOT_JSON_SCHEMA}`;
+#Objective#
+输出 SWOT 四维 JSON，供页面直接展示。
+
+#Schema#
+${BUSINESS_MODEL_SWOT_JSON_SCHEMA}
+
+#Examples#
+{"strengths":"• 场景刚需明确\\n• 获客成本相对可控","weaknesses":"• 供给不稳定\\n• 信任机制不足","opportunities":"• 校园渠道可复制\\n• 政策鼓励循环利用","threats":"• 平台型竞品挤压\\n• 季节性波动"}
+
+#Response#
+- 只能输出上述四键 JSON，禁止 markdown / 解释。
+- 内容须贴合材料，资料不足处标注合理假设。`;
 
 export function buildBusinessModelSwotUserPrompt(contextBundle) {
-  return `请基于以下资料生成 SWOT 四个维度（严格按 system 中的 JSON schema 输出）。
+  return `请基于以下资料生成 SWOT（严格按 system #Schema#，四键齐全）。
 
-${String(contextBundle || '').trim()}`;
+###
+${String(contextBundle || '').trim() || '（无）'}
+###`;
 }
 
-export const BUSINESS_MODEL_MARKETING_JSON_SCHEMA = `
-最终必须输出且仅输出一个 JSON 对象。字段：
-{
-  "product": "产品策略（Product）",
-  "price": "价格策略（Price）",
-  "place": "渠道策略（Place）",
-  "promotion": "推广策略（Promotion）"
+export const BUSINESS_MODEL_MARKETING_JSON_SCHEMA = `{
+  "product": "产品策略（非空，至少 2 条要点）",
+  "price": "价格策略（非空，至少 2 条要点）",
+  "place": "渠道策略（非空，至少 2 条要点）",
+  "promotion": "推广策略（非空，至少 2 条要点）"
 }
-四字段均须为非空字符串，每段至少 2 条要点，结合项目实际。`;
+四键必须齐全，禁止增删键。`;
 
-export const BUSINESS_MODEL_MARKETING_SYSTEM_PROMPT = `你是创业实训课程的营销战略助教。根据给定资料输出 4P 营销策略。
+export const BUSINESS_MODEL_MARKETING_SYSTEM_PROMPT = `你是创业实训课程的营销战略助教。
 
-${BUSINESS_MODEL_MARKETING_JSON_SCHEMA}`;
+#Context#
+根据给定资料输出 4P 营销策略。
+
+#Objective#
+输出 Product/Price/Place/Promotion 四段 JSON。
+
+#Schema#
+${BUSINESS_MODEL_MARKETING_JSON_SCHEMA}
+
+#Response#
+- 只能输出上述四键 JSON，禁止 markdown。
+- 每段至少 2 条可执行要点，结合项目实际。`;
 
 export function buildBusinessModelMarketingUserPrompt(contextBundle) {
-  return `请基于以下资料生成 4P 营销策略（严格按 system 中的 JSON schema 输出）。
+  return `请基于以下资料生成 4P（严格按 system #Schema#）。
 
-${String(contextBundle || '').trim()}`;
+###
+${String(contextBundle || '').trim() || '（无）'}
+###`;
 }
 
-export const BUSINESS_MODEL_FINANCE_ITEMS_JSON_SCHEMA = `
-最终必须输出且仅输出一个 JSON 对象。字段：
-{
+export const BUSINESS_MODEL_FINANCE_ITEMS_JSON_SCHEMA = `{
   "costs": [
     { "category": "固定成本" | "变动成本", "name": "成本项名称（不含金额）" }
   ],
@@ -53,19 +74,33 @@ export const BUSINESS_MODEL_FINANCE_ITEMS_JSON_SCHEMA = `
     { "source": "收入来源名称（不含金额）" }
   ]
 }
-严格要求：
-- costs、revenues 均为数组；可为空但不会同时为空时应尽量覆盖常见创业场景。
-- 禁止出现金额、单价、月供、年费、百分比数字等数值字段。
-- category 只能是「固定成本」或「变动成本」。`;
+固定约束：
+- costs 至少 3 条、revenues 至少 2 条。
+- category 只能是「固定成本」或「变动成本」。
+- 禁止金额、单价、百分比等数值字段。
+- 禁止增删顶层键。`;
 
-export const BUSINESS_MODEL_FINANCE_ITEMS_SYSTEM_PROMPT = `你是创业实训课程的财务条目梳理助教。根据项目背景仅罗列可能发生的成本项目名称与收入来源名称，**不得输出任何金额或数字单价**。
+export const BUSINESS_MODEL_FINANCE_ITEMS_SYSTEM_PROMPT = `你是创业实训课程的财务条目梳理助教。
 
-${BUSINESS_MODEL_FINANCE_ITEMS_JSON_SCHEMA}`;
+#Context#
+根据项目背景罗列可能发生的成本项与收入来源名称。
+
+#Objective#
+仅输出条目名称 JSON，不得出现任何金额。
+
+#Schema#
+${BUSINESS_MODEL_FINANCE_ITEMS_JSON_SCHEMA}
+
+#Response#
+- 只能输出 costs / revenues 两个键。
+- 条目名称具体，避免「其他费用」这类空泛项超过 1 条。`;
 
 export function buildBusinessModelFinanceItemsUserPrompt(contextBundle) {
-  return `请基于以下资料生成成本项与收入来源条目（严格按 system 中的 JSON schema 输出；禁止金额）。
+  return `请基于以下资料生成成本项与收入来源（严格按 system #Schema#；禁止金额）。
 
-${String(contextBundle || '').trim()}`;
+###
+${String(contextBundle || '').trim() || '（无）'}
+###`;
 }
 
 function pickSwotCandidate(parsed, text) {
@@ -196,32 +231,46 @@ export const BMC_MODULE_KEYS = [
   'revenueStreams',
 ];
 
-export const BUSINESS_MODEL_BMC_JSON_SCHEMA = `
-最终必须输出且仅输出一个 JSON 对象（不要用 markdown 代码块包裹）。字段（均为非空字符串，可用 \\n 与 • 列表）：
-{
-  "keyPartnerships": "合作伙伴",
-  "keyActivities": "关键业务",
-  "valueProposition": "价值主张",
-  "customerRelationships": "客户关系",
-  "customerSegments": "客户细分",
-  "keyResources": "核心资源",
-  "channels": "渠道通路",
-  "costStructure": "成本结构",
-  "revenueStreams": "收入来源"
+export const BUSINESS_MODEL_BMC_JSON_SCHEMA = `{
+  "keyPartnerships": "合作伙伴（非空）",
+  "keyActivities": "关键业务（非空）",
+  "valueProposition": "价值主张（非空）",
+  "customerRelationships": "客户关系（非空）",
+  "customerSegments": "客户细分（非空）",
+  "keyResources": "核心资源（非空）",
+  "channels": "渠道通路（非空）",
+  "costStructure": "成本结构（非空）",
+  "revenueStreams": "收入来源（非空）"
 }
-九格均需充实、可执行，综合组员虚拟董事会画布与项目资料，形成团队最终版。`;
+固定约束：上述九键必须齐全且均为非空字符串；禁止增删键；可用 \\n 与 • 列表。`;
 
-export const BUSINESS_MODEL_BMC_SYSTEM_PROMPT = `你是创业实训课程的商业模式画布（BMC）助教。根据项目资料与各组员在虚拟董事会环节已保存的九格画布，综合输出团队最终商业模式画布。
+export const BUSINESS_MODEL_BMC_SYSTEM_PROMPT = `你是创业实训课程的商业模式画布（BMC）助教。
 
-${BUSINESS_MODEL_BMC_JSON_SCHEMA}`;
+#Context#
+根据项目资料与各组员虚拟董事会已保存九格，综合输出团队最终画布。
+
+#Objective#
+输出九格齐全的 BMC JSON，供页面一键写入。
+
+#Schema#
+${BUSINESS_MODEL_BMC_JSON_SCHEMA}
+
+#Response#
+- 只能输出上述九键 JSON，禁止 markdown。
+- 内容可执行、综合组员画布与资料，资料冲突时取可落地共识并简要说明假设。`;
 
 export function buildBusinessModelBmcUserPrompt(contextBundle, warRoomMemberSections) {
-  return `请基于以下资料生成团队最终商业模式画布九格（严格按 system 中的 JSON schema 输出）。
+  return `请基于以下资料生成团队最终商业模式画布九格（严格按 system #Schema#，九键齐全）。
 
-${String(contextBundle || '').trim()}
+###
+【项目与前期资料】
+${String(contextBundle || '').trim() || '（无）'}
+###
 
+###
 【各组员虚拟董事会已保存画布】
-${String(warRoomMemberSections || '').trim() || '（无）'}`;
+${String(warRoomMemberSections || '').trim() || '（无）'}
+###`;
 }
 
 function pickBmcCandidate(parsed, text) {

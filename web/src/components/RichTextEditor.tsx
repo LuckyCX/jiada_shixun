@@ -28,12 +28,15 @@ import {
   TableToolbar,
   Underline,
 } from 'ckeditor5';
+import { useEffect, useRef } from 'react';
 import { sanitizeRichText } from '../lib/richText';
 import 'ckeditor5/ckeditor5.css';
 
 type RichTextEditorProps = {
   value: string;
   onChange?: (value: string) => void;
+  onFocus?: () => void;
+  onBlur?: () => void;
   placeholder?: string;
   disabled?: boolean;
   minRows?: number;
@@ -44,6 +47,8 @@ type RichTextEditorProps = {
 export default function RichTextEditor({
   value,
   onChange,
+  onFocus,
+  onBlur,
   placeholder,
   disabled,
   minRows = 10,
@@ -51,6 +56,14 @@ export default function RichTextEditor({
   viewOnly = false,
 }: RichTextEditorProps) {
   const minHeight = `${minRows * 1.5}em`;
+  const onFocusRef = useRef(onFocus);
+  const onBlurRef = useRef(onBlur);
+  useEffect(() => {
+    onFocusRef.current = onFocus;
+  }, [onFocus]);
+  useEffect(() => {
+    onBlurRef.current = onBlur;
+  }, [onBlur]);
 
   if (viewOnly) {
     return (
@@ -155,6 +168,9 @@ export default function RichTextEditor({
           placeholder,
         }}
         onReady={(editor) => {
+          const viewDoc = editor.editing.view.document;
+          viewDoc.on('focus', () => onFocusRef.current?.());
+          viewDoc.on('blur', () => onBlurRef.current?.());
           if (fitHeight) return;
           const root = editor.editing.view.document.getRoot();
           if (!root) return;

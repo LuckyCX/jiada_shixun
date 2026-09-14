@@ -1,43 +1,56 @@
-const ANALYSIS_JSON_SCHEMA = `
-仅输出一个 JSON 对象，不要 markdown 或解释。结构：
-{
-  "score": 0-100 的整数,
-  "conclusions": ["字符串"],
-  "opportunities": ["字符串"],
-  "risks": ["字符串"],
-  "suggestions": ["字符串"],
+import { buildStructuredSystemPrompt, padStringList } from './llmJsonOutputRules.js';
+
+const ANALYSIS_SCHEMA = `{
+  "score": 0-100 整数,
+  "conclusions": ["结论1", "结论2", "结论3"],
+  "opportunities": ["机会1", "机会2", "机会3"],
+  "risks": ["风险1", "风险2", "风险3"],
+  "suggestions": ["建议1", "建议2", "建议3"],
   "stats": {
     "totalCollected": 整数,
     "validSamples": 整数或 null,
     "activeSurveyCount": 整数
   },
   "charts": {
-    "ageDistribution": [{"label":"", "value": 非负整数}],
-    "spendingDistribution": [{"label":"", "value": 非负整数}],
-    "satisfactionDistribution": [{"label":"", "value": 非负整数}],
-    "improvementRanking": [{"label":"", "value": 0-100 整数}]
+    "ageDistribution": [{"label":"标签","value":非负整数}],
+    "spendingDistribution": [{"label":"标签","value":非负整数}],
+    "satisfactionDistribution": [{"label":"标签","value":非负整数}],
+    "improvementRanking": [{"label":"标签","value":0-100整数}]
   },
-  "keyFindings": [{"title":"", "desc":""}]
+  "keyFindings": [
+    {"title":"发现标题","desc":"一句话说明"},
+    {"title":"发现标题","desc":"一句话说明"},
+    {"title":"发现标题","desc":"一句话说明"}
+  ]
 }
-规则：
-- stats.totalCollected、stats.activeSurveyCount 必须与材料中给出的数字一致，不得编造。
-- 若问卷数据不足以支撑某类图表，对应数组必须为 []，并在 conclusions 中说明数据不足。
-- charts 各 item 的 value 为计数或百分比权重（improvementRanking 为 0-100），不得虚构样本。
-- validSamples 仅在材料可推断时填写，否则为 null。`;
+固定约束：
+- conclusions / opportunities / risks / suggestions 均恰好 3 条。
+- keyFindings 恰好 3 条，title/desc 均非空。
+- charts 四个键必须全部出现；无数据时对应值为 []（不可省略键）。
+- stats.totalCollected、stats.activeSurveyCount 必须与用户消息【系统统计】一致，禁止改写。
+- validSamples 仅在可推断时填整数，否则必须为 null。`;
 
-export const MARKET_ANALYSIS_SYSTEM_PROMPT = `你是创业实训课程的市场调研数据分析助教。仅根据小组线上问卷的题目与回收统计，输出结构化分析结论。
-${ANALYSIS_JSON_SCHEMA}`;
+const ANALYSIS_EXAMPLE = `{"score":68,"conclusions":["回收样本有限但方向清晰","核心痛点集中在效率","付费意愿中等"],"opportunities":["切入刚需场景","做轻量 MVP","借校园渠道获客"],"risks":["样本偏差","竞品同质","留存不确定"],"suggestions":["补齐目标用户访谈","先验证转化漏斗","明确差异化卖点"],"stats":{"totalCollected":42,"validSamples":40,"activeSurveyCount":1},"charts":{"ageDistribution":[{"label":"18-22岁","value":28}],"spendingDistribution":[{"label":"500-1500元","value":19}],"satisfactionDistribution":[{"label":"3分","value":12}],"improvementRanking":[{"label":"生成速度","value":78}]},"keyFindings":[{"title":"效率诉求突出","desc":"多数受访者希望缩短内容制作时间"},{"title":"价格敏感","desc":"更倾向先试用再付费"},{"title":"场景集中","desc":"短视频创作是高频场景"}]}`;
+
+export const MARKET_ANALYSIS_SYSTEM_PROMPT = buildStructuredSystemPrompt({
+  context: '你是创业实训课程的市场调研数据分析助教。仅根据小组线上问卷题目与回收统计做分析。',
+  objective: '输出可直接用于页面展示的结构化分析 JSON，数字与图表须可被材料支撑。',
+  style: '结论具体、可执行；不编造样本。',
+  schemaBlock: ANALYSIS_SCHEMA,
+  exampleBlock: `Output 示例（字段集合必须一致，数值随材料变化）：\n${ANALYSIS_EXAMPLE}`,
+});
 
 export function buildMarketAnalysisUserPrompt(contextText, hardStats) {
-  return `请基于以下问卷材料进行分析。
+  return `请基于以下问卷材料进行分析，严格按 system #Schema# 输出（列表类字段各恰好 3 条）。
 
-【系统统计（必须使用）】
+【系统统计（必须原样写入 stats）】
 问卷回收总量：${hardStats.totalCollected}
 进行中问卷数：${hardStats.activeSurveyCount}
 
-${contextText}
-
-请输出 JSON。`;
+###
+【问卷材料】
+${String(contextText || '').trim() || '（无）'}
+###`;
 }
 
 function unwrapAnalysisPayload(raw) {
@@ -69,8 +82,12 @@ export function normalizeAnalysisResult(raw, hardStats) {
   if (!Number.isFinite(score)) {
     return { error: 'AI 未返回有效 score' };
   }
-  const pickStrings = (arr) =>
-    Array.isArray(arr) ? arr.map((s) => String(s).trim()).filter(Boolean) : [];
+  const pickStrings = (arr, fallbacks) =>
+    padStringList(
+      Array.isArray(arr) ? arr.map((s) => String(s).trim()).filter(Boolean) : [],
+      3,
+      fallbacks
+    ).slice(0, 3);
   const pickChart = (arr) => {
     if (!Array.isArray(arr)) return [];
     return arr
@@ -83,17 +100,25 @@ export function normalizeAnalysisResult(raw, hardStats) {
       })
       .filter(Boolean);
   };
-  const keyFindings = Array.isArray(payload.keyFindings)
+  let keyFindings = Array.isArray(payload.keyFindings)
     ? payload.keyFindings
         .map((k) => {
           if (!k || typeof k !== 'object') return null;
           const title = String(k.title || '').trim();
           const desc = String(k.desc || '').trim();
           if (!title) return null;
-          return { title, desc };
+          return { title, desc: desc || '详见问卷统计' };
         })
         .filter(Boolean)
     : [];
+  while (keyFindings.length < 3) {
+    keyFindings.push({
+      title: `发现${keyFindings.length + 1}`,
+      desc: '材料有限，建议补充样本后复盘',
+    });
+  }
+  keyFindings = keyFindings.slice(0, 3);
+
   const statsIn = payload.stats && typeof payload.stats === 'object' ? payload.stats : {};
   const validRaw = statsIn.validSamples;
   const validSamples =
@@ -106,10 +131,10 @@ export function normalizeAnalysisResult(raw, hardStats) {
   return {
     result: {
       score,
-      conclusions: pickStrings(payload.conclusions),
-      opportunities: pickStrings(payload.opportunities),
-      risks: pickStrings(payload.risks),
-      suggestions: pickStrings(payload.suggestions),
+      conclusions: pickStrings(payload.conclusions, ['样本揭示了基本需求方向', '痛点相对集中', '仍需扩大验证']),
+      opportunities: pickStrings(payload.opportunities, ['可切入高频场景', '可做轻量方案', '渠道具备可达性']),
+      risks: pickStrings(payload.risks, ['样本可能偏差', '竞争同质化', '转化不确定']),
+      suggestions: pickStrings(payload.suggestions, ['补访目标用户', '验证核心假设', '明确差异化卖点']),
       stats: {
         totalCollected: hardStats.totalCollected,
         validSamples,

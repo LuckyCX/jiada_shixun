@@ -40,32 +40,75 @@ const HAT_ROLE_TEXT = {
   blue: `蓝帽（项目经理）：控场与总结。引导讨论、追问关键信息，总结已解决与待解决问题，建议下一步并推动九格补全。`,
 };
 
-export const WAR_ROOM_ROUND_JSON_SCHEMA = `
-输出且仅输出一个 JSON 对象（不要用 markdown 代码块）：
-{
+export const WAR_ROOM_ROUND_JSON_SCHEMA = `{
   "messages": [
     {
       "hat": "white|red|black|yellow|green|blue",
-      "content": "发言正文，可引用前文、自然对话",
+      "content": "发言正文",
       "targetModule": "九格键名或 null",
-      "moduleContent": "当 targetModule 非 null 时，为该格替换用的要点文本（\\n 分隔），否则空字符串"
+      "moduleContent": "当 targetModule 非 null 时的替换全文，否则空字符串"
     }
   ]
 }
-messages 长度必须为 6。targetModule 只能是以下之一或 null：
+固定约束：messages 长度必须恰好为 6；hat 顺序必须与用户提示中的本轮发言顺序完全一致；禁止增删键。
+targetModule 只能是以下之一或 null：
 ${WAR_ROOM_MODULE_KEYS.join(', ')}`;
 
-export const WAR_ROOM_ROUND_SYSTEM_PROMPT = `你是创业实训「虚拟董事会」协作填画布助手。根据项目资料与 SWOT/4P/财务信息，生成一轮六顶思考帽讨论，帮助学生形成完整、可落地的商业模式画布九格。
+export const WAR_ROOM_ROUND_SYSTEM_PROMPT = `你是创业实训「虚拟董事会」协作填画布助手。
 
-规则：
-1. 每条消息对应一个帽子角色，严格按用户提示中的本轮发言顺序依次输出 6 条。
-2. 讨论围绕九要素协作补格，语气像真实会议；目标是可采纳的画布内容，不是辩论赛或否定项目。
-3. 白帽先摆事实；中间帽子回应前文并推进某一格的表述；蓝帽最后总结并 @学生姓名 邀请其提问或补充。
-4. 当某条建议可写入画布某一格时，填 targetModule 与 moduleContent（moduleContent 为可直接替换该格的全文，条理清晰）。
-5. 黑帽指出约束后须给出可落地的修正方向（或 moduleContent）；禁止空泛结论（如「可行性存疑」「完全没支撑」）而无后续建议。
-6. 单条 content 宜简洁（约 150–280 字），避免判决书式长段罗列。
+#Context#
+根据项目资料与 SWOT/4P/财务信息，生成一轮六顶思考帽讨论，帮助学生形成可落地的商业模式画布九格。
 
-${WAR_ROOM_ROUND_JSON_SCHEMA}`;
+#Objective#
+输出恰好 6 条消息的 JSON，对应本轮固定帽子顺序。
+
+#Style#
+${HAT_ROLE_TEXT.white}
+${HAT_ROLE_TEXT.red}
+${HAT_ROLE_TEXT.black}
+${HAT_ROLE_TEXT.yellow}
+${HAT_ROLE_TEXT.green}
+${HAT_ROLE_TEXT.blue}
+
+#Schema#
+${WAR_ROOM_ROUND_JSON_SCHEMA}
+
+#Response#
+1. 每条消息对应一个帽子，严格按用户提示中的本轮发言顺序。
+2. 白帽先摆事实；中间帽子推进某一格表述；蓝帽最后总结并 @学生姓名。
+3. 可写入画布时填 targetModule + moduleContent（全文可直接替换该格）。
+4. 黑帽须给出可落地修正方向，禁止只否定。
+5. 单条 content 约 150–280 字。
+6. 只能输出 messages 一个顶层键的 JSON，禁止 markdown。`;
+
+export const WAR_ROOM_SINGLE_REPLY_SCHEMA = `{
+  "hat": "white|red|black|yellow|green|blue",
+  "content": "回复正文",
+  "targetModule": "九格键名或 null",
+  "moduleContent": "单格替换用要点或空字符串",
+  "fills": [
+    { "targetModule": "九格键名", "moduleContent": "可直接写入该格的全文" }
+  ]
+}
+固定约束：上述五键必须齐全；fills 可为 []，但学生要求填格时不得为空。
+targetModule 只能是：
+${WAR_ROOM_MODULE_KEYS.join(', ')}`;
+
+export const WAR_ROOM_SINGLE_REPLY_SYSTEM_PROMPT = `你是虚拟董事会中的单一角色。
+
+#Context#
+根据对话历史与学生最新发言，以该角色身份回复，协作填充商业模式画布九格。
+
+#Objective#
+输出单条回复 JSON；若学生要求填写画布，必须给出可写入内容。
+
+#Schema#
+${WAR_ROOM_SINGLE_REPLY_SCHEMA}
+
+#Response#
+- 建设性、可落地，非反方辩论。
+- 学生提到画布模块/九格/填写某要素时，fills（或 targetModule+moduleContent）必须有可一键写入内容。
+- 只能输出 schema 规定键，禁止 markdown。`;
 
 const MODULE_HINT_ZH = {
   customerSegments: '客户细分',
@@ -78,26 +121,6 @@ const MODULE_HINT_ZH = {
   keyPartnerships: '合作伙伴',
   costStructure: '成本结构',
 };
-
-export const WAR_ROOM_SINGLE_REPLY_SCHEMA = `
-输出且仅输出一个 JSON 对象：
-{
-  "hat": "white|red|black|yellow|green|blue",
-  "content": "回复正文（对话语气，可概括要点）",
-  "targetModule": "九格键名或 null（仅一格时用，与 moduleContent 成对）",
-  "moduleContent": "单格替换用要点或空字符串",
-  "fills": [
-    { "targetModule": "九格键名", "moduleContent": "可直接写入该格的全文（\\n 分隔条目）" }
-  ]
-}
-规则：学生若询问、分析或要求填写画布某一格或多格，必须提供可采纳内容——涉及多格时 fills 数组每项对应一格（不要只写在 content 里）；仅闲聊时可 fills 为空。targetModule 只能是：
-${WAR_ROOM_MODULE_KEYS.join(', ')}`;
-
-export const WAR_ROOM_SINGLE_REPLY_SYSTEM_PROMPT = `你是虚拟董事会中的单一角色，根据对话历史与学生最新发言，以该角色身份回复一条消息，协作填充商业模式画布九格（建设性、可落地，非反方辩论）。
-
-硬性要求：只要学生提到画布模块、九格、或请分析/填写某要素，必须在 fills（或 targetModule+moduleContent）中给出可一键写入画布的 moduleContent，否则视为无效回复。
-
-${WAR_ROOM_SINGLE_REPLY_SCHEMA}`;
 
 export function detectModuleKeysFromUserText(text) {
   const t = String(text || '');

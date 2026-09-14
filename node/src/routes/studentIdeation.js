@@ -6,6 +6,7 @@ import { chatCompletion, friendlyLlmErrorMessage, getEnabledProvider, logPromptT
 import {
   getIdeationMethodPrompt,
   IDEATION_METHOD_LABELS,
+  padIdeationStringList,
 } from '../lib/ideationPrompts.js';
 import { evaluateModulePrerequisiteForStudent } from '../lib/trainingModulePrerequisite.js';
 
@@ -110,11 +111,11 @@ function toScore(value, { min, max, integer = false }) {
   return integer ? Math.round(n) : Math.round(n * 10) / 10;
 }
 
-function textArray(value, field) {
-  if (!Array.isArray(value)) throw new Error(`AI 未返回有效 ${field}`);
-  const list = value.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 5);
-  if (list.length < 2) throw new Error(`AI 返回 ${field} 数量不足`);
-  return list;
+/** 列表字段与提示词约定一致：恰好 3 项 */
+function textArray(value) {
+  return padIdeationStringList(
+    Array.isArray(value) ? value.map((item) => String(item || '').trim()).filter(Boolean) : []
+  );
 }
 
 function normalizeAnalysis(parsed) {
@@ -124,30 +125,22 @@ function normalizeAnalysis(parsed) {
   const feasibility = toScore(parsed.feasibility, { min: 0, max: 5 });
   const marketPotential = toScore(parsed.marketPotential, { min: 0, max: 5 });
   const innovation = toScore(parsed.innovation, { min: 0, max: 5 });
-  const summary = String(parsed.summary || '').trim();
-  if (
-    overallScore == null ||
-    novelty == null ||
-    feasibility == null ||
-    marketPotential == null ||
-    innovation == null ||
-    !summary
-  ) {
-    throw new Error('AI 返回的评分字段不完整');
-  }
+  const summary =
+    String(parsed.summary || '').trim() ||
+    '当前创意描述信息较少，建议补充问题背景、目标用户与初步方案后再评估。';
   return {
     title: String(parsed.title || '').trim(),
     description: String(parsed.description || '').trim(),
-    overallScore,
-    novelty,
-    feasibility,
-    marketPotential,
-    innovation,
+    overallScore: overallScore ?? 40,
+    novelty: novelty ?? 2,
+    feasibility: feasibility ?? 2,
+    marketPotential: marketPotential ?? 2,
+    innovation: innovation ?? 2,
     summary,
-    strengths: textArray(parsed.strengths, 'strengths'),
-    weaknesses: textArray(parsed.weaknesses, 'weaknesses'),
-    suggestions: textArray(parsed.suggestions, 'suggestions'),
-    tags: textArray(parsed.tags, 'tags'),
+    strengths: textArray(parsed.strengths),
+    weaknesses: textArray(parsed.weaknesses),
+    suggestions: textArray(parsed.suggestions),
+    tags: textArray(parsed.tags),
   };
 }
 
@@ -731,13 +724,31 @@ router.post('/student/personal-classes/:classId/ideation/ideas/analyze', require
     const userPrompt = `方法：${IDEATION_METHOD_LABELS[methodKey]}\n学生原始表单：\n${JSON.stringify(formPayload, null, 2)}`;
     logPromptToConsole(provider, prompt, userPrompt);
 
-    const raw = await chatCompletion({
-      provider,
-      system: prompt,
-      user: userPrompt,
-      jsonMode: true,
-    });
-    const analysis = normalizeAnalysis(extractJsonObject(raw));
+    let raw;
+    try {
+      raw = await chatCompletion({
+        provider,
+        system: prompt,
+        user: userPrompt,
+        jsonMode: true,
+      });
+    } catch (e) {
+      // 部分模型不支持 json_object；降级为普通文本再抽 JSON
+      const sm = String(e?.message || '');
+      if (!/response_format|json_object|json mode/i.test(sm)) throw e;
+      raw = await chatCompletion({
+        provider,
+        system: prompt,
+        user: userPrompt,
+        jsonMode: false,
+      });
+    }
+    const parsed = extractJsonObject(raw);
+    if (!parsed) {
+      logError(`POST ideation analyze parse-fail preview=${String(raw || '').slice(0, 500)}`, new Error('parse'));
+      return bad(req, res, 500, 50011, 'AI 返回无法解析为 JSON，请重试');
+    }
+    const analysis = normalizeAnalysis(parsed);
 
     const submittedTitle = String(formPayload.title || '').trim();
     const submittedDescription = String(formPayload.description || formPayload.solution || '').trim();

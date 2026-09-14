@@ -61,6 +61,19 @@ const businessModels = [
   { id: 'platform', label: '平台抽佣', icon: 'ri-percent-line' },
 ];
 
+/** Y 轴刻度文案：避免「万元」取整后全变成 0 */
+function formatYAxisTick(value: number, divisor: number): string {
+  const scaled = value / divisor;
+  if (!Number.isFinite(scaled)) return '0';
+  if (divisor <= 1) return String(Math.round(scaled));
+  if (scaled === 0) return '0';
+  if (scaled >= 100) return String(Math.round(scaled));
+  if (scaled >= 10) return scaled.toFixed(1).replace(/\.0$/, '');
+  if (scaled >= 1) return scaled.toFixed(1);
+  // 不足 1 个单位（如 0.57 万元）保留两位，去掉末尾无意义 0
+  return scaled.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
+}
+
 const LineChart = ({
   data,
   color,
@@ -81,19 +94,24 @@ const LineChart = ({
   const W = 780;
   const H = 220;
   const PAD = 10;
-  const LPAD = 54; // 给竖轴预留空间
+  const LPAD = 58; // 给竖轴预留空间（兼容「元」四位数 / 「万元」小数）
 
   // 只绘制已模拟的天数数据
   const validData = data.slice(0, currentDay);
   if (validData.length === 0) return null;
 
   const maxValue = Math.max(...validData) || 1;
+  // 早期模拟收入常不足 1 万：用「元」刻度更清晰，避免 Math.round(万元) 全是 0
+  const useYuanScale = yValueDivisor >= 10000 && maxValue < yValueDivisor;
+  const axisDivisor = useYuanScale ? 1 : yValueDivisor;
+  const axisUnit = useYuanScale ? '元' : yUnit;
+
   const ticks = 4; // 0~max 分成4段，共5个刻度
   const yTicks = Array.from({ length: ticks + 1 }, (_, i) => {
     const ratio = i / ticks;
     const v = maxValue * ratio;
     const y = H - PAD - ratio * (H - PAD * 2);
-    const display = Math.round(v / yValueDivisor);
+    const display = formatYAxisTick(v, axisDivisor);
     return { y, display };
   });
 
@@ -126,7 +144,7 @@ const LineChart = ({
       </defs>
       {/* 竖轴标题 */}
       <text x={LPAD} y={12} textAnchor="start" fontSize="11" fill="#9ca3af">
-        {yLabel}（{yUnit}）
+        {yLabel}（{axisUnit}）
       </text>
       {/* 网格线与刻度 */}
       {yTicks.map((t, idx) => (

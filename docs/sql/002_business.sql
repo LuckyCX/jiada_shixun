@@ -718,6 +718,7 @@ CREATE TABLE teacher_personal_class_team_business_plan_workspace (
   team_id                      bigint PRIMARY KEY REFERENCES teacher_personal_class_teams (id) ON DELETE CASCADE,
   teacher_personal_class_id    bigint NOT NULL REFERENCES teacher_personal_classes (id) ON DELETE CASCADE,
   sections_json                jsonb NOT NULL DEFAULT '[]'::jsonb,
+  revision                     int NOT NULL DEFAULT 1,
   updated_at                   timestamptz NOT NULL DEFAULT now(),
   updated_by                   bigint REFERENCES users (id) ON DELETE SET NULL
 );

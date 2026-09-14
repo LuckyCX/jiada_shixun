@@ -26,14 +26,24 @@ export type BusinessPlanSubmission = {
   reviewedAt: string;
 };
 
+export type BusinessPlanSectionLock = {
+  sectionKey: string;
+  lockedById: string;
+  lockedByName: string;
+  lockedAt: string;
+  heartbeatAt: string;
+};
+
 export type BusinessPlanWorkspace = {
   sections: BusinessPlanSection[];
   fullText: string;
   completedSectionCount: number;
   totalSectionCount: number;
+  revision: number;
   updatedAt: string;
   updatedByName: string;
   versions: BusinessPlanVersionSummary[];
+  locks: BusinessPlanSectionLock[];
   submission: BusinessPlanSubmission | null;
   readOnly: boolean;
   isTeamLeader: boolean;
@@ -73,11 +83,82 @@ export async function fetchBusinessPlanWorkspace(classId: string): Promise<Busin
 
 export async function saveBusinessPlanWorkspace(
   classId: string,
-  sections: BusinessPlanSection[]
+  body: {
+    sections: BusinessPlanSection[];
+    revision: number;
+    activeSectionKey?: string;
+    replaceAll?: boolean;
+  }
 ): Promise<BusinessPlanWorkspace> {
-  return studentFetch(`/api/student/personal-classes/${classId}/business-plan/workspace`, {
+  return studentFetchAllowConflict(`/api/student/personal-classes/${classId}/business-plan/workspace`, {
     method: 'PUT',
-    body: JSON.stringify({ sections }),
+    body: JSON.stringify(body),
+  });
+}
+
+export class BusinessPlanConflictError extends Error {
+  code: number;
+  workspace: BusinessPlanWorkspace | null;
+  lock?: BusinessPlanSectionLock | null;
+  constructor(message: string, code: number, workspace: BusinessPlanWorkspace | null, lock?: BusinessPlanSectionLock | null) {
+    super(message);
+    this.name = 'BusinessPlanConflictError';
+    this.code = code;
+    this.workspace = workspace;
+    this.lock = lock || null;
+  }
+}
+
+async function studentFetchAllowConflict<T>(path: string, opts: RequestInit = {}): Promise<T> {
+  const { getPortalToken } = await import('./authApi');
+  const token = getPortalToken('student') || '';
+  const headers: Record<string, string> = {
+    ...(opts.headers as Record<string, string> | undefined),
+  };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  if (opts.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
+  const r = await fetch(path, { ...opts, headers });
+  const j = await r.json().catch(() => ({ code: -1, message: '无效 JSON', data: null }));
+  if (r.status === 409) {
+    const ws = (j.data?.workspace || (j.data?.sections ? j.data : null) || null) as BusinessPlanWorkspace | null;
+    throw new BusinessPlanConflictError(
+      typeof j.message === 'string' ? j.message : '发生冲突',
+      Number(j.code || 40901),
+      ws,
+      j.data?.lock || null
+    );
+  }
+  if (!r.ok || j.code !== 0) throw new Error(typeof j.message === 'string' ? j.message : `HTTP ${r.status}`);
+  return j.data as T;
+}
+
+export async function acquireBusinessPlanSectionLock(
+  classId: string,
+  sectionKey: string
+): Promise<{ lock: BusinessPlanSectionLock; workspace: BusinessPlanWorkspace }> {
+  return studentFetchAllowConflict(`/api/student/personal-classes/${classId}/business-plan/section-locks`, {
+    method: 'POST',
+    body: JSON.stringify({ sectionKey }),
+  });
+}
+
+export async function heartbeatBusinessPlanSectionLock(
+  classId: string,
+  sectionKey: string
+): Promise<{ lock: BusinessPlanSectionLock | null; workspace: BusinessPlanWorkspace }> {
+  return studentFetchAllowConflict(`/api/student/personal-classes/${classId}/business-plan/section-locks/heartbeat`, {
+    method: 'POST',
+    body: JSON.stringify({ sectionKey }),
+  });
+}
+
+export async function releaseBusinessPlanSectionLock(
+  classId: string,
+  sectionKey?: string
+): Promise<{ workspace: BusinessPlanWorkspace }> {
+  const q = sectionKey ? `?sectionKey=${encodeURIComponent(sectionKey)}` : '';
+  return studentFetch(`/api/student/personal-classes/${classId}/business-plan/section-locks${q}`, {
+    method: 'DELETE',
   });
 }
 
@@ -214,11 +295,27 @@ export async function generateBusinessPlanStream(
 
 export async function fillBusinessPlanSection(
   classId: string,
-  body: { sectionKey: string; mode: 'overwrite' | 'expand'; sections: BusinessPlanSection[] }
+  body: {
+    sectionKey: string;
+    mode: 'overwrite' | 'expand';
+    sections: BusinessPlanSection[];
+    revision: number;
+  }
 ): Promise<BusinessPlanWorkspace> {
-  return studentFetch(`/api/student/personal-classes/${classId}/business-plan/sections/fill`, {
+  return studentFetchAllowConflict(`/api/student/personal-classes/${classId}/business-plan/sections/fill`, {
     method: 'POST',
     body: JSON.stringify(body),
+  });
+}
+
+/** 根据项目上下文生成章节大纲（仅结构，正文为空） */
+export async function generateBusinessPlanOutline(
+  classId: string,
+  revision: number
+): Promise<BusinessPlanWorkspace> {
+  return studentFetchAllowConflict(`/api/student/personal-classes/${classId}/business-plan/sections/outline`, {
+    method: 'POST',
+    body: JSON.stringify({ revision }),
   });
 }
 
@@ -353,12 +450,12 @@ export async function listBusinessPlanAnalyses(classId: string): Promise<Busines
 
 export async function submitBusinessPlan(
   classId: string,
-  versionId: string,
-  files: File[] = []
+  files: File[] = [],
+  versionId?: string
 ): Promise<{ submission: BusinessPlanSubmission | null; trainingEnded: boolean }> {
   const { getPortalToken } = await import('./authApi');
   const fd = new FormData();
-  fd.append('versionId', String(versionId));
+  if (versionId) fd.append('versionId', String(versionId));
   (files || []).forEach((f) => fd.append('files', f));
   const token = getPortalToken('student') || '';
   const r = await fetch(`/api/student/personal-classes/${classId}/business-plan/submit`, {

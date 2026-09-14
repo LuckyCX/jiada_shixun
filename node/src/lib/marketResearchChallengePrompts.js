@@ -1,3 +1,5 @@
+import { padStringList } from './llmJsonOutputRules.js';
+
 export const CHALLENGE_PRESET_AGENTS = {
   'picky-user': {
     name: '挑剔用户',
@@ -53,10 +55,41 @@ export function resolveAgentMeta(agentId, personaMap) {
   return { id: agentId, name: '挑战者', role: '质疑者' };
 }
 
-export const CHALLENGE_QUESTION_SYSTEM_PROMPT = `你是创业实训「人机对抗」中的挑战角色。根据项目信息与对话历史，以当前角色身份提出一个尖锐、具体的问题。
-要求：直接输出 JSON，不要推理过程、不要 markdown、不要多余说明；问题尽量简短（一两句话）；briefFeedback 最多一句或空字符串。
-仅输出：
-{"question":"问题正文","briefFeedback":""}`;
+export const CHALLENGE_QUESTION_SYSTEM_PROMPT = `你是创业实训「人机对抗」中的挑战角色。
+
+#Context#
+根据项目信息与对话历史，以当前角色身份提出一个尖锐、具体的问题。
+
+#Objective#
+输出本轮挑战问题 JSON，供前端直接展示。
+
+#Schema#
+{"question":"问题正文（一两句话）","briefFeedback":"一句反馈或空字符串"}
+
+#Examples#
+{"question":"如果核心用户下周就不续费，你准备用什么指标在 14 天内验证？","briefFeedback":""}
+
+#Response#
+- 只能输出上述两个键的 JSON，禁止多键、禁止 markdown、禁止推理过程。
+- question 非空；briefFeedback 可为 ""。`;
+
+export const CHALLENGE_FINAL_REPORT_SYSTEM_PROMPT = `你是创业实训人机对抗裁判。
+
+#Context#
+根据项目信息与各轮问答，给出最终评估。
+
+#Objective#
+输出最终评估 JSON，供页面展示分数与要点。
+
+#Schema#
+{"totalScore":0-100整数,"strengths":["要点1","要点2","要点3"],"weaknesses":["要点1","要点2","要点3"],"suggestions":["要点1","要点2","要点3"]}
+
+#Examples#
+{"totalScore":72,"strengths":["问题回应具体","能引用用户场景","有一定数据意识"],"weaknesses":["商业闭环偏弱","风险预案不足","差异化不清晰"],"suggestions":["补齐转化指标","做小范围试点","明确竞争壁垒"]}
+
+#Response#
+- strengths / weaknesses / suggestions 均恰好 3 条，禁止多/少。
+- 只能输出上述键，禁止 markdown 与多余说明。`;
 
 export function buildChallengeQuestionUserPrompt({
   projectInfo,
@@ -88,11 +121,6 @@ ${hist || '（首轮，无历史）'}
 
 请以当前角色输出本轮问题 JSON。`;
 }
-
-export const CHALLENGE_FINAL_REPORT_SYSTEM_PROMPT = `你是创业实训人机对抗裁判。根据项目信息与各轮问答，输出最终评估。
-要求：直接输出 JSON，不要推理过程、不要 markdown；每项列表 2～4 条简短要点即可。
-仅输出：
-{"totalScore":0-100整数,"strengths":[],"weaknesses":[],"suggestions":[]}`;
 
 export function buildChallengeFinalUserPrompt({ projectInfo, analysisSummary, rounds }) {
   const transcript = (rounds || [])
@@ -139,13 +167,18 @@ export function normalizeChallengeFinalReport(raw) {
   if (!raw || typeof raw !== 'object') return { error: 'AI 未返回有效报告' };
   const totalScore = Number(raw.totalScore);
   if (!Number.isFinite(totalScore)) return { error: 'AI 未返回 totalScore' };
-  const pick = (arr) => (Array.isArray(arr) ? arr.map((s) => String(s).trim()).filter(Boolean) : []);
+  const pick = (arr, fb) =>
+    padStringList(
+      Array.isArray(arr) ? arr.map((s) => String(s).trim()).filter(Boolean) : [],
+      3,
+      fb
+    ).slice(0, 3);
   return {
     report: {
       totalScore: Math.min(100, Math.max(0, Math.round(totalScore))),
-      strengths: pick(raw.strengths),
-      weaknesses: pick(raw.weaknesses),
-      suggestions: pick(raw.suggestions),
+      strengths: pick(raw.strengths, ['回应较具体', '有场景意识', '态度积极']),
+      weaknesses: pick(raw.weaknesses, ['闭环不足', '证据偏弱', '风险预案少']),
+      suggestions: pick(raw.suggestions, ['补齐验证指标', '小范围试点', '强化差异化']),
     },
   };
 }
