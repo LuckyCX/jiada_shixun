@@ -77,9 +77,9 @@ export default function CreateClassModal({ open, onClose, profile, onCreated }: 
           <Typography.Text type={profile?.collegeName?.trim() ? undefined : 'secondary'}>{collegeLabel}</Typography.Text>
         </Form.Item>
 
-        <Form.Item label={t('teacher_class.create.major_label')} required={false}>
+        {/* <Form.Item label={t('teacher_class.create.major_label')} required={false}>
           <Typography.Text type={profile?.majorName?.trim() ? undefined : 'secondary'}>{majorLabel}</Typography.Text>
-        </Form.Item>
+        </Form.Item> */}
       </Form>
     </Modal>
   );

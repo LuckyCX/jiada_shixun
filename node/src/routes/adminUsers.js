@@ -2,6 +2,7 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { getPool } from '../lib/db.js';
 import { logError } from '../lib/logError.js';
+import { cleanupStudentTeamsBeforeUserDelete } from '../lib/cleanupStudentTeamsOnUserDelete.js';
 import { requireAuth, requireAdmin } from '../middleware/auth.js';
 
 const router = Router();
@@ -26,6 +27,21 @@ function fmtLoginAt(d) {
 }
 
 function mapUserRow(r) {
+  // department 仅在能 JOIN 到真实学院时采用；否则回退行政班学院（避免脏 id 如 "1" 导致专业列表为空）
+  const department =
+    r.user_college_id != null
+      ? String(r.user_college_id)
+      : r.class_college_id != null
+        ? String(r.class_college_id)
+        : r.department != null && String(r.department).trim() !== ''
+          ? String(r.department).trim()
+          : '';
+  const majorId =
+    r.major_id != null
+      ? String(r.major_id)
+      : r.class_major_id != null
+        ? String(r.class_major_id)
+        : '';
   return {
     id: String(r.id),
     username: r.username,
@@ -34,9 +50,9 @@ function mapUserRow(r) {
     email: r.email || '',
     studentId: r.student_no || undefined,
     employeeId: r.employee_no || undefined,
-    department: r.department || '',
+    department,
     collegeName: r.college_name || '',
-    majorId: r.major_id != null ? String(r.major_id) : '',
+    majorId,
     majorName: r.major_name || '',
     role: r.role,
     status: r.status,
@@ -203,7 +219,8 @@ router.get('/admin/users', requireAuth(), requireAdmin(), async (req, res) => {
               u.major_id, u.last_login_at, u.created_at,
               COALESCE(col_u.name, col_cls.name) AS college_name,
               COALESCE(mj.name, mj_cls.name) AS major_name,
-              cls.class_id, cls.class_name
+              col_u.id AS user_college_id,
+              cls.class_id, cls.class_name, cls.college_id AS class_college_id, cls.major_id AS class_major_id
        FROM users u
        LEFT JOIN colleges col_u ON (
          (trim(COALESCE(u.department, '')) ~ '^[0-9]+$' AND col_u.id = trim(u.department)::bigint)
@@ -274,7 +291,7 @@ router.post('/admin/users', requireAuth(), requireAdmin(), async (req, res) => {
     );
     if (!co.length) return bad(req, res, 400, 40007, '学院不存在或已停用');
     let majorIdDb = null;
-    if (role === 'student' || role === 'teacher') {
+    if (role === 'student') {
       if (!majorIdNum || !Number.isFinite(majorIdNum) || majorIdNum <= 0) {
         return bad(req, res, 400, 40009, '请选择专业');
       }
@@ -287,17 +304,32 @@ router.post('/admin/users', requireAuth(), requireAdmin(), async (req, res) => {
         return bad(req, res, 400, 40011, '专业须属于所选学院');
       }
       majorIdDb = majorIdNum;
-    }
-    if (role === 'student' && classIdNum != null) {
-      if (!Number.isFinite(classIdNum) || classIdNum <= 0) {
-        return bad(req, res, 400, 40012, '无效的班级 ID');
+    } else if (role === 'teacher' && majorIdNum && Number.isFinite(majorIdNum) && majorIdNum > 0) {
+      // 教师专业可选；若传入则校验归属
+      const { rows: mj } = await getPool().query(
+        `SELECT id, college_id FROM majors WHERE id = $1 AND status = 'active'`,
+        [majorIdNum]
+      );
+      if (!mj.length) return bad(req, res, 400, 40010, '专业不存在或已停用');
+      if (Number(mj[0].college_id) !== collegeIdNum) {
+        return bad(req, res, 400, 40011, '专业须属于所选学院');
       }
-      const { rows: cl } = await getPool().query(`SELECT id, college_id FROM classes WHERE id = $1`, [
-        classIdNum,
-      ]);
+      majorIdDb = majorIdNum;
+    }
+    if (role === 'student') {
+      if (classIdNum == null || !Number.isFinite(classIdNum) || classIdNum <= 0) {
+        return bad(req, res, 400, 40015, '请选择班级');
+      }
+      const { rows: cl } = await getPool().query(
+        `SELECT id, college_id, major_id FROM classes WHERE id = $1`,
+        [classIdNum]
+      );
       if (!cl.length) return bad(req, res, 400, 40013, '班级不存在');
       if (Number(cl[0].college_id) !== collegeIdNum) {
         return bad(req, res, 400, 40014, '班级不属于所选学院');
+      }
+      if (majorIdDb != null && cl[0].major_id != null && Number(cl[0].major_id) !== majorIdDb) {
+        return bad(req, res, 400, 40016, '班级不属于所选专业');
       }
     }
     if (em && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) {
@@ -430,23 +462,36 @@ router.patch('/admin/users/:id', requireAuth(), requireAdmin(), async (req, res)
       const { rows: ur0 } = await getPool().query(`SELECT role, department FROM users WHERE id = $1`, [id]);
       if (!ur0.length) return bad(req, res, 404, 40401, '用户不存在');
       const effRole = role !== undefined ? String(role).trim() : ur0[0].role;
-      if (effRole !== 'student' && effRole !== 'teacher') return bad(req, res, 400, 40012, '仅学生或教师可设置专业');
+      if (effRole !== 'student' && effRole !== 'teacher') {
+        return bad(req, res, 400, 40012, '仅学生或教师可设置专业');
+      }
       const mid =
         majorId === '' || majorId == null ? null : Number(String(majorId).trim());
-      if (!mid || !Number.isFinite(mid)) return bad(req, res, 400, 40009, '请选择专业');
-      const deptForMajor =
-        department !== undefined ? String(department).trim() : String(ur0[0].department || '').trim();
-      const collegeIdNum = Number(deptForMajor);
-      const { rows: mj } = await getPool().query(
-        `SELECT id, college_id FROM majors WHERE id = $1 AND status = 'active'`,
-        [mid]
-      );
-      if (!mj.length) return bad(req, res, 400, 40010, '专业不存在或已停用');
-      if (Number.isFinite(collegeIdNum) && collegeIdNum > 0 && Number(mj[0].college_id) !== collegeIdNum) {
-        return bad(req, res, 400, 40011, '专业须属于所选学院');
+
+      // 教师不强制专业：空值则清空 major_id
+      if (effRole === 'teacher' && (mid == null || !Number.isFinite(mid))) {
+        sets.push(`major_id = $${pi++}`);
+        params.push(null);
+      } else {
+        if (!mid || !Number.isFinite(mid)) return bad(req, res, 400, 40009, '请选择专业');
+        const deptForMajor =
+          department !== undefined ? String(department).trim() : String(ur0[0].department || '').trim();
+        const collegeIdNum = Number(deptForMajor);
+        const { rows: mj } = await getPool().query(
+          `SELECT id, college_id FROM majors WHERE id = $1 AND status = 'active'`,
+          [mid]
+        );
+        if (!mj.length) return bad(req, res, 400, 40010, '专业不存在或已停用');
+        if (Number.isFinite(collegeIdNum) && collegeIdNum > 0 && Number(mj[0].college_id) !== collegeIdNum) {
+          return bad(req, res, 400, 40011, '专业须属于所选学院');
+        }
+        sets.push(`major_id = $${pi++}`);
+        params.push(mid);
       }
+    } else if (role !== undefined && String(role).trim() === 'teacher') {
+      // 改为教师角色时清空专业
       sets.push(`major_id = $${pi++}`);
-      params.push(mid);
+      params.push(null);
     }
 
     let newUsername;
@@ -490,17 +535,43 @@ router.patch('/admin/users/:id', requireAuth(), requireAdmin(), async (req, res)
     }
 
     if (classId !== undefined) {
-      const { rows: ur } = await getPool().query(`SELECT role FROM users WHERE id = $1`, [id]);
+      const { rows: ur } = await getPool().query(`SELECT role, department, major_id FROM users WHERE id = $1`, [id]);
       if (!ur.length) return bad(req, res, 404, 40401, '用户不存在');
-      if (ur[0].role !== 'student') return bad(req, res, 400, 40006, '仅学生可分配班级');
-      await getPool().query(`DELETE FROM class_students WHERE student_id = $1`, [id]);
+      if (ur[0].role !== 'student') return bad(req, res, 400, 40006, '仅学生可设置班级');
       const cid = classId === '' || classId == null ? null : Number(classId);
-      if (cid && Number.isFinite(cid)) {
-        await getPool().query(
-          `INSERT INTO class_students (class_id, student_id) VALUES ($1, $2) ON CONFLICT (class_id, student_id) DO NOTHING`,
-          [cid, id]
-        );
+      if (!cid || !Number.isFinite(cid)) return bad(req, res, 400, 40015, '请选择班级');
+      const { rows: cl } = await getPool().query(
+        `SELECT id, college_id, major_id FROM classes WHERE id = $1`,
+        [cid]
+      );
+      if (!cl.length) return bad(req, res, 400, 40013, '班级不存在');
+      const deptForClass =
+        department !== undefined ? String(department).trim() : String(ur[0].department || '').trim();
+      const collegeIdNum = Number(deptForClass);
+      if (Number.isFinite(collegeIdNum) && collegeIdNum > 0 && Number(cl[0].college_id) !== collegeIdNum) {
+        return bad(req, res, 400, 40014, '班级不属于所选学院');
       }
+      const majorForClass =
+        majorId !== undefined
+          ? majorId === '' || majorId == null
+            ? null
+            : Number(String(majorId).trim())
+          : ur[0].major_id != null
+            ? Number(ur[0].major_id)
+            : null;
+      if (
+        majorForClass != null &&
+        Number.isFinite(majorForClass) &&
+        cl[0].major_id != null &&
+        Number(cl[0].major_id) !== majorForClass
+      ) {
+        return bad(req, res, 400, 40016, '班级不属于所选专业');
+      }
+      await getPool().query(`DELETE FROM class_students WHERE student_id = $1`, [id]);
+      await getPool().query(
+        `INSERT INTO class_students (class_id, student_id) VALUES ($1, $2) ON CONFLICT (class_id, student_id) DO NOTHING`,
+        [cid, id]
+      );
     }
 
     const { rows } = await getPool().query(
@@ -509,7 +580,8 @@ router.patch('/admin/users/:id', requireAuth(), requireAdmin(), async (req, res)
               u.major_id, u.last_login_at, u.created_at,
               COALESCE(col_u.name, col_cls.name) AS college_name,
               COALESCE(mj.name, mj_cls.name) AS major_name,
-              cls.class_id, cls.class_name
+              col_u.id AS user_college_id,
+              cls.class_id, cls.class_name, cls.college_id AS class_college_id, cls.major_id AS class_major_id
        FROM users u
        LEFT JOIN colleges col_u ON (
          (trim(COALESCE(u.department, '')) ~ '^[0-9]+$' AND col_u.id = trim(u.department)::bigint)
@@ -583,10 +655,86 @@ router.delete('/admin/users/:id', requireAuth(), requireAdmin(), async (req, res
     const { rows } = await getPool().query(`SELECT role FROM users WHERE id = $1`, [id]);
     if (!rows.length) return bad(req, res, 404, 40401, '用户不存在');
 
-    await getPool().query(`DELETE FROM users WHERE id = $1`, [id]);
+    const role = rows[0].role;
+    const client = await getPool().connect();
+    try {
+      await client.query('BEGIN');
+      // 学生：先整理组队（单人公司解散 / 多人队队长顺位），再退出个性化班，最后删账号
+      if (role === 'student') {
+        await cleanupStudentTeamsBeforeUserDelete(client, [id]);
+        await client.query(`DELETE FROM teacher_personal_class_students WHERE student_id = $1`, [id]);
+      }
+      // 教师：teacher_personal_classes.teacher_id ON DELETE CASCADE 会解散其个性化班及成员
+      await client.query(`DELETE FROM users WHERE id = $1`, [id]);
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
     return ok(req, res, { ok: true });
   } catch (e) {
     logError(`DELETE /api/admin/users/:id traceId=${req.traceId}`, e);
+    return bad(req, res, 500, 50000, e.message);
+  }
+});
+
+/** 删除前风险预览：老师将解散的个性化班 / 学生将退出的个性化班 */
+router.get('/admin/users/:id/delete-impact', requireAuth(), requireAdmin(), async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id) || id <= 0) return bad(req, res, 400, 40001, '无效用户 id');
+
+    const { rows } = await getPool().query(
+      `SELECT id, role, real_name, username FROM users WHERE id = $1`,
+      [id]
+    );
+    if (!rows.length) return bad(req, res, 404, 40401, '用户不存在');
+
+    const u = rows[0];
+    const role = String(u.role || '');
+    let personalClasses = [];
+
+    if (role === 'teacher') {
+      const { rows: cls } = await getPool().query(
+        `SELECT tpc.id, tpc.name,
+                (SELECT COUNT(*)::int FROM teacher_personal_class_students tpcs
+                 WHERE tpcs.teacher_personal_class_id = tpc.id) AS student_count
+         FROM teacher_personal_classes tpc
+         WHERE tpc.teacher_id = $1
+         ORDER BY tpc.id`,
+        [id]
+      );
+      personalClasses = cls.map((r) => ({
+        id: String(r.id),
+        name: r.name || `班级 #${r.id}`,
+        studentCount: Number(r.student_count) || 0,
+      }));
+    } else if (role === 'student') {
+      const { rows: cls } = await getPool().query(
+        `SELECT tpc.id, tpc.name
+         FROM teacher_personal_class_students tpcs
+         JOIN teacher_personal_classes tpc ON tpc.id = tpcs.teacher_personal_class_id
+         WHERE tpcs.student_id = $1
+         ORDER BY tpc.id`,
+        [id]
+      );
+      personalClasses = cls.map((r) => ({
+        id: String(r.id),
+        name: r.name || `班级 #${r.id}`,
+        studentCount: null,
+      }));
+    }
+
+    return ok(req, res, {
+      id: String(u.id),
+      role,
+      name: u.real_name || u.username || '',
+      personalClasses,
+    });
+  } catch (e) {
+    logError(`GET /api/admin/users/:id/delete-impact traceId=${req.traceId}`, e);
     return bad(req, res, 500, 50000, e.message);
   }
 });
@@ -645,7 +793,8 @@ router.post('/admin/users/batch-delete', requireAuth(), requireAdmin(), async (r
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
-      // 先移出教师个性化班级（即使 users 有 CASCADE，也便于统计并保证入班关系先清）
+      // 先整理组队，再移出个性化班，最后删账号
+      await cleanupStudentTeamsBeforeUserDelete(client, targetIds);
       const rem = await client.query(
         `DELETE FROM teacher_personal_class_students WHERE student_id = ANY($1::bigint[])`,
         [targetIds]
@@ -777,14 +926,15 @@ router.post('/admin/users/batch', requireAuth(), requireAdmin(), async (req, res
         errors.push({ row: rowNo, reason: '学院ID不能为空或无效' });
         continue;
       }
-      if (
-        (role === 'student' || role === 'teacher') &&
-        (!majorIdRaw || !Number.isFinite(majorIdNum) || majorIdNum <= 0)
-      ) {
-        errors.push({ row: rowNo, reason: '须填写有效的专业ID' });
+      if (role === 'student' && (!majorIdRaw || !Number.isFinite(majorIdNum) || majorIdNum <= 0)) {
+        errors.push({ row: rowNo, reason: '学生须填写有效的专业ID' });
         continue;
       }
-      if (role === 'teacher') {
+      if (role === 'teacher' && majorIdRaw) {
+        if (!Number.isFinite(majorIdNum) || majorIdNum <= 0) {
+          errors.push({ row: rowNo, reason: '专业ID无效' });
+          continue;
+        }
         const mjCollege = await majorCollegeId(majorIdNum);
         if (mjCollege == null) {
           errors.push({ row: rowNo, reason: '专业不存在或已停用' });
@@ -869,7 +1019,12 @@ router.post('/admin/users/batch', requireAuth(), requireAdmin(), async (req, res
         const student_no = role === 'student' ? idNumber : null;
         const employee_no = role === 'teacher' ? idNumber : null;
         const department = String(collegeIdNum);
-        const majorIdDb = role === 'student' || role === 'teacher' ? majorIdNum : null;
+        const majorIdDb =
+          role === 'student'
+            ? majorIdNum
+            : role === 'teacher' && Number.isFinite(majorIdNum) && majorIdNum > 0
+              ? majorIdNum
+              : null;
         const ins = await getPool().query(
           `INSERT INTO users (username, password_hash, real_name, email, role, status, student_no, employee_no, department, major_id)
            VALUES ($1, $2, $3, $4, $5, 'active', $6, $7, $8, $9)

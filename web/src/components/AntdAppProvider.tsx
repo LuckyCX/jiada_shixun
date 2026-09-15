@@ -28,7 +28,12 @@ export default function AntdAppProvider({ children }: { children: ReactNode }) {
   }, [i18n.language]);
 
   return (
-    <ConfigProvider locale={locale} getPopupContainer={() => document.body}>
+    <ConfigProvider
+      locale={locale}
+      getPopupContainer={() => document.body}
+      // AppModalPortal 常用 1100；antd 默认弹层基准 1000，会被自建弹窗盖住
+      theme={{ token: { zIndexPopupBase: 2000 } }}
+    >
       {children}
     </ConfigProvider>
   );

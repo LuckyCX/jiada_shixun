@@ -13,7 +13,7 @@ import {
   setPortalToken,
   type PortalRole,
 } from '../../lib/authApi';
-import { studentHasActivePersonalClassWithToken } from '../../lib/studentPortalApi';
+import { assertStudentCanLoginWithToken } from '../../lib/studentPortalApi';
 import { useSiteBrand } from '../../lib/publicSite';
 import { USER_GUIDE_PATH } from '../../lib/appPaths';
 import AppModalPortal from '../../components/AppModalPortal';
@@ -139,9 +139,9 @@ export default function Home() {
         throw new Error('该账号不是学生，请使用学生账号登录');
       }
       if (expected === 'student') {
-        const canEnter = await studentHasActivePersonalClassWithToken(token);
-        if (!canEnter) {
-          throw new Error('当前暂无已开放的实训班级');
+        const gate = await assertStudentCanLoginWithToken(token);
+        if (!gate.ok) {
+          throw new Error(gate.message);
         }
       }
       saveLoginForm(expected, { remember, username, password });

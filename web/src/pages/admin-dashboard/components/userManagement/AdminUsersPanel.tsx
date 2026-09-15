@@ -165,9 +165,14 @@ export default function AdminUsersPanel({
     email?: string;
     department: string;
     majorId?: string;
+    classId?: string;
     password: string;
   }) => {
-    const targetClassId = scope === 'class-students' && userData.role === 'student' ? classId : undefined;
+    const targetClassId =
+      userData.role === 'student'
+        ? String(userData.classId || (scope === 'class-students' ? classId : '') || '').trim() ||
+          undefined
+        : undefined;
 
     const submitOnce = async (otherClassPolicy?: 'skip' | 'move') => {
       return createAdminUser({
@@ -176,7 +181,7 @@ export default function AdminUsersPanel({
         idNumber: userData.idNumber,
         department: userData.department,
         password: userData.password,
-        ...(userData.majorId?.trim() && (userData.role === 'student' || userData.role === 'teacher')
+        ...(userData.majorId?.trim() && userData.role === 'student'
           ? { majorId: userData.majorId.trim() }
           : {}),
         ...(userData.email?.trim() ? { email: userData.email.trim() } : {}),
@@ -239,9 +244,11 @@ export default function AdminUsersPanel({
         role: userData.role as User['role'],
         idNumber: String(userData.idNumber ?? '').trim(),
         ...(userData.role === 'student' ? { classId: String(userData.classId ?? '') } : {}),
-        ...(userData.role === 'student' || userData.role === 'teacher'
+        ...(userData.role === 'student'
           ? { majorId: String(userData.majorId ?? '') }
-          : {}),
+          : userData.role === 'teacher'
+            ? { majorId: '' }
+            : {}),
       });
       message.success('用户信息已更新');
       setIsEditModalOpen(false);
@@ -702,6 +709,10 @@ export default function AdminUsersPanel({
         fixedDepartmentId={
           (scope === 'college-teachers' || scope === 'class-students') && collegeId ? collegeId : undefined
         }
+        fixedMajorId={scope === 'class-students' ? majorId : undefined}
+        fixedMajorLabel={scope === 'class-students' ? majorName : undefined}
+        fixedClassId={scope === 'class-students' ? classId : undefined}
+        fixedClassLabel={scope === 'class-students' ? subtitle : undefined}
       />
 
       <BatchImportModal
@@ -728,10 +739,6 @@ export default function AdminUsersPanel({
           setSelectedUser(null);
         }}
         onSubmit={handleEditUser}
-        lockDepartmentId={
-          (scope === 'college-teachers' || scope === 'class-students') && collegeId ? collegeId : undefined
-        }
-        lockClassId={scope === 'class-students' ? classId : undefined}
         lockRole={fixedRole}
       />
 

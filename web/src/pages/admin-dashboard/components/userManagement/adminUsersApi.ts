@@ -130,6 +130,30 @@ export async function deleteAdminUser(userId: string): Promise<void> {
   await adminFetch(`/api/admin/users/${userId}`, { method: 'DELETE' });
 }
 
+export type AdminUserDeleteImpact = {
+  id: string;
+  role: string;
+  name: string;
+  personalClasses: Array<{ id: string; name: string; studentCount: number | null }>;
+};
+
+/** 删除前风险预览：个性化班解散 / 退出列表 */
+export async function fetchAdminUserDeleteImpact(userId: string): Promise<AdminUserDeleteImpact> {
+  const data = (await adminFetch(`/api/admin/users/${userId}/delete-impact`)) as Partial<AdminUserDeleteImpact> | null;
+  return {
+    id: String(data?.id ?? userId),
+    role: String(data?.role ?? ''),
+    name: String(data?.name ?? ''),
+    personalClasses: Array.isArray(data?.personalClasses)
+      ? data.personalClasses.map((c) => ({
+          id: String(c?.id ?? ''),
+          name: String(c?.name ?? ''),
+          studentCount: c?.studentCount == null ? null : Number(c.studentCount),
+        }))
+      : [],
+  };
+}
+
 export async function batchDeleteAdminUsers(
   ids: string[],
   opts?: { classId?: string }

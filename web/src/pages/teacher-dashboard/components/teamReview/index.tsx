@@ -5,6 +5,7 @@ import UserAvatar from '../../../../components/UserAvatar';
 import {
   addTeamMember,
   confirmTeacherAiGroupRandom,
+  createTeamWithMember,
   notifyTeacherTeamStudents,
   fetchTeacherGrouping,
   fetchTeacherTeamQuestions,
@@ -306,28 +307,28 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
   const [introVideoUrl, setIntroVideoUrl] = useState<string | null>(null);
   const [introVideoLoading, setIntroVideoLoading] = useState(false);
 
-  useEffect(() => {
-    if (!introStudent?.hasIntroVideo) {
-      setIntroVideoUrl(null);
-      return undefined;
-    }
-    let objectUrl: string | null = null;
+  // 仅在视频加载成功后再打开弹窗，避免无视频时闪一下
+  const openIntroVideo = async (student: Student) => {
+    if (!student.hasIntroVideo) return;
     setIntroVideoLoading(true);
-    void loadTeamIntroVideoObjectUrl('teacher', personalClass.id, introStudent.id)
-      .then((url) => {
-        objectUrl = url;
-        setIntroVideoUrl(url);
-      })
-      .catch((e) => {
-        showToast(e instanceof Error ? e.message : '加载视频失败', 'error');
-        setIntroStudent(null);
-      })
-      .finally(() => setIntroVideoLoading(false));
-    return () => {
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [introStudent, personalClass.id]);
+    try {
+      const url = await loadTeamIntroVideoObjectUrl('teacher', personalClass.id, student.id);
+      setIntroVideoUrl(url);
+      setIntroStudent(student);
+    } catch {
+      showToast('该学生未上传个人介绍视频', 'error');
+      setIntroVideoUrl(null);
+      setIntroStudent(null);
+    } finally {
+      setIntroVideoLoading(false);
+    }
+  };
 
+  const closeIntroVideo = () => {
+    if (introVideoUrl) URL.revokeObjectURL(introVideoUrl);
+    setIntroVideoUrl(null);
+    setIntroStudent(null);
+  };
   // 计算能力互补得分
   const calculateComplementScore = (members: Student[]): number => {
     if (members.length === 0) return 0;
@@ -352,7 +353,8 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
     });
   };
 
-  const hasExistingTeams = teams.some((t) => t.members.length > 0);
+  // 与后端一致：单人公司不参与 AI 补位门槛，也不隐藏「未满5人」提示
+  const hasExistingTeams = teams.some((t) => !t.isSolo && t.members.length > 0);
   const minPendingForAiClick = hasExistingTeams ? 1 : MIN_PENDING_FOR_AI;
   const teamCanEdit = () => true;
 
@@ -369,7 +371,7 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
       showToast(
         hasExistingTeams
           ? '暂无待组队学生'
-          : `首次 AI 组队需至少 ${MIN_PENDING_FOR_AI} 人（无已有团队时由 AI 一次性划分，且每组至少 3 人）`,
+          : `当前人数未满${MIN_PENDING_FOR_AI}人，不满足 AI 智能组队要求，您可以手动为学生指定队伍，或等待超过${MIN_PENDING_FOR_AI}人后点击 AI 智能组队按钮进行自动分组`,
         'error'
       );
       return;
@@ -425,6 +427,11 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
   };
 
   const handleRemoveFromTeam = async (studentId: string, teamId: string) => {
+    const team = teams.find((t) => t.id === teamId);
+    if (team?.isSolo) {
+      showToast('单人公司不可移出成员', 'error');
+      return;
+    }
     try {
       const data = await removeTeamMember(personalClass.id, teamId, studentId);
       const ui = mapGroupingToUi(data);
@@ -432,12 +439,17 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
       setTeams(ui.teams);
       showToast('已将学生移出团队');
     } catch (e) {
-      showToast(e instanceof Error ? e.message : '操作失败', 'error');
+      const msg = e instanceof Error ? e.message : '操作失败';
+      showToast(msg, 'error');
     }
   };
 
   const handleAddToTeam = async (studentId: string, teamId: string) => {
     const team = teams.find((t) => t.id === teamId);
+    if (team?.isSolo) {
+      showToast('单人公司不可再加入其他学生', 'error');
+      return;
+    }
     if (team && team.members.length >= MAX_TEAM_SIZE) {
       showToast(`团队人数已达上限（${MAX_TEAM_SIZE} 人）`, 'error');
       return;
@@ -455,6 +467,21 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
     }
   };
 
+  /** 无可用多人队时：新建队伍并分配该学生 */
+  const handleAssignToNewTeam = async (studentId: string) => {
+    try {
+      const data = await createTeamWithMember(personalClass.id, studentId);
+      const ui = mapGroupingToUi(data);
+      setStudents(ui.students);
+      setTeams(ui.teams);
+      setJoinTeamStudentId(null);
+      setJoinTeamTargetId(null);
+      showToast('已新建团队并分配该学生');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : '分配失败', 'error');
+    }
+  };
+
   // 拖拽开始
   const handleDragStart = (student: Student) => {
     setDraggedStudent(student);
@@ -463,13 +490,25 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
   // 拖拽到团队
   const handleDropToTeam = (teamId: string) => {
     if (!draggedStudent) return;
-    
+    const team = teams.find((t) => t.id === teamId);
+    if (team?.isSolo) {
+      showToast('单人公司不可再加入其他学生', 'error');
+      setDraggedStudent(null);
+      return;
+    }
+
     // 如果学生已在其他团队，先移除
     if (draggedStudent.teamId) {
-      handleRemoveFromTeam(draggedStudent.id, draggedStudent.teamId);
+      const fromTeam = teams.find((t) => t.id === draggedStudent.teamId);
+      if (fromTeam?.isSolo) {
+        showToast('单人公司成员不可移出', 'error');
+        setDraggedStudent(null);
+        return;
+      }
+      void handleRemoveFromTeam(draggedStudent.id, draggedStudent.teamId);
     }
-    
-    handleAddToTeam(draggedStudent.id, teamId);
+
+    void handleAddToTeam(draggedStudent.id, teamId);
     setDraggedStudent(null);
   };
 
@@ -496,7 +535,10 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
   });
 
   const pendingCount = students.filter(s => s.status === 'pending').length;
-  const editableTeams = teams.filter((t) => t.members.length < MAX_TEAM_SIZE);
+  // 首次 AI 组队（尚无多人队）且待组队未满 5 人时展示引导提示
+  const showUnderFiveAiHint = !hasExistingTeams && pendingCount > 0 && pendingCount < MIN_PENDING_FOR_AI;
+  // 单人公司不参与手动加成员
+  const editableTeams = teams.filter((t) => !t.isSolo && t.members.length < MAX_TEAM_SIZE);
 
   return (
     <div className="space-y-6">
@@ -632,9 +674,10 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
                   {filteredStudents.filter(s => s.status === 'pending').length}
                 </span>
               </h3>
-              {!hasExistingTeams && pendingCount < MIN_PENDING_FOR_AI ? (
-                <p className="text-xs text-amber-700 mt-2">
-                  待组队满 {MIN_PENDING_FOR_AI} 人后可启用 AI 组队（当前 {pendingCount} 人）
+              {showUnderFiveAiHint ? (
+                <p className="text-xs text-amber-700 mt-2 leading-relaxed">
+                  当前人数未满 {MIN_PENDING_FOR_AI} 人，不满足 AI 智能组队要求，您可以手动为学生指定队伍，或等待超过{' '}
+                  {MIN_PENDING_FOR_AI} 人后点击 AI 智能组队按钮进行自动分组
                 </p>
               ) : null}
             </div>
@@ -656,68 +699,87 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
                       {student.hasIntroVideo ? (
                         <button
                           type="button"
+                          disabled={introVideoLoading}
                           onClick={(e) => {
                             e.stopPropagation();
-                            setIntroStudent(student);
+                            void openIntroVideo(student);
                           }}
-                          className="px-2 py-0.5 text-[10px] font-medium bg-white border border-gray-200 text-gray-700 rounded-md hover:bg-gray-50 cursor-pointer"
+                          className="px-2 py-0.5 text-[10px] font-medium bg-white border border-gray-200 text-gray-700 rounded-md hover:bg-gray-50 cursor-pointer disabled:opacity-50"
                         >
                           个人介绍
                         </button>
                       ) : null}
-                    {editableTeams.length > 0 && (
-                      <Popover
-                        trigger="click"
-                        open={joinTeamStudentId === student.id}
-                        onOpenChange={(open) => {
-                          if (!open) {
-                            setJoinTeamStudentId(null);
-                            setJoinTeamTargetId(null);
-                          } else {
-                            setJoinTeamStudentId(student.id);
+                      {editableTeams.length > 0 ? (
+                        <Popover
+                          trigger="click"
+                          open={joinTeamStudentId === student.id}
+                          onOpenChange={(open) => {
+                            if (!open) {
+                              setJoinTeamStudentId(null);
+                              setJoinTeamTargetId(null);
+                            } else {
+                              setJoinTeamStudentId(student.id);
+                            }
+                          }}
+                          content={
+                            <div className="w-52 space-y-2">
+                              <p className="text-xs font-bold text-gray-800">选择目标团队</p>
+                              {editableTeams.map((t) => (
+                                <label key={t.id} className="flex items-center gap-2 text-sm cursor-pointer">
+                                  <input
+                                    type="radio"
+                                    name={`join-${student.id}`}
+                                    checked={joinTeamTargetId === t.id}
+                                    onChange={() => setJoinTeamTargetId(t.id)}
+                                  />
+                                  {t.name}（{t.members.length}人）
+                                </label>
+                              ))}
+                              <Button
+                                type="primary"
+                                size="small"
+                                block
+                                disabled={!joinTeamTargetId}
+                                onClick={() => {
+                                  if (joinTeamTargetId) void handleAddToTeam(student.id, joinTeamTargetId);
+                                }}
+                              >
+                                确认分配
+                              </Button>
+                              <Button
+                                size="small"
+                                block
+                                onClick={() => void handleAssignToNewTeam(student.id)}
+                              >
+                                新建团队并分配
+                              </Button>
+                            </div>
                           }
-                        }}
-                        content={
-                          <div className="w-52 space-y-2">
-                            <p className="text-xs font-bold text-gray-800">选择目标团队</p>
-                            {editableTeams.map((t) => (
-                              <label key={t.id} className="flex items-center gap-2 text-sm cursor-pointer">
-                                <input
-                                  type="radio"
-                                  name={`join-${student.id}`}
-                                  checked={joinTeamTargetId === t.id}
-                                  onChange={() => setJoinTeamTargetId(t.id)}
-                                />
-                                {t.name}（{t.members.length}人）
-                              </label>
-                            ))}
-                            <Button
-                              type="primary"
-                              size="small"
-                              block
-                              disabled={!joinTeamTargetId}
-                              onClick={() => {
-                                if (joinTeamTargetId) void handleAddToTeam(student.id, joinTeamTargetId);
-                              }}
-                            >
-                              确认加入
-                            </Button>
-                          </div>
-                        }
-                      >
+                        >
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setJoinTeamStudentId(student.id);
+                              setJoinTeamTargetId(editableTeams[0]?.id ?? null);
+                            }}
+                            className="px-2 py-0.5 text-[10px] font-medium bg-teal-600 text-white rounded-md hover:bg-teal-700 cursor-pointer"
+                          >
+                            分配
+                          </button>
+                        </Popover>
+                      ) : (
                         <button
                           type="button"
                           onClick={(e) => {
                             e.stopPropagation();
-                            setJoinTeamStudentId(student.id);
-                            setJoinTeamTargetId(editableTeams[0]?.id ?? null);
+                            void handleAssignToNewTeam(student.id);
                           }}
                           className="px-2 py-0.5 text-[10px] font-medium bg-teal-600 text-white rounded-md hover:bg-teal-700 cursor-pointer"
                         >
-                          加入团队
+                          分配
                         </button>
-                      </Popover>
-                    )}
+                      )}
                     </div>
                     <div className="flex items-start gap-3">
                       <UserAvatar name={student.name || '?'} avatarUrl={student.avatarUrl} size="lg" />
@@ -767,10 +829,11 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
                   <i className="ri-team-line text-4xl text-gray-400"></i>
                 </div>
                 <h3 className="text-lg font-bold text-gray-900 mb-2">还没有组建团队</h3>
-                <p className="text-sm text-gray-500 mb-2">点击「AI 智能组队」自动分组</p>
-                {!hasExistingTeams && pendingCount < MIN_PENDING_FOR_AI ? (
-                  <p className="text-sm text-amber-700 mb-4">
-                    待组队学生需满 {MIN_PENDING_FOR_AI} 人方可启用 AI 组队（当前 {pendingCount} 人）
+                <p className="text-sm text-gray-500 mb-2">可手动拖拽学生入队，或使用「AI 智能组队」自动分组</p>
+                {showUnderFiveAiHint ? (
+                  <p className="text-sm text-amber-700 mb-4 leading-relaxed max-w-md mx-auto">
+                    当前人数未满 {MIN_PENDING_FOR_AI} 人，不满足 AI 智能组队要求，您可以手动为学生指定队伍，或等待超过{' '}
+                    {MIN_PENDING_FOR_AI} 人后点击 AI 智能组队按钮进行自动分组
                   </p>
                 ) : (
                   <p className="mb-4" />
@@ -791,9 +854,23 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
               teams.map((team, index) => (
                 <div
                   key={team.id}
-                  onDragOver={(e) => e.preventDefault()}
-                  onDrop={() => handleDropToTeam(team.id)}
-                  className="bg-white rounded-2xl border-2 border-gray-100 hover:border-teal-200 transition-all overflow-hidden"
+                  onDragOver={(e) => {
+                    if (team.isSolo) return;
+                    e.preventDefault();
+                  }}
+                  onDrop={() => {
+                    if (team.isSolo) {
+                      showToast('单人公司不可再加入其他学生', 'error');
+                      setDraggedStudent(null);
+                      return;
+                    }
+                    handleDropToTeam(team.id);
+                  }}
+                  className={`bg-white rounded-2xl border-2 transition-all overflow-hidden ${
+                    team.isSolo
+                      ? 'border-indigo-100'
+                      : 'border-gray-100 hover:border-teal-200'
+                  }`}
                 >
                   <div className="bg-gradient-to-r from-teal-500 to-cyan-500 px-5 py-4 text-white">
                     <div className="flex items-center justify-between">
@@ -875,7 +952,17 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
                             </div>
                           </div>
                           <div className="flex items-center gap-2 flex-shrink-0">
-                            {teamCanEdit() && (
+                            {member.hasIntroVideo ? (
+                              <button
+                                type="button"
+                                disabled={introVideoLoading}
+                                onClick={() => void openIntroVideo(member)}
+                                className="px-3 py-1.5 text-xs font-medium rounded-lg transition-colors whitespace-nowrap cursor-pointer border bg-white border-gray-200 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                              >
+                                个人介绍
+                              </button>
+                            ) : null}
+                            {teamCanEdit() && !team.isSolo && (
                               <button
                                 type="button"
                                 onClick={() => void handleSetTeamLeader(member.id, team.id)}
@@ -890,26 +977,33 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
                                 指定队长
                               </button>
                             )}
-                            <button
-                              type="button"
-                              onClick={() => void handleRemoveFromTeam(member.id, team.id)}
-                              disabled={!teamCanEdit()}
-                              className="px-3 py-1.5 bg-red-50 text-red-600 text-xs font-medium rounded-lg hover:bg-red-100 transition-colors whitespace-nowrap cursor-pointer border border-red-200 disabled:opacity-40 disabled:cursor-not-allowed"
-                            >
-                              <i className="ri-close-line mr-1"></i>
-                              移出
-                            </button>
+                            {!team.isSolo && (
+                              <button
+                                type="button"
+                                onClick={() => void handleRemoveFromTeam(member.id, team.id)}
+                                disabled={!teamCanEdit()}
+                                className="px-3 py-1.5 bg-red-50 text-red-600 text-xs font-medium rounded-lg hover:bg-red-100 transition-colors whitespace-nowrap cursor-pointer border border-red-200 disabled:opacity-40 disabled:cursor-not-allowed"
+                              >
+                                <i className="ri-close-line mr-1"></i>
+                                移出
+                              </button>
+                            )}
                           </div>
                         </div>
                       ))}
                     </div>
 
-                    {teamCanEdit() && team.members.length < MAX_TEAM_SIZE && (
+                    {team.isSolo ? (
+                      <div className="mt-3 p-3 bg-indigo-50 border border-indigo-200 rounded-xl text-xs text-indigo-800 flex items-center gap-2">
+                        <i className="ri-information-line"></i>
+                        <span>单人公司由学生自主成立，不可加减成员</span>
+                      </div>
+                    ) : teamCanEdit() && team.members.length < MAX_TEAM_SIZE ? (
                       <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 flex items-center gap-2">
                         <i className="ri-information-line"></i>
                         <span>拖拽左侧学生到此区域可添加成员（最多 {MAX_TEAM_SIZE} 人）</span>
                       </div>
-                    )}
+                    ) : null}
                   </div>
                 </div>
               ))
@@ -920,25 +1014,15 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
 
       <Modal
         title={introStudent ? `${introStudent.name} · 个人介绍` : '个人介绍'}
-        open={Boolean(introStudent)}
-        onCancel={() => {
-          if (introVideoUrl) URL.revokeObjectURL(introVideoUrl);
-          setIntroVideoUrl(null);
-          setIntroStudent(null);
-        }}
+        open={Boolean(introStudent) && Boolean(introVideoUrl)}
+        onCancel={closeIntroVideo}
         footer={null}
         width={720}
         destroyOnClose
       >
-        {introVideoLoading ? (
-          <div className="py-16 flex justify-center">
-            <Spin tip="加载视频…" />
-          </div>
-        ) : introVideoUrl ? (
+        {introVideoUrl ? (
           <video src={introVideoUrl} controls className="w-full max-h-[70vh] rounded-lg bg-black" playsInline />
-        ) : (
-          <p className="text-sm text-gray-500 py-8 text-center">暂无视频</p>
-        )}
+        ) : null}
       </Modal>
 
     </div>

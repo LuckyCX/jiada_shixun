@@ -8,13 +8,16 @@ import {
   fetchStudentMyTeam,
   fetchStudentTeamSquare,
   fetchTeamSubmission,
+  fetchTeamFormationWithdrawEligibility,
   isTeamFormationDone,
   TEAM_DIMENSION_BARS,
   normalizeTeamDimensionProfile,
   updateStudentMyTeamProfile,
+  withdrawTeamFormationPool,
   type GroupingTeam,
   type TeamDimensionProfile,
 } from '../../../lib/teamFormationApi';
+import { appAlert, appConfirm } from '../../../lib/appDialog';
 
 type TeamFormationModuleProps = {
   classId: string;
@@ -61,6 +64,7 @@ function apiTeamToMyTeam(t: GroupingTeam): MyTeam {
     introduction: t.introduction || '',
     createdAt: t.createdAt || '',
     status: 'active',
+    isSolo: Boolean(t.isSolo),
     members,
   };
 }
@@ -94,6 +98,7 @@ type MyTeam = {
   members: TeamMember[];
   createdAt: string;
   status: 'forming' | 'active';
+  isSolo?: boolean;
 };
 
 // 扩展到10道题目
@@ -345,6 +350,7 @@ export default function TeamFormationModule({ classId, className, initialSubTab,
   const [waitingForTeam, setWaitingForTeam] = useState(false);
   const [submissionStatus, setSubmissionStatus] = useState<string | null>(null);
   const [waitingRoleLabel, setWaitingRoleLabel] = useState<string | null>(null);
+  const [withdrawingPool, setWithdrawingPool] = useState(false);
   const [waitingDimensionProfile, setWaitingDimensionProfile] = useState<TeamDimensionProfile>({
     strategic: 0,
     market: 0,
@@ -432,6 +438,43 @@ export default function TeamFormationModule({ classId, className, initialSubTab,
   };
 
   const showWaitingBadge = submissionStatus === 'pending_teacher' && !myTeam;
+
+  const handleWithdrawGrouping = async () => {
+    setWithdrawingPool(true);
+    try {
+      const gate = await fetchTeamFormationWithdrawEligibility(classId);
+      if (!gate.canWithdraw) {
+        await appAlert(gate.reason || '当前状态不可撤回组队', '无法撤回');
+        return;
+      }
+      const ok = await appConfirm(
+        gate.isSolo
+          ? '撤回后将解散当前单人公司，可重新选择「进入组队池」或「成立单人公司」。测评与 AI 分析结果会保留。'
+          : '撤回后将退出组队池，可重新选择「进入组队池」或「成立单人公司」。测评与 AI 分析结果会保留。',
+        '撤回组队申请',
+        { okText: '确认撤回', cancelText: '取消', danger: true }
+      );
+      if (!ok) return;
+      await withdrawTeamFormationPool(classId);
+      setWaitingForTeam(false);
+      setSubmissionStatus('draft');
+      setMyTeam(null);
+      showToast('已撤回组队申请，可重新选择组队方式');
+      setActiveTab('assessment');
+      void loadWaitingSummary();
+      void loadTeamsFromApi();
+      onTeamUpdated?.();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : '撤回失败';
+      if (/无法|不可|请联系教师|已分配|已开始|AI 分析/.test(msg)) {
+        await appAlert(msg, '无法撤回');
+      } else {
+        showToast(msg, 'error');
+      }
+    } finally {
+      setWithdrawingPool(false);
+    }
+  };
 
   // 版本控制
   const [versions, setVersions] = useState<Version[]>([]);
@@ -735,10 +778,19 @@ export default function TeamFormationModule({ classId, className, initialSubTab,
                 if (mode === 'solo') {
                   setWaitingForTeam(false);
                   setActiveTab('myteam');
+                  // 个人成队即时确认，刷新学生中心左侧实训进度
+                  onTeamUpdated?.();
                 } else {
                   setActiveTab('waiting');
                   setWaitingForTeam(true);
                 }
+              }}
+              onPoolWithdrawn={() => {
+                setWaitingForTeam(false);
+                setSubmissionStatus('draft');
+                void loadWaitingSummary();
+                setActiveTab('assessment');
+                onTeamUpdated?.();
               }}
             />
           )}
@@ -782,6 +834,14 @@ export default function TeamFormationModule({ classId, className, initialSubTab,
                       </div>
                     </div>
 
+                    <button
+                      type="button"
+                      disabled={withdrawingPool}
+                      onClick={() => void handleWithdrawGrouping()}
+                      className="mt-6 px-5 py-2.5 border border-orange-300 text-orange-700 bg-white text-sm font-medium rounded-xl hover:bg-orange-50 transition-colors cursor-pointer disabled:opacity-50"
+                    >
+                      {withdrawingPool ? '撤回中…' : '撤回提交，重新选择组队方式'}
+                    </button>
                   </div>
                 </>
               ) : (
@@ -860,8 +920,29 @@ export default function TeamFormationModule({ classId, className, initialSubTab,
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="text-xs text-white/70">成员 {myTeam.members.length} 人</span>
+                      {myTeam.isSolo ? (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/20 border border-white/30">
+                          单人公司
+                        </span>
+                      ) : null}
                     </div>
                   </div>
+
+                  {myTeam.isSolo ? (
+                    <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                      <p className="text-sm text-indigo-900 m-0">
+                        单人公司由你自主成立。若需改选组队方式，可撤回后重新提交。
+                      </p>
+                      <button
+                        type="button"
+                        disabled={withdrawingPool}
+                        onClick={() => void handleWithdrawGrouping()}
+                        className="px-4 py-2 border border-indigo-300 text-indigo-700 bg-white text-sm font-medium rounded-xl hover:bg-indigo-50 transition-colors cursor-pointer disabled:opacity-50 whitespace-nowrap"
+                      >
+                        {withdrawingPool ? '撤回中…' : '撤回并重新选择组队方式'}
+                      </button>
+                    </div>
+                  ) : null}
 
                   {/* 编辑团队信息弹窗 */}
                   {editingTeamInfo && (

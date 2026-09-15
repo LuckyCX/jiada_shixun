@@ -228,6 +228,41 @@ export async function submitTeamFormation(
   }>;
 }
 
+/** 撤回组队池或单人公司选择，保留测评与 AI 结果，可重新选择组队方式 */
+export async function withdrawTeamFormationPool(classId: string) {
+  return portalAuthenticatedFetch('student', '/api/student/team-formation/withdraw-pool', {
+    method: 'POST',
+    body: JSON.stringify({ classId }),
+  }) as Promise<{ status: string; withdrawn: boolean; dissolvedSolo?: boolean }>;
+}
+
+export type TeamFormationWithdrawEligibility = {
+  canWithdraw: boolean;
+  reason: string;
+  code: string;
+  isSolo: boolean;
+  requiresResetWarning?: boolean;
+  resetHint?: string;
+};
+
+/** 撤回前资格：不可撤时 reason 供明确提示；可撤但需重置时带 resetHint */
+export async function fetchTeamFormationWithdrawEligibility(
+  classId: string
+): Promise<TeamFormationWithdrawEligibility> {
+  const data = (await portalAuthenticatedFetch(
+    'student',
+    `/api/student/team-formation/withdraw-eligibility?classId=${encodeURIComponent(classId)}`
+  )) as Partial<TeamFormationWithdrawEligibility> | null;
+  return {
+    canWithdraw: Boolean(data?.canWithdraw),
+    reason: String(data?.reason || ''),
+    code: String(data?.code || ''),
+    isSolo: Boolean(data?.isSolo),
+    requiresResetWarning: Boolean(data?.requiresResetWarning),
+    resetHint: String(data?.resetHint || ''),
+  };
+}
+
 /** 清空答题与 AI 结果，保留已上传视频 */
 export async function resetTeamAssessment(classId: string) {
   return portalAuthenticatedFetch('student', '/api/student/team-formation/reset-assessment', {
@@ -469,6 +504,15 @@ export async function addTeamMember(classId: string, teamId: string, studentId: 
   return portalAuthenticatedFetch(
     'teacher',
     `/api/teacher/personal-classes/${encodeURIComponent(classId)}/team-formation/teams/${encodeURIComponent(teamId)}/members`,
+    { method: 'POST', body: JSON.stringify({ studentId }) }
+  ) as Promise<TeacherGroupingState>;
+}
+
+/** 手动新建多人队并加入一名待组队学生 */
+export async function createTeamWithMember(classId: string, studentId: string) {
+  return portalAuthenticatedFetch(
+    'teacher',
+    `/api/teacher/personal-classes/${encodeURIComponent(classId)}/team-formation/teams`,
     { method: 'POST', body: JSON.stringify({ studentId }) }
   ) as Promise<TeacherGroupingState>;
 }

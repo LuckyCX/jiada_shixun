@@ -110,13 +110,17 @@ router.post('/login', async (req, res) => {
       `SELECT id, username, password_hash, role, status FROM users WHERE username = $1`,
       [username]
     );
-    if (!rows.length || rows[0].status !== 'active') {
-      return res.status(401).json({ code: 40103, message: '账号或密码错误', data: null, traceId: req.traceId });
+    // 账号不存在与密码错误统一文案，避免枚举；停用单独提示
+    if (!rows.length) {
+      return res.status(401).json({ code: 40103, message: '用户名或密码不正确', data: null, traceId: req.traceId });
     }
     const u = rows[0];
+    if (u.status !== 'active') {
+      return res.status(403).json({ code: 40301, message: '该账号已停用', data: null, traceId: req.traceId });
+    }
     const ok = await bcrypt.compare(password, u.password_hash);
     if (!ok) {
-      return res.status(401).json({ code: 40103, message: '账号或密码错误', data: null, traceId: req.traceId });
+      return res.status(401).json({ code: 40103, message: '用户名或密码不正确', data: null, traceId: req.traceId });
     }
     const user = { id: u.id, username: u.username, role: u.role };
     const token = await signAccessToken(user);

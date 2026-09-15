@@ -81,15 +81,31 @@ export async function fetchStudentPersonalEnrollments(): Promise<StudentPersonal
   }));
 }
 
-/** 登录成功后、写入 token 前：是否至少有一个可进入实训的教师个性化班级 */
-export async function studentHasActivePersonalClassWithToken(
+/** 登录成功后、写入 token 前：校验学生个性化班闸门 */
+export async function assertStudentCanLoginWithToken(
   token: string
-): Promise<boolean> {
+): Promise<{ ok: true } | { ok: false; message: string }> {
   const r = await fetch('/api/student/personal-class-enrollments', {
     headers: { Authorization: `Bearer ${token}` },
   });
-  const j = await r.json().catch(() => ({ code: -1 }));
-  if (!r.ok || j.code !== 0) return false;
-  const list = j.data as StudentPersonalEnrollment[] | undefined;
-  return Array.isArray(list) && list.some((item) => item.canEnterTraining);
+  const j = await r.json().catch(() => ({ code: -1, message: '无法校验班级归属' }));
+  if (!r.ok || j.code !== 0) {
+    return { ok: false, message: String(j.message || '无法校验班级归属') };
+  }
+  const list = Array.isArray(j.data) ? (j.data as StudentPersonalEnrollment[]) : [];
+  // 零班（含新建未拉入 / 被踢光 / 老师删班解散）：禁止登录
+  if (list.length === 0) {
+    return { ok: false, message: '暂无归属班级' };
+  }
+  // 有班但全部未到实训时间
+  if (!list.some((item) => Boolean(item.canEnterTraining))) {
+    return { ok: false, message: '当前暂无已开放的实训班级' };
+  }
+  return { ok: true };
+}
+
+/** @deprecated 请使用 assertStudentCanLoginWithToken */
+export async function studentHasActivePersonalClassWithToken(token: string): Promise<boolean> {
+  const r = await assertStudentCanLoginWithToken(token);
+  return r.ok;
 }

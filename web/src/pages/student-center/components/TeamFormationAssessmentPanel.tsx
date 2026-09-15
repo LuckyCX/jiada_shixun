@@ -9,19 +9,24 @@ import {
   saveTeamAnswers,
   submitTeamFormation,
   uploadTeamVideo,
+  withdrawTeamFormationPool,
   loadTeamIntroVideoObjectUrl,
   type TeamQuestion,
   TEAM_DIMENSION_BARS,
   normalizeTeamDimensionProfile,
   stripTeamAnalysisStreamDisplay,
   type TeamDimensionProfile,
+  fetchTeamFormationWithdrawEligibility,
 } from '../../../lib/teamFormationApi';
+import { appAlert, appConfirm } from '../../../lib/appDialog';
 
 const MAX_VIDEO = 50 * 1024 * 1024;
 
 type Props = {
   classId: string;
   onSubmitted: (mode: 'pool' | 'solo') => void;
+  /** 撤回组队池申请后回调，父级可刷新等待态并切回测评 */
+  onPoolWithdrawn?: () => void;
 };
 
 function showToast(message: string, type: 'success' | 'error' = 'success') {
@@ -32,7 +37,7 @@ function showToast(message: string, type: 'success' | 'error' = 'success') {
   setTimeout(() => div.remove(), 3000);
 }
 
-export default function TeamFormationAssessmentPanel({ classId, onSubmitted }: Props) {
+export default function TeamFormationAssessmentPanel({ classId, onSubmitted, onPoolWithdrawn }: Props) {
   const [loading, setLoading] = useState(true);
   const [questions, setQuestions] = useState<TeamQuestion[]>([]);
   const [currentQuestion, setCurrentQuestion] = useState(0);
@@ -59,6 +64,7 @@ export default function TeamFormationAssessmentPanel({ classId, onSubmitted }: P
   const [introVideoOpen, setIntroVideoOpen] = useState(false);
   const [groupingModalOpen, setGroupingModalOpen] = useState(false);
   const [submittingGrouping, setSubmittingGrouping] = useState(false);
+  const [withdrawingPool, setWithdrawingPool] = useState(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingAnswersRef = useRef<Record<string, string | string[]>>({});
   const streamAccumRef = useRef('');
@@ -445,6 +451,36 @@ export default function TeamFormationAssessmentPanel({ classId, onSubmitted }: P
     setGroupingModalOpen(true);
   };
 
+  const handleWithdrawPool = async () => {
+    setWithdrawingPool(true);
+    try {
+      const gate = await fetchTeamFormationWithdrawEligibility(classId);
+      if (!gate.canWithdraw) {
+        await appAlert(gate.reason || '当前状态不可撤回组队', '无法撤回');
+        return;
+      }
+      const ok = await appConfirm(
+        '撤回后将退出组队池或解散单人公司，可重新选择「进入组队池」或「成立单人公司」。测评与 AI 分析结果会保留。',
+        '撤回组队申请',
+        { okText: '确认撤回', cancelText: '取消', danger: true }
+      );
+      if (!ok) return;
+      await withdrawTeamFormationPool(classId);
+      setWaitingForTeacher(false);
+      showToast('已撤回组队申请，可重新选择组队方式');
+      onPoolWithdrawn?.();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : '撤回失败';
+      if (/无法|不可|请联系教师|已分配|已开始|AI 分析/.test(msg)) {
+        await appAlert(msg, '无法撤回');
+      } else {
+        showToast(msg, 'error');
+      }
+    } finally {
+      setWithdrawingPool(false);
+    }
+  };
+
   const groupingChoiceModal = (
     <Modal
       title="选择组队方式"
@@ -542,10 +578,18 @@ export default function TeamFormationAssessmentPanel({ classId, onSubmitted }: P
       <div className="bg-gradient-to-br from-amber-50 to-orange-50 border border-amber-200 rounded-xl p-8 text-center">
         <i className="ri-time-line text-4xl text-amber-500 mb-3 block" />
         <h3 className="text-lg font-bold text-gray-900 mb-2">已提交，等待教师组队</h3>
-        <p className="text-sm text-gray-600">
+        <p className="text-sm text-gray-600 mb-4">
           {aiMatchedRoleLabel ? `AI 匹配角色：${aiMatchedRoleLabel}` : ''}
         </p>
         {dimensionBars}
+        <button
+          type="button"
+          disabled={withdrawingPool}
+          onClick={() => void handleWithdrawPool()}
+          className="mt-6 px-5 py-2.5 border border-orange-300 text-orange-700 bg-white text-sm font-medium rounded-xl hover:bg-orange-50 transition-colors cursor-pointer disabled:opacity-50"
+        >
+          {withdrawingPool ? '撤回中…' : '撤回提交，重新选择组队方式'}
+        </button>
       </div>
     );
   }

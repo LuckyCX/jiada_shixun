@@ -1,9 +1,10 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Form, Input, Select, Button } from 'antd';
 import AppModalPortal from '../../../../components/AppModalPortal';
 import { UserRole } from './types';
 import { useCollegeDictOptions } from './useCollegeDictOptions';
 import { useMajorOptions } from './useMajorOptions';
+import { fetchAdminClasses, type AdminClassOption } from './adminUsersApi';
 
 interface AddUserModalProps {
   isOpen: boolean;
@@ -13,6 +14,11 @@ interface AddUserModalProps {
   fixedRole?: 'student' | 'teacher';
   /** 锁定学院 colleges.id */
   fixedDepartmentId?: string;
+  /** 班级学生页锁定专业 / 班级 */
+  fixedMajorId?: string;
+  fixedClassId?: string;
+  fixedClassLabel?: string;
+  fixedMajorLabel?: string;
 }
 
 /** 新建/导入统一规则：学号或工号的后 6 位作为初始密码（不足 6 位则取全部） */
@@ -22,7 +28,17 @@ export function initialPasswordFromIdNumber(idNumber: string): string {
   return s.slice(-6);
 }
 
-export default function AddUserModal({ isOpen, onClose, onSubmit, fixedRole, fixedDepartmentId }: AddUserModalProps) {
+export default function AddUserModal({
+  isOpen,
+  onClose,
+  onSubmit,
+  fixedRole,
+  fixedDepartmentId,
+  fixedMajorId,
+  fixedClassId,
+  fixedClassLabel,
+  fixedMajorLabel,
+}: AddUserModalProps) {
   const [form] = Form.useForm<{
     name: string;
     role: UserRole;
@@ -30,30 +46,67 @@ export default function AddUserModal({ isOpen, onClose, onSubmit, fixedRole, fix
     email?: string;
     department: string;
     majorId?: string;
+    classId?: string;
   }>();
   const role = Form.useWatch('role', form);
   const department = Form.useWatch('department', form);
+  const watchedMajorId = Form.useWatch('majorId', form);
   const idNumber = Form.useWatch('idNumber', form) ?? '';
   const effRole = (fixedRole ?? role) as UserRole;
+  const isStudent = effRole === 'student';
+  const effDept = fixedDepartmentId ?? department;
   const { options: deptOptions, loading: deptLoading } = useCollegeDictOptions(isOpen);
   const { options: majorOptions, loading: majorLoading } = useMajorOptions(
-    isOpen && (effRole === 'student' || effRole === 'teacher'),
-    fixedDepartmentId ?? department
+    isOpen && isStudent,
+    effDept
   );
+  const [classOptions, setClassOptions] = useState<AdminClassOption[]>([]);
+  const [classesLoading, setClassesLoading] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
       form.resetFields();
-      const init: Partial<{ role: UserRole; department: string }> = {};
+      const init: Partial<{
+        role: UserRole;
+        department: string;
+        majorId: string;
+        classId: string;
+      }> = {};
       if (fixedRole) init.role = fixedRole;
       if (fixedDepartmentId) init.department = fixedDepartmentId;
+      if (fixedMajorId) init.majorId = fixedMajorId;
+      if (fixedClassId) init.classId = fixedClassId;
       if (Object.keys(init).length) form.setFieldsValue(init);
     }
-  }, [isOpen, form, fixedRole, fixedDepartmentId]);
+  }, [isOpen, form, fixedRole, fixedDepartmentId, fixedMajorId, fixedClassId]);
 
+  // 选专业后拉班级；锁定班级时不必请求
   useEffect(() => {
-    if (effRole === 'student' || effRole === 'teacher') form.setFieldValue('majorId', undefined);
-  }, [department, fixedDepartmentId, effRole, form]);
+    if (!isOpen || !isStudent || fixedClassId) {
+      setClassOptions([]);
+      return;
+    }
+    if (!effDept || !watchedMajorId) {
+      setClassOptions([]);
+      setClassesLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setClassesLoading(true);
+    fetchAdminClasses(String(effDept), String(watchedMajorId))
+      .then((rows) => {
+        if (!cancelled) setClassOptions(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setClassOptions([]);
+      })
+      .finally(() => {
+        if (!cancelled) setClassesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, isStudent, fixedClassId, effDept, watchedMajorId]);
 
   if (!isOpen) return null;
 
@@ -69,18 +122,19 @@ export default function AddUserModal({ isOpen, onClose, onSubmit, fixedRole, fix
     email?: string;
     department: string;
     majorId?: string;
+    classId?: string;
   }) => {
     const id = values.idNumber.trim();
     const effRoleSubmit = (fixedRole ?? values.role) as UserRole;
-    const effDept = fixedDepartmentId ?? values.department;
+    const dept = fixedDepartmentId ?? values.department;
     try {
       await Promise.resolve(
         onSubmit({
           ...values,
           role: effRoleSubmit,
-          department: effDept,
-          majorId:
-            effRoleSubmit === 'student' || effRoleSubmit === 'teacher' ? values.majorId : undefined,
+          department: dept,
+          majorId: effRoleSubmit === 'student' ? fixedMajorId || values.majorId : undefined,
+          classId: effRoleSubmit === 'student' ? fixedClassId || values.classId : undefined,
           name: values.name.trim(),
           idNumber: id,
           email: values.email != null ? String(values.email).trim() : '',
@@ -95,6 +149,15 @@ export default function AddUserModal({ isOpen, onClose, onSubmit, fixedRole, fix
 
   const idLabel = (fixedRole ?? role) === 'student' ? '学号' : '工号';
   const defaultPwd = initialPasswordFromIdNumber(idNumber);
+
+  const majorSelectOptions =
+    fixedMajorId && fixedMajorLabel && !majorOptions.some((o) => o.value === fixedMajorId)
+      ? [{ value: fixedMajorId, label: fixedMajorLabel }, ...majorOptions]
+      : majorOptions;
+
+  const classSelectOptions = fixedClassId
+    ? [{ value: fixedClassId, label: fixedClassLabel || fixedClassId }]
+    : classOptions.map((c) => ({ value: c.id, label: c.name }));
 
   return (
     <AppModalPortal open onMaskClick={handleClose} zIndex={1100}>
@@ -118,7 +181,7 @@ export default function AddUserModal({ isOpen, onClose, onSubmit, fixedRole, fix
           layout="vertical"
           className="p-6"
           initialValues={{ role: (fixedRole ?? 'student') as UserRole }}
-          onFinish={handleFinish}
+          onFinish={(v) => void handleFinish(v)}
           requiredMark={(label, { required }) => (
             <>
               {label}
@@ -164,10 +227,16 @@ export default function AddUserModal({ isOpen, onClose, onSubmit, fixedRole, fix
             name="idNumber"
             rules={[
               { required: true, message: (fixedRole ?? role) === 'student' ? '请输入学号' : '请输入工号' },
-              { whitespace: true, message: (fixedRole ?? role) === 'student' ? '学号不能为空' : '工号不能为空' },
+              {
+                whitespace: true,
+                message: (fixedRole ?? role) === 'student' ? '学号不能为空' : '工号不能为空',
+              },
             ]}
           >
-            <Input placeholder={(fixedRole ?? role) === 'student' ? '请输入学号' : '请输入工号'} className="!py-2.5" />
+            <Input
+              placeholder={(fixedRole ?? role) === 'student' ? '请输入学号' : '请输入工号'}
+              className="!py-2.5"
+            />
           </Form.Item>
 
           <Form.Item
@@ -190,12 +259,7 @@ export default function AddUserModal({ isOpen, onClose, onSubmit, fixedRole, fix
 
           <Form.Item label="学院" name="department" rules={[{ required: true, message: '请选择学院' }]}>
             {fixedDepartmentId ? (
-              <Select
-                className="h-[42px]"
-                disabled
-                options={deptOptions}
-                value={fixedDepartmentId}
-              />
+              <Select className="h-[42px]" disabled options={deptOptions} value={fixedDepartmentId} />
             ) : (
               <Select
                 className="h-[42px]"
@@ -204,21 +268,63 @@ export default function AddUserModal({ isOpen, onClose, onSubmit, fixedRole, fix
                 options={deptOptions}
                 showSearch
                 optionFilterProp="label"
-                allowClear
+                filterOption={(input, option) =>
+                  !input.trim() ||
+                  String(option?.label ?? '')
+                    .toLowerCase()
+                    .includes(input.trim().toLowerCase())
+                }
+                onChange={(v) => {
+                  form.setFieldsValue({
+                    department: v,
+                    ...(isStudent ? { majorId: undefined, classId: undefined } : {}),
+                  });
+                }}
               />
             )}
           </Form.Item>
 
-          {effRole === 'student' || effRole === 'teacher' ? (
+          {isStudent ? (
             <Form.Item label="专业" name="majorId" rules={[{ required: true, message: '请选择专业' }]}>
               <Select
+                key={`add-major-${effDept || ''}`}
                 className="h-[42px]"
-                placeholder={department || fixedDepartmentId ? '请选择专业' : '请先选择学院'}
+                placeholder={effDept ? '请选择专业' : '请先选择学院'}
                 loading={majorLoading}
-                options={majorOptions}
+                options={majorSelectOptions}
                 showSearch
                 optionFilterProp="label"
-                disabled={!(department || fixedDepartmentId)}
+                filterOption={(input, option) =>
+                  !input.trim() ||
+                  String(option?.label ?? '')
+                    .toLowerCase()
+                    .includes(input.trim().toLowerCase())
+                }
+                disabled={!effDept || Boolean(fixedMajorId)}
+                onChange={(v) => {
+                  form.setFieldsValue({ majorId: v, classId: undefined });
+                }}
+              />
+            </Form.Item>
+          ) : null}
+
+          {isStudent ? (
+            <Form.Item label="班级" name="classId" rules={[{ required: true, message: '请选择班级' }]}>
+              <Select
+                key={`add-class-${watchedMajorId || fixedMajorId || ''}`}
+                className="h-[42px]"
+                placeholder={watchedMajorId || fixedMajorId ? '请选择班级' : '请先选择专业'}
+                loading={classesLoading}
+                options={classSelectOptions}
+                showSearch
+                optionFilterProp="label"
+                filterOption={(input, option) =>
+                  !input.trim() ||
+                  String(option?.label ?? '')
+                    .toLowerCase()
+                    .includes(input.trim().toLowerCase())
+                }
+                disabled={Boolean(fixedClassId) || !(watchedMajorId || fixedMajorId)}
               />
             </Form.Item>
           ) : null}
@@ -233,7 +339,7 @@ export default function AddUserModal({ isOpen, onClose, onSubmit, fixedRole, fix
               )}
             </div>
             <p className="text-xs text-gray-500 mt-1.5">
-               默认密码为{idLabel}后 6 位；用户首次登录后需修改密码
+              默认密码为{idLabel}后 6 位；用户首次登录后需修改密码
             </p>
           </div>
 
@@ -241,7 +347,13 @@ export default function AddUserModal({ isOpen, onClose, onSubmit, fixedRole, fix
             <Button type="default" block size="large" onClick={handleClose} className="!h-[42px]">
               取消
             </Button>
-            <Button type="primary" block size="large" htmlType="submit" className="!h-[42px] !bg-teal-600 hover:!bg-teal-700">
+            <Button
+              type="primary"
+              block
+              size="large"
+              htmlType="submit"
+              className="!h-[42px] !bg-teal-600 hover:!bg-teal-700"
+            >
               确认新增
             </Button>
           </div>

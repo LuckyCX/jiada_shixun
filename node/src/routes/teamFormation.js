@@ -38,6 +38,7 @@ import {
   persistPlacements,
   refreshTeamComplementScore,
 } from '../lib/teamFormationIncrementalGroup.js';
+import { TASK_MODULE_TO_TRAINING_ID } from '../lib/personalClassTaskConstants.js';
 import { normalizeUploadFileName } from '../lib/uploadFileName.js';
 
 const router = Router();
@@ -407,15 +408,195 @@ async function teacherGroupingPayload(pool, classId) {
 }
 
 function existingTeamsWithMembers(allTeams) {
+  // 单人公司不参与补员 / 随机塞人
   return (allTeams || []).filter(
     (t) =>
+      !t.isSolo &&
       (t.groupingStatus === 'draft' || t.groupingStatus === 'confirmed') &&
       (t.members || []).length > 0
   );
 }
 
+/**
+ * 学生是否已开始组队之后的实训（环节2～计划书）。
+ * 判定：本班关联课程已有学习进度，或团队已有任一后续模块实践数据。
+ * 用于：个人成队撤回拦截、教师移出队员拦截。
+ */
+async function studentHasStartedPostTeamTraining(pool, classId, studentId, teamId) {
+  const postTeamModules = Object.entries(TASK_MODULE_TO_TRAINING_ID)
+    .filter(([, id]) => id !== 'team')
+    .map(([name]) => name);
+
+  if (postTeamModules.length) {
+    const { rows: courseRows } = await pool.query(
+      `WITH RECURSIVE selected AS (
+         SELECT n.id, n.parent_id, n.level, n.status
+         FROM teacher_personal_class_tasks t
+         JOIN teacher_personal_class_task_resource_nodes trn ON trn.task_id = t.id
+         JOIN course_resource_nodes n ON n.id = trn.node_id
+         WHERE t.teacher_personal_class_id = $1
+           AND t.module = ANY($2::text[])
+           AND t.status = 'published'
+         UNION ALL
+         SELECT child.id, child.parent_id, child.level, child.status
+         FROM course_resource_nodes child
+         JOIN selected parent ON child.parent_id = parent.id
+       ),
+       hashes AS (
+         SELECT DISTINCT f.content_hash
+         FROM selected s
+         JOIN course_resource_files f ON f.node_id = s.id
+         WHERE s.level = 3 AND s.status = 'published'
+           AND f.content_hash IS NOT NULL
+           AND COALESCE(f.resource_type, '') <> 'archive'
+       )
+       SELECT 1
+       FROM student_course_resource_progress p
+       JOIN hashes h ON h.content_hash = p.content_hash
+       WHERE p.user_id = $3
+         AND (COALESCE(p.progress_percent, 0) > 0 OR p.completed_at IS NOT NULL)
+       LIMIT 1`,
+      [classId, postTeamModules, studentId]
+    );
+    if (courseRows.length) return true;
+  }
+
+  const tid = teamId != null ? Number(teamId) : NaN;
+  if (!Number.isFinite(tid) || tid <= 0) return false;
+
+  const { rows } = await pool.query(
+    `SELECT 1 WHERE
+       EXISTS (SELECT 1 FROM teacher_personal_class_team_ideas WHERE team_id = $1 LIMIT 1)
+       OR EXISTS (SELECT 1 FROM teacher_personal_class_team_project_topic_drafts WHERE team_id = $1 LIMIT 1)
+       OR EXISTS (SELECT 1 FROM teacher_personal_class_team_project_topics WHERE team_id = $1 LIMIT 1)
+       OR EXISTS (SELECT 1 FROM teacher_personal_class_team_market_research_plans WHERE team_id = $1 LIMIT 1)
+       OR EXISTS (SELECT 1 FROM teacher_personal_class_team_market_research_uploads WHERE team_id = $1 LIMIT 1)
+       OR EXISTS (SELECT 1 FROM teacher_personal_class_team_surveys WHERE team_id = $1 LIMIT 1)
+       OR EXISTS (
+         SELECT 1 FROM teacher_personal_class_team_product_context
+         WHERE team_id = $1 AND NULLIF(TRIM(COALESCE(context_text, '')), '') IS NOT NULL
+         LIMIT 1
+       )
+       OR EXISTS (SELECT 1 FROM teacher_personal_class_team_product_ai_suggestions WHERE team_id = $1 LIMIT 1)
+       OR EXISTS (SELECT 1 FROM teacher_personal_class_team_product_prototype_uploads WHERE team_id = $1 LIMIT 1)
+       OR EXISTS (
+         SELECT 1 FROM teacher_personal_class_team_business_model_workspace
+         WHERE team_id = $1 AND (
+           swot_saved_at IS NOT NULL OR marketing_saved_at IS NOT NULL
+           OR finance_saved_at IS NOT NULL OR bmc_canvas_saved_at IS NOT NULL
+         )
+         LIMIT 1
+       )
+       OR EXISTS (
+         SELECT 1 FROM teacher_personal_class_team_role_simulation_run_records
+         WHERE team_id = $1 AND student_id = $2
+         LIMIT 1
+       )
+       OR EXISTS (SELECT 1 FROM teacher_personal_class_team_business_plan_versions WHERE team_id = $1 LIMIT 1)
+       OR EXISTS (SELECT 1 FROM teacher_personal_class_team_business_plan_submissions WHERE team_id = $1 LIMIT 1)
+     `,
+    [tid, studentId]
+  );
+  return rows.length > 0;
+}
+
+/**
+ * 组队撤回资格：
+ * - 组队池 pending_teacher：可撤
+ * - 已入多人队：不可撤（除非教师移出回到池）
+ * - 单人公司：未开始后续实训可撤；已开始环节2及以后任一实训 → 不可撤
+ */
+async function resolveTeamFormationWithdrawGate(pool, classId, studentId) {
+  const { rows } = await pool.query(
+    `SELECT status, grouping_preference AS "groupingPreference", ai_matched_role AS "aiMatchedRole"
+     FROM student_team_formation_submissions
+     WHERE teacher_personal_class_id = $1 AND student_id = $2`,
+    [classId, studentId]
+  );
+  if (!rows.length) {
+    return { canWithdraw: false, reason: '尚未提交组队申请', code: 'no_submission' };
+  }
+  const row = rows[0];
+  if (!row.aiMatchedRole) {
+    return { canWithdraw: false, reason: '缺少 AI 分析结果，无法撤回后保留测评状态', code: 'no_ai' };
+  }
+
+  const status = String(row.status || '');
+  const { rows: teamRows } = await pool.query(
+    `SELECT t.id, COALESCE(t.is_solo, false) AS is_solo
+     FROM teacher_personal_class_team_members m
+     JOIN teacher_personal_class_teams t ON t.id = m.team_id
+     WHERE t.teacher_personal_class_id = $1 AND m.student_id = $2
+     LIMIT 1`,
+    [classId, studentId]
+  );
+  const team = teamRows[0] || null;
+
+  // 多人团队：已分配则不可撤回
+  if (team && !team.is_solo) {
+    return {
+      canWithdraw: false,
+      reason: '无法撤回：您已分配到团队。请联系教师将您移出团队后，再重新选择组队方式。',
+      code: 'assigned_multi_team',
+      teamId: String(team.id),
+      isSolo: false,
+    };
+  }
+
+  // 组队池等待教师分配：可撤
+  if (status === 'pending_teacher' && !team) {
+    return {
+      canWithdraw: true,
+      reason: '',
+      code: 'pending_pool',
+      isSolo: false,
+      requiresResetWarning: false,
+    };
+  }
+
+  // 单人公司
+  if (team?.is_solo || row.groupingPreference === 'solo') {
+    const teamId = team?.id != null ? String(team.id) : null;
+    const started = await studentHasStartedPostTeamTraining(pool, classId, studentId, team?.id ?? null);
+    if (started) {
+      return {
+        canWithdraw: false,
+        reason: '不允许撤回：您已开始后续实训。',
+        code: 'solo_training_started',
+        teamId,
+        isSolo: true,
+      };
+    }
+    return {
+      canWithdraw: true,
+      reason: '',
+      code: 'solo_ok',
+      teamId,
+      isSolo: true,
+      requiresResetWarning: false,
+    };
+  }
+
+  return {
+    canWithdraw: false,
+    reason: '当前状态不可撤回组队',
+    code: 'blocked',
+    isSolo: Boolean(team?.is_solo),
+  };
+}
+
 async function loadTeamsWithMembers(pool, classId, statuses = ['draft', 'confirmed']) {
-    const { rows: teamRows } = await pool.query(
+  // 清理历史空壳团队（如成员账号被删后残留的 0 人队）
+  await pool.query(
+    `DELETE FROM teacher_personal_class_teams t
+     WHERE t.teacher_personal_class_id = $1
+       AND NOT EXISTS (
+         SELECT 1 FROM teacher_personal_class_team_members m WHERE m.team_id = t.id
+       )`,
+    [classId]
+  );
+
+  const { rows: teamRows } = await pool.query(
     `SELECT id, name, COALESCE(introduction, '') AS introduction, grouping_status AS "groupingStatus",
             complement_score AS "complementScore", ai_rationale AS "aiRationale", sort_order AS "sortOrder",
             created_at AS "createdAt", leader_student_id AS "leaderStudentId",
@@ -498,7 +679,7 @@ async function loadTeamsWithMembers(pool, classId, statuses = ['draft', 'confirm
           }
         : { strategic: 0, market: 0, techRisk: 0 },
     };
-  });
+  }).filter((team) => (team.members?.length || 0) > 0);
 }
 
 function formatAnswersForLlm(questions, answers) {
@@ -1248,6 +1429,90 @@ router.post('/student/team-formation/submit', requireAuth(), requireStudent(), a
   }
 });
 
+/**
+ * 撤回组队选择：保留测评/AI 结果，回到可重新选择「组队池 / 单人公司」的状态。
+ * 资格见 resolveTeamFormationWithdrawGate。
+ */
+router.post('/student/team-formation/withdraw-pool', requireAuth(), requireStudent(), async (req, res) => {
+  try {
+    const sid = studentIdFromReq(req);
+    const classId = parseClassId(req.body?.classId);
+    if (!sid || !classId) return bad(req, res, 400, 40003, '参数无效');
+    const pool = getPool();
+    if (!(await studentEnrolledInClass(pool, sid, classId))) {
+      return bad(req, res, 403, 40301, '未加入该班级');
+    }
+
+    const gate = await resolveTeamFormationWithdrawGate(pool, classId, sid);
+    if (!gate.canWithdraw) {
+      return bad(req, res, 400, 40010, gate.reason || '当前状态不可撤回');
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      if (gate.isSolo && gate.teamId) {
+        const teamId = Number(gate.teamId);
+        // 解散单人公司（ideas / likes / discussions / 选题 随团队 CASCADE）
+        await client.query(`DELETE FROM teacher_personal_class_team_members WHERE team_id = $1`, [teamId]);
+        await client.query(`DELETE FROM teacher_personal_class_teams WHERE id = $1`, [teamId]);
+      }
+
+      await client.query(
+        `UPDATE student_team_formation_submissions SET
+           status = 'draft',
+           grouping_preference = null,
+           submitted_at = null,
+           updated_at = now()
+         WHERE teacher_personal_class_id = $1 AND student_id = $2`,
+        [classId, sid]
+      );
+
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+
+    return ok(req, res, {
+      status: 'draft',
+      withdrawn: true,
+      dissolvedSolo: Boolean(gate.isSolo),
+    });
+  } catch (e) {
+    logError(`POST withdraw-pool traceId=${req.traceId}`, e);
+    return bad(req, res, 500, 50000, e.message);
+  }
+});
+
+/** 撤回前资格查询：不可撤时返回明确原因，供前端提示 */
+router.get('/student/team-formation/withdraw-eligibility', requireAuth(), requireStudent(), async (req, res) => {
+  try {
+    const sid = studentIdFromReq(req);
+    const classId = parseClassId(req.query.classId);
+    if (!sid || !classId) return bad(req, res, 400, 40003, '参数无效');
+    const pool = getPool();
+    if (!(await studentEnrolledInClass(pool, sid, classId))) {
+      return bad(req, res, 403, 40301, '未加入该班级');
+    }
+    const gate = await resolveTeamFormationWithdrawGate(pool, classId, sid);
+    return ok(req, res, {
+      canWithdraw: Boolean(gate.canWithdraw),
+      reason: gate.reason || '',
+      code: gate.code || '',
+      isSolo: Boolean(gate.isSolo),
+      requiresResetWarning: Boolean(gate.requiresResetWarning),
+      resetHint: gate.resetHint || '',
+    });
+  } catch (e) {
+    logError(`GET withdraw-eligibility traceId=${req.traceId}`, e);
+    return bad(req, res, 500, 50000, e.message);
+  }
+});
+
 router.get(
   '/teacher/personal-classes/:classId/team-formation/grouping',
   requireAuth(),
@@ -1426,11 +1691,19 @@ router.delete(
         return bad(req, res, 404, 40402, '班级不存在或无权操作');
       }
       const { rows: tr } = await pool.query(
-        `SELECT id, grouping_status FROM teacher_personal_class_teams
+        `SELECT id, grouping_status, COALESCE(is_solo, false) AS is_solo
+         FROM teacher_personal_class_teams
          WHERE id = $1 AND teacher_personal_class_id = $2`,
         [teamId, classId]
       );
       if (!tr.length) return bad(req, res, 404, 40403, '团队不存在');
+      if (tr[0].is_solo) {
+        return bad(req, res, 400, 40018, '单人公司不可移出成员');
+      }
+      // 学生已开始后续实训则不可移出
+      if (await studentHasStartedPostTeamTraining(pool, classId, studentId, teamId)) {
+        return bad(req, res, 400, 40019, '该学生已开始实训，不能移出队伍');
+      }
       await pool.query(
         `DELETE FROM teacher_personal_class_team_members WHERE team_id = $1 AND student_id = $2`,
         [teamId, studentId]
@@ -1514,6 +1787,91 @@ router.put(
   }
 );
 
+/**
+ * 手动新建多人队并加入一名待组队学生（低于 AI 门槛时的手动分配入口）
+ */
+router.post(
+  '/teacher/personal-classes/:classId/team-formation/teams',
+  requireAuth(),
+  requireTeacher(),
+  async (req, res) => {
+    try {
+      const tid = teacherIdFromReq(req);
+      const classId = parseClassId(req.params.classId);
+      const studentId = parseClassId(req.body?.studentId);
+      if (!tid || !classId || !studentId) return bad(req, res, 400, 40003, '参数无效');
+      const pool = getPool();
+      if (!(await ownsPersonalClass(pool, tid, classId))) {
+        return bad(req, res, 404, 40402, '班级不存在或无权操作');
+      }
+      if (await findStudentTeamIdInClass(pool, classId, studentId)) {
+        return bad(req, res, 400, 40016, '该学生已在队伍中');
+      }
+      const { rows: sub } = await pool.query(
+        `SELECT ai_matched_role AS "aiMatchedRole", ai_analysis_raw AS "aiAnalysisRaw", status,
+                grouping_preference AS "groupingPreference"
+         FROM student_team_formation_submissions
+         WHERE teacher_personal_class_id = $1 AND student_id = $2`,
+        [classId, studentId]
+      );
+      if (!sub.length || sub[0].status !== 'pending_teacher') {
+        return bad(req, res, 400, 40016, '该学生不在待组队池');
+      }
+      const { rows: userRows } = await pool.query(
+        `SELECT real_name, email FROM users WHERE id = $1`,
+        [studentId]
+      );
+      const displayName = String(userRows[0]?.real_name || userRows[0]?.email || '同学').trim() || '同学';
+      const teamName = `${displayName}所在团队`.slice(0, 128);
+      const profile = profileFromAnalysisRaw(sub[0].aiAnalysisRaw);
+      const aiRole = sub[0].aiMatchedRole || null;
+
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const { rows: sortRows } = await client.query(
+          `SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_sort
+           FROM teacher_personal_class_teams WHERE teacher_personal_class_id = $1`,
+          [classId]
+        );
+        const nextSort = Number(sortRows[0]?.next_sort ?? 0);
+        const { rows: ins } = await client.query(
+          `INSERT INTO teacher_personal_class_teams
+             (teacher_personal_class_id, name, grouping_status, complement_score, ai_rationale, sort_order, is_solo, leader_student_id)
+           VALUES ($1, $2, 'confirmed', NULL, $3, $4, false, $5)
+           RETURNING id`,
+          [classId, teamName, '教师手动分配组建', nextSort, studentId]
+        );
+        const teamId = ins[0].id;
+        await client.query(
+          `INSERT INTO teacher_personal_class_team_members
+             (team_id, student_id, ai_matched_role, dimension_profile)
+           VALUES ($1, $2, $3, $4::jsonb)`,
+          [teamId, studentId, aiRole, JSON.stringify(profile)]
+        );
+        await client.query(
+          `UPDATE student_team_formation_submissions SET
+             status = 'confirmed',
+             grouping_preference = 'pool',
+             updated_at = now()
+           WHERE teacher_personal_class_id = $1 AND student_id = $2`,
+          [classId, studentId]
+        );
+        await client.query('COMMIT');
+      } catch (e) {
+        await client.query('ROLLBACK');
+        throw e;
+      } finally {
+        client.release();
+      }
+      return ok(req, res, await teacherGroupingPayload(pool, classId));
+    } catch (e) {
+      logError(`POST create team traceId=${req.traceId}`, e);
+      return bad(req, res, 500, 50000, e.message);
+    }
+  }
+);
+
 router.post(
   '/teacher/personal-classes/:classId/team-formation/teams/:teamId/members',
   requireAuth(),
@@ -1530,11 +1888,15 @@ router.post(
         return bad(req, res, 404, 40402, '班级不存在或无权操作');
       }
       const { rows: tr } = await pool.query(
-        `SELECT id, grouping_status FROM teacher_personal_class_teams
+        `SELECT id, grouping_status, COALESCE(is_solo, false) AS is_solo
+         FROM teacher_personal_class_teams
          WHERE id = $1 AND teacher_personal_class_id = $2`,
         [teamId, classId]
       );
       if (!tr.length) return bad(req, res, 404, 40403, '团队不存在');
+      if (tr[0].is_solo) {
+        return bad(req, res, 400, 40018, '单人公司不可再加入其他学生');
+      }
       const { rows: cnt } = await pool.query(
         `SELECT COUNT(*)::int AS c FROM teacher_personal_class_team_members WHERE team_id = $1`,
         [teamId]

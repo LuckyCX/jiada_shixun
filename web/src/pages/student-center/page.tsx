@@ -29,6 +29,7 @@ import {
 } from '../../lib/teamFormationApi';
 import { downloadStudentGuidanceAttachment } from '../../lib/teacherGuidanceApi';
 import StudentClassSwitcher from './components/StudentClassSwitcher';
+import { appAlert } from '../../lib/appDialog';
 import { UserGuideContent } from '../user-guide/UserGuideContent';
 import TeamFormationModule from './components/TeamFormationModule';
 import IdeationModule, { type IdeationLearningResource, type IdeationModuleTab } from './components/IdeationModule';
@@ -727,14 +728,27 @@ export default function StudentCenterPage() {
 
   const handleClassChange = (classId: string) => {
     const target = enrollments.find((item) => item.classId === classId);
-    if (!target?.canEnterTraining) {
-      notification.warning({
-        message: '班级暂未开放',
-        description: target?.unavailableReason || '未到团队组建日期',
-        placement: 'topRight',
+    if (!target) return;
+
+    // 未开放：不可进入，弹窗不可点遮罩关闭，仅可切回已开放班
+    if (!target.canEnterTraining) {
+      const openClass =
+        enrollments.find((e) => e.canEnterTraining && e.classId === selectedClassId) ||
+        enrollments.find((e) => e.canEnterTraining);
+      const reason = target.unavailableReason || '未到实训时间';
+      void appAlert(
+        `${reason}。是否切回已经开放实训的班级？`,
+        '未到实训时间',
+        { okText: '切回已开放班级', maskClosable: false }
+      ).then(() => {
+        if (openClass) {
+          setSelectedClassId(openClass.classId);
+          sessionStorage.setItem('jiada_student_selected_class_id', openClass.classId);
+        }
       });
       return;
     }
+
     setSelectedClassId(classId);
     sessionStorage.setItem('jiada_student_selected_class_id', classId);
   };

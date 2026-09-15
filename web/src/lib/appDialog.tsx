@@ -5,6 +5,8 @@ type AlertOpts = {
   title?: string;
   content: string;
   okText?: string;
+  /** false 时禁止点遮罩关闭（如未到实训时间强制切回） */
+  maskClosable?: boolean;
 };
 
 type ConfirmOpts = {
@@ -58,9 +60,9 @@ function pump() {
   };
 
   if (next.kind === 'alert') {
-    const { title = '提示', content, okText = '确定' } = next.opts;
+    const { title = '提示', content, okText = '确定', maskClosable = true } = next.opts;
     r.render(
-      <AppModalPortal open zIndex={2200} onMaskClick={finishAlert}>
+      <AppModalPortal open zIndex={2200} onMaskClick={maskClosable ? finishAlert : undefined}>
         <div
           className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden"
           role="dialog"
@@ -127,9 +129,17 @@ function pump() {
 }
 
 /** 替代原生 alert：兼容弹窗对话框 */
-export function appAlert(content: string, title = '提示'): Promise<void> {
+export function appAlert(
+  content: string,
+  title = '提示',
+  opts?: { okText?: string; maskClosable?: boolean }
+): Promise<void> {
   return new Promise((resolve) => {
-    queue.push({ kind: 'alert', opts: { content, title }, resolve });
+    queue.push({
+      kind: 'alert',
+      opts: { content, title, okText: opts?.okText, maskClosable: opts?.maskClosable },
+      resolve,
+    });
     pump();
   });
 }
