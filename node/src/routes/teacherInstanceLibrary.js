@@ -6,6 +6,7 @@ import { randomUUID } from 'crypto';
 import multer from 'multer';
 import { getPool } from '../lib/db.js';
 import { logError } from '../lib/logError.js';
+import { normalizeUploadFileName } from '../lib/uploadFileName.js';
 import { requireAuth, requireStudent, requireTeacher } from '../middleware/auth.js';
 
 const router = Router();
@@ -43,14 +44,6 @@ function userIdFromReq(req) {
 
 function normalizeText(value) {
   return String(value || '').trim();
-}
-
-function normalizeUploadFileName(name) {
-  const raw = String(name || 'file').trim() || 'file';
-  const decoded = Buffer.from(raw, 'latin1').toString('utf8');
-  const looksLatin1Mojibake = /[\u0080-\u00ff]/.test(raw);
-  const decodedLooksValid = decoded && decoded !== raw && !decoded.includes('\uFFFD') && /[^\u0000-\u00ff]/.test(decoded);
-  return looksLatin1Mojibake && decodedLooksValid ? decoded : raw;
 }
 
 function safeStorageName(name) {

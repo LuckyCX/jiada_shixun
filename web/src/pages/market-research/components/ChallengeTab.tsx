@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { appAlert } from '../../../lib/appDialog';
 
 interface ProjectInfo {
   name: string;
@@ -127,7 +128,7 @@ export default function ChallengeTab() {
 
   const handleInfoSubmit = () => {
     if (!projectInfo.name || !projectInfo.targetUser || !projectInfo.coreValue || !projectInfo.businessModel) {
-      alert('请填写完整的项目信息');
+      void appAlert('请填写完整的项目信息');
       return;
     }
     setStep('select');
@@ -143,7 +144,7 @@ export default function ChallengeTab() {
 
   const startChallenge = () => {
     if (selectedAgents.length === 0) {
-      alert('请至少选择一个挑战角色');
+      void appAlert('请至少选择一个挑战角色');
       return;
     }
     setStep('challenge');

@@ -1,5 +1,6 @@
 
 import { useState } from 'react';
+import AppModalPortal from '../../../../components/AppModalPortal';
 import type { CaseItem } from './types';
 import { MODULES, INDUSTRIES } from './types';
 import { MOCK_CASES } from './mockData';
@@ -380,9 +381,14 @@ export default function CaseLibrary() {
       </div>
 
       {/* 新增/编辑弹窗 */}
-      {showAddModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl p-6 max-w-lg w-full shadow-2xl">
+      {showAddModal ? (
+        <AppModalPortal open onMaskClick={() => setShowAddModal(false)} zIndex={50}>
+          <div
+            className="bg-white rounded-2xl p-6 max-w-lg w-full shadow-2xl"
+            role="dialog"
+            aria-modal="true"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex items-center justify-between mb-5">
               <h3 className="text-lg font-bold text-gray-900">
                 {editingCase ? '编辑案例' : '新增案例'}
@@ -526,8 +532,8 @@ export default function CaseLibrary() {
               </button>
             </div>
           </div>
-        </div>
-      )}
+        </AppModalPortal>
+      ) : null}
     </div>
   );
 }

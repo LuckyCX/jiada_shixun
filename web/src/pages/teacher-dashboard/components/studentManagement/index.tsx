@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Modal, Spin, message } from 'antd';
 import { useTranslation } from 'react-i18next';
 import UserAvatar from '../../../../components/UserAvatar';
+import AppModalPortal from '../../../../components/AppModalPortal';
 import AddStudentsTransferModal from '../classManagement/AddStudentsTransferModal';
 import {
   listPersonalClassStudents,
@@ -41,10 +42,9 @@ interface StudentDetailDrawerProps {
 function StudentDetailDrawer({ student, className, onClose }: StudentDetailDrawerProps) {
   const { t } = useTranslation();
   return (
-    <div className="fixed inset-0 z-50 flex justify-end" onClick={onClose}>
-      <div className="absolute inset-0 bg-black/30" />
+    <AppModalPortal open={true} onMaskClick={onClose} zIndex={50} placement="right">
       <div
-        className="relative w-96 bg-white h-full shadow-2xl flex flex-col overflow-y-auto"
+        className="w-96 bg-white h-full shadow-2xl flex flex-col overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="bg-gradient-to-br from-teal-500 to-cyan-500 px-6 py-8 flex-shrink-0">
@@ -97,7 +97,7 @@ function StudentDetailDrawer({ student, className, onClose }: StudentDetailDrawe
           </div>
         </div>
       </div>
-    </div>
+    </AppModalPortal>
   );
 }
 

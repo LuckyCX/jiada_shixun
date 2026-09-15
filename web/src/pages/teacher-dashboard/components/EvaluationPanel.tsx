@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import AppModalPortal from '../../../components/AppModalPortal';
 
 interface TeamEvaluation {
   id: number;
@@ -143,7 +144,7 @@ const gradeDistribution = [
 
 function TeamDetailModal({ team, onClose }: { team: TeamEvaluation; onClose: () => void }) {
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-6" onClick={onClose}>
+    <AppModalPortal open={true} onMaskClick={onClose} zIndex={50}>
       <div className="bg-white rounded-2xl max-w-3xl w-full max-h-[88vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="sticky top-0 bg-white border-b border-gray-100 px-6 py-4 z-10 flex items-center justify-between">
           <div>
@@ -234,7 +235,7 @@ function TeamDetailModal({ team, onClose }: { team: TeamEvaluation; onClose: () 
           </button>
         </div>
       </div>
-    </div>
+    </AppModalPortal>
   );
 }
 

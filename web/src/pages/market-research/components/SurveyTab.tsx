@@ -1,6 +1,7 @@
 
 import { useState } from 'react';
 import { Survey, SurveyQuestion, ResearchPlan } from '../types';
+import AppModalPortal from '../../../components/AppModalPortal';
 
 interface Props {
   surveys: Survey[];
@@ -36,8 +37,11 @@ function QRCodeModal({ survey, onClose }: { survey: Survey; onClose: () => void 
   });
 
   return (
-    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl p-8 w-full max-w-md shadow-2xl">
+    <AppModalPortal open={true} onMaskClick={onClose} zIndex={50}>
+      <div
+        className="bg-white rounded-2xl p-8 w-full max-w-md shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center justify-between mb-6">
           <h3 className="text-lg font-bold text-gray-900">发放问卷</h3>
           <button onClick={onClose} className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-gray-600 rounded-lg cursor-pointer">
@@ -81,7 +85,7 @@ function QRCodeModal({ survey, onClose }: { survey: Survey; onClose: () => void 
           收集到的数据将自动同步到「数据分析」和「用户画像」模块
         </div>
       </div>
-    </div>
+    </AppModalPortal>
   );
 }
 
@@ -132,8 +136,11 @@ function AIGenerateModal({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl max-h-[90vh] flex flex-col">
+    <AppModalPortal open={true} onMaskClick={onClose} zIndex={50}>
+      <div
+        className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl max-h-[90vh] flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center justify-between p-6 border-b border-gray-100">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 flex items-center justify-center bg-purple-100 text-purple-600 rounded-lg">
@@ -257,7 +264,7 @@ function AIGenerateModal({
           </div>
         )}
       </div>
-    </div>
+    </AppModalPortal>
   );
 }
 

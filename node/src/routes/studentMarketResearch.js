@@ -26,6 +26,7 @@ import {
   assertSurveyIdsForTeam,
 } from '../lib/marketResearchSurveyDb.js';
 import { resolvePublicWebOrigin } from '../lib/publicWebOrigin.js';
+import { normalizeUploadFileName } from '../lib/uploadFileName.js';
 import {
   buildMarketResearchContext,
   buildSurveyOnlyContext,
@@ -243,15 +244,6 @@ function validatePlanBody(body, memberIds, stage) {
 
 function uploadAbsPath(storageKey) {
   return path.join(UPLOAD_ROOT, storageKey);
-}
-
-function normalizeUploadFileName(name) {
-  const raw = String(name || 'file').trim() || 'file';
-  const decoded = Buffer.from(raw, 'latin1').toString('utf8');
-  const looksLatin1Mojibake = /[\u0080-\u00ff]/.test(raw);
-  const decodedLooksValid =
-    decoded && decoded !== raw && !decoded.includes('\uFFFD') && /[^\u0000-\u00ff]/.test(decoded);
-  return looksLatin1Mojibake && decodedLooksValid ? decoded : raw;
 }
 
 function methodDirSegment(method) {

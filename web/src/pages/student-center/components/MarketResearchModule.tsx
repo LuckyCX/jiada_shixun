@@ -13,6 +13,7 @@ import {
   QRCode,
 } from 'antd';
 import VersionControl, { Version } from '../../../components/feature/VersionControl';
+import AppModalPortal from '../../../components/AppModalPortal';
 import { useSiteBrand } from '../../../lib/publicSite';
 import MarketResearchMethodUpload from './MarketResearchMethodUpload';
 import SurveyAIGenerateModal from './SurveyAIGenerateModal';
@@ -208,8 +209,11 @@ function QRCodeModal({ survey, onClose }: { survey: Survey; onClose: () => void 
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl p-8 w-full max-w-md shadow-2xl">
+    <AppModalPortal open={true} onMaskClick={onClose} zIndex={50}>
+      <div
+        className="bg-white rounded-2xl p-8 w-full max-w-md shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center justify-between mb-6">
           <h3 className="text-lg font-bold text-gray-900">发放问卷</h3>
           <button onClick={onClose} className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-gray-600 rounded-lg cursor-pointer">
@@ -237,7 +241,7 @@ function QRCodeModal({ survey, onClose }: { survey: Survey; onClose: () => void 
           </div>
         </div>
       </div>
-    </div>
+    </AppModalPortal>
   );
 }
 
@@ -290,8 +294,11 @@ function AIGeneratePersonaModal({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl w-full max-w-4xl shadow-2xl max-h-[90vh] flex flex-col">
+    <AppModalPortal open={true} onMaskClick={onClose} zIndex={50}>
+      <div
+        className="bg-white rounded-2xl w-full max-w-4xl shadow-2xl max-h-[90vh] flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center justify-between p-6 border-b border-gray-100">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 flex items-center justify-center bg-gradient-to-br from-purple-500 to-blue-500 text-white rounded-xl">
@@ -411,7 +418,7 @@ function AIGeneratePersonaModal({
           </div>
         )}
       </div>
-    </div>
+    </AppModalPortal>
   );
 }
 
@@ -442,8 +449,11 @@ function EditPersonaModal({ persona, onSave, onClose }: { persona: UserPersona; 
   const fieldLabels: Record<string, string> = { painPoints: '核心痛点', needs: '核心诉求', habits: '消费习惯' };
 
   return (
-    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl max-h-[90vh] flex flex-col">
+    <AppModalPortal open={true} onMaskClick={onClose} zIndex={50}>
+      <div
+        className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl max-h-[90vh] flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center justify-between p-6 border-b border-gray-100">
           <h3 className="text-lg font-bold text-gray-900">编辑用户画像</h3>
           <button onClick={onClose} className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-gray-600 rounded-lg cursor-pointer">
@@ -502,7 +512,7 @@ function EditPersonaModal({ persona, onSave, onClose }: { persona: UserPersona; 
           </button>
         </div>
       </div>
-    </div>
+    </AppModalPortal>
   );
 }
 
@@ -538,8 +548,11 @@ function CreatePersonaModal({ onSave, onClose }: { onSave: (p: Omit<UserPersona,
   const fieldLabels: Record<string, string> = { painPoints: '核心痛点', needs: '核心诉求', habits: '消费习惯' };
 
   return (
-    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl max-h-[90vh] flex flex-col">
+    <AppModalPortal open={true} onMaskClick={onClose} zIndex={50}>
+      <div
+        className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl max-h-[90vh] flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center justify-between p-6 border-b border-gray-100">
           <h3 className="text-lg font-bold text-gray-900">创建新用户画像</h3>
           <button onClick={onClose} className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-gray-600 rounded-lg cursor-pointer">
@@ -595,7 +608,7 @@ function CreatePersonaModal({ onSave, onClose }: { onSave: (p: Omit<UserPersona,
           </button>
         </div>
       </div>
-    </div>
+    </AppModalPortal>
   );
 }
 
@@ -915,6 +928,8 @@ export default function MarketResearchModule({
   };
 
   const personaLocked = teamReportUploaded || trainingEnded;
+  /** 环节已完成（已上传调研报告）或实训已结束：问卷创建/撤回等写操作一并禁用 */
+  const surveyLocked = personaLocked;
 
   const planUploadMethods = useMemo(
     () => filterPlanUploadMethods(plan.methods),
@@ -1649,16 +1664,24 @@ export default function MarketResearchModule({
                 <h3 className="text-lg font-bold text-gray-900">问卷管理</h3>
                 <div className="flex gap-2">
                   <button
-                    onClick={() => setShowAI(true)}
-                    disabled={trainingEnded}
-                    className="px-4 py-2 bg-gradient-to-r from-green-500 to-teal-500 text-white text-sm font-medium rounded-lg hover:opacity-90 transition-opacity whitespace-nowrap cursor-pointer flex items-center gap-2"
+                    type="button"
+                    onClick={() => {
+                      if (surveyLocked) return;
+                      setShowAI(true);
+                    }}
+                    disabled={surveyLocked}
+                    className="px-4 py-2 bg-gradient-to-r from-green-500 to-teal-500 text-white text-sm font-medium rounded-lg hover:opacity-90 transition-opacity whitespace-nowrap cursor-pointer flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:opacity-50"
                   >
                     <i className="ri-robot-line"></i>AI 生成问卷
                   </button>
                   <button
-                    onClick={() => setSurveyEditor({ mode: 'create', survey: null })}
-                    disabled={trainingEnded}
-                    className="px-4 py-2 bg-gray-100 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-200 transition-colors whitespace-nowrap cursor-pointer"
+                    type="button"
+                    onClick={() => {
+                      if (surveyLocked) return;
+                      setSurveyEditor({ mode: 'create', survey: null });
+                    }}
+                    disabled={surveyLocked}
+                    className="px-4 py-2 bg-gray-100 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-200 transition-colors whitespace-nowrap cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-gray-100"
                   >
                     <i className="ri-add-line mr-1"></i>手动创建
                   </button>
@@ -1791,9 +1814,13 @@ export default function MarketResearchModule({
                             <i className="ri-qr-code-line"></i>发放问卷
                           </button>
                           <button
-                            onClick={() => void handleWithdraw(survey.id)}
-                            disabled={trainingEnded}
-                            className="px-4 py-2 text-amber-700 text-sm font-medium rounded-lg hover:bg-amber-50 transition-colors whitespace-nowrap cursor-pointer"
+                            type="button"
+                            onClick={() => {
+                              if (surveyLocked) return;
+                              void handleWithdraw(survey.id);
+                            }}
+                            disabled={surveyLocked}
+                            className="px-4 py-2 text-amber-700 text-sm font-medium rounded-lg hover:bg-amber-50 transition-colors whitespace-nowrap cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent"
                           >
                             撤回
                           </button>
@@ -2091,14 +2118,22 @@ export default function MarketResearchModule({
 
               <div className="flex gap-4">
                 <button
-                  onClick={() => setSurveySelectMode('persona')}
+                  type="button"
+                  onClick={() => {
+                    if (personaLocked) return;
+                    setSurveySelectMode('persona');
+                  }}
                   disabled={personaLocked}
-                  className="flex-1 px-6 py-3 bg-gradient-to-r from-purple-600 to-blue-600 text-white text-sm font-medium rounded-xl hover:from-purple-700 hover:to-blue-700 transition-all shadow-lg cursor-pointer flex items-center justify-center gap-2 whitespace-nowrap"
+                  className="flex-1 px-6 py-3 bg-gradient-to-r from-purple-600 to-blue-600 text-white text-sm font-medium rounded-xl hover:from-purple-700 hover:to-blue-700 transition-all shadow-lg cursor-pointer flex items-center justify-center gap-2 whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:from-purple-600 disabled:hover:to-blue-600"
                 >
                   <i className="ri-robot-line"></i>AI 生成画像
                 </button>
                 <button
-                  onClick={() => setShowCreatePersona(true)}
+                  type="button"
+                  onClick={() => {
+                    if (personaLocked) return;
+                    setShowCreatePersona(true);
+                  }}
                   disabled={personaLocked}
                   className="flex-1 px-6 py-3 bg-green-500 text-white text-sm font-medium rounded-xl hover:bg-green-600 transition-colors whitespace-nowrap cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                 >

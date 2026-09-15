@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Button, Checkbox, Form, Input, InputNumber, Modal, Radio, Select } from 'antd';
+import AppModalPortal from '../../../../components/AppModalPortal';
 import {
   type CourseKnowledgePoint,
   type CourseQuizQuestion,
@@ -754,9 +755,14 @@ export default function CourseManagement({ selectedModule: selectedModuleProp, h
         )}
       </div> : <TrainingModuleResources selectedModule={selectedModule} hideModuleTabs />}
 
-      {addNodeState && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6">
+      {addNodeState ? (
+        <AppModalPortal open onMaskClick={() => setAddNodeState(null)} zIndex={50}>
+          <div
+            className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6"
+            role="dialog"
+            aria-modal="true"
+            onClick={(e) => e.stopPropagation()}
+          >
             <h3 className="text-base font-bold text-gray-900 mb-4">{addNodeState.parentLevel === 0 ? '新增章节' : addNodeState.parentLevel === 1 ? '新增小节' : '新增子小节'}</h3>
             <input value={newNodeTitle} onChange={(e) => setNewNodeTitle(e.target.value)} placeholder="请输入名称" className="w-full px-3 py-2 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500" autoFocus />
             <div className="flex items-center gap-3 mt-5">
@@ -764,12 +770,17 @@ export default function CourseManagement({ selectedModule: selectedModuleProp, h
               <button onClick={handleAddNode} className="flex-1 px-4 py-2 bg-teal-500 text-white text-sm font-medium rounded-xl hover:bg-teal-600 transition-colors cursor-pointer">确认添加</button>
             </div>
           </div>
-        </div>
-      )}
+        </AppModalPortal>
+      ) : null}
 
-      {uploadNode && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full">
+      {uploadNode ? (
+        <AppModalPortal open onMaskClick={() => setUploadNode(null)} zIndex={50}>
+          <div
+            className="bg-white rounded-2xl shadow-2xl max-w-lg w-full"
+            role="dialog"
+            aria-modal="true"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="p-6 border-b border-gray-100 flex items-center justify-between">
               <div>
                 <h3 className="text-base font-bold text-gray-900">上传课件资源</h3>
@@ -790,12 +801,17 @@ export default function CourseManagement({ selectedModule: selectedModuleProp, h
               </label>
             </div>
           </div>
-        </div>
-      )}
+        </AppModalPortal>
+      ) : null}
 
-      {editKnowledgeNode && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-xl w-full p-6">
+      {editKnowledgeNode ? (
+        <AppModalPortal open onMaskClick={() => setEditKnowledgeNode(null)} zIndex={50}>
+          <div
+            className="bg-white rounded-2xl shadow-2xl max-w-xl w-full p-6"
+            role="dialog"
+            aria-modal="true"
+            onClick={(e) => e.stopPropagation()}
+          >
             <h3 className="text-base font-bold text-gray-900 mb-4">关联知识点</h3>
             <div className="flex flex-wrap gap-2 max-h-72 overflow-y-auto p-3 bg-gray-50 rounded-xl">
               {knowledgePoints.map((point) => (
@@ -811,8 +827,8 @@ export default function CourseManagement({ selectedModule: selectedModuleProp, h
               <button onClick={saveKnowledgePicker} className="flex-1 px-4 py-2 bg-teal-500 text-white text-sm font-medium rounded-xl hover:bg-teal-600 transition-colors cursor-pointer">保存设置</button>
             </div>
           </div>
-        </div>
-      )}
+        </AppModalPortal>
+      ) : null}
 
       <Modal
         title={
@@ -1083,9 +1099,14 @@ export default function CourseManagement({ selectedModule: selectedModuleProp, h
         </Form>
       </Modal>
 
-      {confirmState && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[1200] p-4">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6">
+      {confirmState ? (
+        <AppModalPortal open onMaskClick={() => setConfirmState(null)} zIndex={1200}>
+          <div
+            className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6"
+            role="dialog"
+            aria-modal="true"
+            onClick={(e) => e.stopPropagation()}
+          >
             <h3 className="text-base font-bold text-gray-900 mb-2">{confirmState.title}</h3>
             <p className="text-sm text-gray-600 leading-relaxed mb-5">{confirmState.content}</p>
             <div className="flex items-center gap-3">
@@ -1106,8 +1127,8 @@ export default function CourseManagement({ selectedModule: selectedModuleProp, h
               </button>
             </div>
           </div>
-        </div>
-      )}
+        </AppModalPortal>
+      ) : null}
 
       {toast && (
         <div className="fixed bottom-6 right-6 z-[70] flex items-center gap-3 bg-gray-900 text-white px-5 py-3 rounded-2xl shadow-xl">

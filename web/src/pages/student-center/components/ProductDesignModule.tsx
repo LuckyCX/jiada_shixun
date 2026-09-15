@@ -396,9 +396,12 @@ export default function ProductDesignModule({
     }
     setUploadingZip(true);
     try {
-      await uploadTeamProductPrototype(classId, file);
+      const uploaded = await uploadTeamProductPrototype(classId, file);
       setPrototypeUploaded(true);
-      setPrototypeInfo({ originName: file.name, uploadedAt: new Date().toISOString() });
+      setPrototypeInfo({
+        originName: uploaded.originName || file.name,
+        uploadedAt: new Date().toISOString(),
+      });
       onTeamPrototypeUploaded?.();
       message.success('原型已上传');
     } catch (e) {

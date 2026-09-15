@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import AppModalPortal from '../../../components/AppModalPortal';
 
 interface StudentData {
   id: number;
@@ -358,10 +359,7 @@ export default function StudentAnalysisBoard() {
 
       {/* 学生详情弹窗 */}
       {selectedStudent && (
-        <div
-          className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
-          onClick={() => setSelectedStudent(null)}
-        >
+        <AppModalPortal open={true} onMaskClick={() => setSelectedStudent(null)} zIndex={50}>
           <div
             className="bg-white rounded-2xl w-full max-w-2xl max-h-[85vh] overflow-y-auto shadow-2xl"
             onClick={e => e.stopPropagation()}
@@ -586,7 +584,7 @@ export default function StudentAnalysisBoard() {
               </div>
             </div>
           </div>
-        </div>
+        </AppModalPortal>
       )}
     </div>
   );

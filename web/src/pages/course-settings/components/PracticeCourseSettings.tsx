@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import AppModalPortal from '../../../components/AppModalPortal';
 
 interface Resource {
   id: string;
@@ -530,9 +531,14 @@ export default function PracticeCourseSettings() {
       </div>
 
       {/* 上传课件弹窗 */}
-      {uploadModalOpen && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full">
+      {uploadModalOpen ? (
+        <AppModalPortal open onMaskClick={() => setUploadModalOpen(false)} zIndex={50}>
+          <div
+            className="bg-white rounded-2xl shadow-2xl max-w-lg w-full"
+            role="dialog"
+            aria-modal="true"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="p-6 border-b border-gray-100">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
@@ -618,13 +624,22 @@ export default function PracticeCourseSettings() {
               </div>
             </div>
           </div>
-        </div>
-      )}
+        </AppModalPortal>
+      ) : null}
 
       {/* 新增章节弹窗 */}
-      {addChapterModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6">
+      {addChapterModal ? (
+        <AppModalPortal
+          open
+          onMaskClick={() => { setAddChapterModal(false); setNewChapterTitle(''); }}
+          zIndex={50}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6"
+            role="dialog"
+            aria-modal="true"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex items-center gap-3 mb-4">
               <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-teal-500 to-cyan-500 flex items-center justify-center">
                 <i className="ri-book-line text-white text-lg"></i>
@@ -657,13 +672,22 @@ export default function PracticeCourseSettings() {
               </button>
             </div>
           </div>
-        </div>
-      )}
+        </AppModalPortal>
+      ) : null}
 
       {/* 新增小节弹窗 */}
-      {addSectionModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6">
+      {addSectionModal ? (
+        <AppModalPortal
+          open
+          onMaskClick={() => { setAddSectionModal(null); setNewSectionTitle(''); }}
+          zIndex={50}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6"
+            role="dialog"
+            aria-modal="true"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex items-center gap-3 mb-4">
               <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-500 flex items-center justify-center">
                 <i className="ri-list-check text-white text-lg"></i>
@@ -697,13 +721,22 @@ export default function PracticeCourseSettings() {
               </button>
             </div>
           </div>
-        </div>
-      )}
+        </AppModalPortal>
+      ) : null}
 
       {/* 关联知识点弹窗 */}
-      {editKnowledgePoints && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6">
+      {editKnowledgePoints ? (
+        <AppModalPortal
+          open
+          onMaskClick={() => { setEditKnowledgePoints(null); setSelectedKnowledgePoints([]); }}
+          zIndex={50}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6"
+            role="dialog"
+            aria-modal="true"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex items-center gap-3 mb-4">
               <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-teal-500 to-cyan-500 flex items-center justify-center">
                 <i className="ri-price-tag-3-line text-white text-lg"></i>
@@ -744,8 +777,8 @@ export default function PracticeCourseSettings() {
               </button>
             </div>
           </div>
-        </div>
-      )}
+        </AppModalPortal>
+      ) : null}
 
       {/* 保存成功提示 */}
       {saved && (

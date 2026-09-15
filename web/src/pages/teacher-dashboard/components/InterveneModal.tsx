@@ -1,7 +1,7 @@
-
 import { useMemo, useState } from 'react';
 import { DatePicker, Select } from 'antd';
 import dayjs, { type Dayjs } from 'dayjs';
+import AppModalPortal from '../../../components/AppModalPortal';
 import { TeamProject } from './TeamCard';
 
 interface InterveneModalProps {
@@ -86,10 +86,7 @@ export default function InterveneModal({
   };
 
   return (
-    <div
-      className="fixed inset-0 bg-black bg-opacity-50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
-      onClick={onClose}
-    >
+    <AppModalPortal open onMaskClick={onClose} zIndex={1100}>
       <div
         className="bg-white rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden"
         onClick={(e) => e.stopPropagation()}
@@ -240,6 +237,6 @@ export default function InterveneModal({
           </div>
         </div>
       </div>
-    </div>
+    </AppModalPortal>
   );
 }

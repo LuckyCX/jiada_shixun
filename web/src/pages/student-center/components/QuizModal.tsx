@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { QuizConfig, QuizQuestion } from '../../../mocks/quizBank';
+import AppModalPortal from '../../../components/AppModalPortal';
 
 export type { QuizConfig, QuizQuestion };
 
@@ -123,8 +124,11 @@ export default function QuizModal({ config, onClose, onPass }: QuizModalProps) {
   /** ---------- Result page ---------- **/
   if (showResult) {
     return (
-      <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-6">
-        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+      <AppModalPortal open={true} onMaskClick={onClose} zIndex={50}>
+        <div
+          className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto"
+          onClick={(e) => e.stopPropagation()}
+        >
           {/* Header */}
           <div
             className={`rounded-t-2xl p-8 text-center ${
@@ -266,14 +270,17 @@ export default function QuizModal({ config, onClose, onPass }: QuizModalProps) {
             </div>
           </div>
         </div>
-      </div>
+      </AppModalPortal>
     );
   }
 
   /** ---------- Quiz page ---------- **/
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-6">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+    <AppModalPortal open={true} onMaskClick={onClose} zIndex={50}>
+      <div
+        className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* Header with progress */}
         <div className="bg-gradient-to-r from-teal-500 to-cyan-600 px-6 py-5 rounded-t-2xl">
           <div className="flex items-center justify-between mb-3">
@@ -461,6 +468,6 @@ export default function QuizModal({ config, onClose, onPass }: QuizModalProps) {
           )}
         </div>
       </div>
-    </div>
+    </AppModalPortal>
   );
 }

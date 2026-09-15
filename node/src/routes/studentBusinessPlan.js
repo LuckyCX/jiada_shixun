@@ -38,6 +38,7 @@ import {
   setupSseResponse,
   sseWrite,
 } from '../lib/marketResearchSse.js';
+import { normalizeUploadFileName } from '../lib/uploadFileName.js';
 
 const router = Router();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -47,14 +48,6 @@ const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
 
 function ensureDir(p) {
   if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
-}
-
-function normalizeUploadFileName(name) {
-  const raw = String(name || 'file').trim() || 'file';
-  const decoded = Buffer.from(raw, 'latin1').toString('utf8');
-  const looksLatin1Mojibake = /[\u0080-\u00ff]/.test(raw);
-  const decodedLooksValid = decoded && decoded !== raw && !decoded.includes('\uFFFD') && /[^\u0000-\u00ff]/.test(decoded);
-  return looksLatin1Mojibake && decodedLooksValid ? decoded : raw;
 }
 
 function extOf(name) {

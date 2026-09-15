@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { appAlert } from '../../lib/appDialog';
 
 interface Team {
   id: string;
@@ -296,7 +297,7 @@ export default function ClassProjectOverview() {
   };
 
   const handleExport = () => {
-    alert(`导出${activeTab === 'project' ? '项目' : activeTab === 'team' ? '团队' : '模块'}维度数据`);
+    void appAlert(`导出${activeTab === 'project' ? '项目' : activeTab === 'team' ? '团队' : '模块'}维度数据`);
   };
 
   return (

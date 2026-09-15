@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import AppModalPortal from '../../../../components/AppModalPortal';
 import { User } from './types';
 
 interface DeleteConfirmModalProps {
@@ -23,8 +24,11 @@ export default function DeleteConfirmModal({ isOpen, user, onClose, onConfirm }:
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-xl w-full max-w-md">
+    <AppModalPortal open onMaskClick={onClose} zIndex={1100}>
+      <div
+        className="bg-white rounded-xl w-full max-w-md"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="p-6">
           <div className="w-16 h-16 mx-auto bg-red-100 rounded-full flex items-center justify-center mb-4">
             <i className="ri-error-warning-line text-3xl text-red-600"></i>
@@ -57,6 +61,6 @@ export default function DeleteConfirmModal({ isOpen, user, onClose, onConfirm }:
           </div>
         </div>
       </div>
-    </div>
+    </AppModalPortal>
   );
 }

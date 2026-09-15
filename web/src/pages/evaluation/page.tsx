@@ -1,11 +1,17 @@
 import { Link } from 'react-router-dom';
 import { useState } from 'react';
+import AppModalPortal from '../../components/AppModalPortal';
 
 // 团队评分明细弹窗组件
 function TeamScoreDetailModal({ team, onClose }: { team: any; onClose: () => void }) {
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-6" onClick={onClose}>
-      <div className="bg-white rounded-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+    <AppModalPortal open onMaskClick={onClose} zIndex={50} className="p-6">
+      <div
+        className="bg-white rounded-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto"
+        role="dialog"
+        aria-modal="true"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="sticky top-0 bg-white border-b border-gray-200 px-8 py-6 z-10">
           <div className="flex items-center justify-between">
             <div>
@@ -128,7 +134,7 @@ function TeamScoreDetailModal({ team, onClose }: { team: any; onClose: () => voi
           </div>
         </div>
       </div>
-    </div>
+    </AppModalPortal>
   );
 }
 
@@ -1647,9 +1653,19 @@ export default function Evaluation() {
       </div>
 
       {/* 复盘报告创建弹窗 */}
-      {showRetrospectiveModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-6" onClick={() => setShowRetrospectiveModal(false)}>
-          <div className="bg-white rounded-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+      {showRetrospectiveModal ? (
+        <AppModalPortal
+          open
+          onMaskClick={() => setShowRetrospectiveModal(false)}
+          zIndex={50}
+          className="p-6"
+        >
+          <div
+            className="bg-white rounded-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto"
+            role="dialog"
+            aria-modal="true"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="sticky top-0 bg-white border-b border-gray-200 px-8 py-6 z-10">
               <div className="flex items-center justify-between">
                 <h3 className="text-2xl font-bold text-gray-900">提交败因复盘报告</h3>
@@ -1749,8 +1765,8 @@ export default function Evaluation() {
               </div>
             </div>
           </div>
-        </div>
-      )}
+        </AppModalPortal>
+      ) : null}
 
       {/* 团队评分明细弹窗 */}
       {selectedTeamDetail && (

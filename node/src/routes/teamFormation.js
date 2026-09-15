@@ -38,6 +38,7 @@ import {
   persistPlacements,
   refreshTeamComplementScore,
 } from '../lib/teamFormationIncrementalGroup.js';
+import { normalizeUploadFileName } from '../lib/uploadFileName.js';
 
 const router = Router();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -561,7 +562,7 @@ const storage = multer.diskStorage({
     cb(null, dir);
   },
   filename(req, file, cb) {
-    const ext = path.extname(file.originalname || '') || '.mp4';
+    const ext = path.extname(normalizeUploadFileName(file.originalname || '')) || '.mp4';
     cb(null, `${randomUUID()}${ext}`);
   },
 });
@@ -571,7 +572,7 @@ const uploadVideo = multer({
   limits: { fileSize: MAX_VIDEO_BYTES },
   fileFilter(_req, file, cb) {
     const mime = String(file.mimetype || '').toLowerCase();
-    const ext = path.extname(file.originalname || '').toLowerCase();
+    const ext = path.extname(normalizeUploadFileName(file.originalname || '')).toLowerCase();
     const okMime = mime === 'video/mp4' || mime === 'video/webm';
     const okExt = ext === '.mp4' || ext === '.webm';
     if (okMime || okExt) cb(null, true);
@@ -917,7 +918,10 @@ router.post(
          WHERE student_team_formation_submissions.status IN ('draft', 'pending_teacher')`,
         [classId, sid, relKey]
       );
-      return ok(req, res, { videoStorageKey: relKey, fileName: req.file.originalname });
+      return ok(req, res, {
+        videoStorageKey: relKey,
+        fileName: normalizeUploadFileName(req.file.originalname),
+      });
     } catch (e) {
       logError(`POST student video traceId=${req.traceId}`, e);
       return bad(req, res, 500, 50000, e.message);

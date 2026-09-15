@@ -18,7 +18,7 @@ import {
   type BusinessPlanWorkspace,
 } from '../../../lib/studentBusinessPlanApi';
 import { downloadBusinessPlanDocx } from '../../../lib/businessPlanDocxExport';
-import { getPortalToken, parseJwtPayload } from '../../../lib/authApi';
+import { getPortalToken, parseJwtPayload, rewriteUnsafeHttpMethod } from '../../../lib/authApi';
 
 type BusinessPlanModuleProps = {
   classId?: string;
@@ -542,11 +542,15 @@ export default function BusinessPlanModule({
       if (!key) return;
       const token = getPortalToken('student') || '';
       try {
-        fetch(`/api/student/personal-classes/${classId}/business-plan/section-locks?sectionKey=${encodeURIComponent(key)}`, {
-          method: 'DELETE',
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-          keepalive: true,
-        });
+        // keepalive 场景下仍走 POST + Method-Override，避免 360 拦截 DELETE
+        fetch(
+          `/api/student/personal-classes/${classId}/business-plan/section-locks?sectionKey=${encodeURIComponent(key)}`,
+          rewriteUnsafeHttpMethod({
+            method: 'DELETE',
+            headers: token ? { Authorization: `Bearer ${token}` } : {},
+            keepalive: true,
+          })
+        );
       } catch {
         /* ignore */
       }

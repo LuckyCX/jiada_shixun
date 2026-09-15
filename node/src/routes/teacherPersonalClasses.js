@@ -549,6 +549,17 @@ router.get('/teacher/personal-classes/:id/students', requireAuth(), requireTeach
 });
 
 router.put('/teacher/personal-classes/:id/students', requireAuth(), requireTeacher(), async (req, res) => {
+  return replacePersonalClassStudents(req, res);
+});
+
+/**
+ * 与 PUT 同语义。教室 360 / 部分校园网代理会拦截 PUT，导致前端 Failed to fetch；保存名单优先走 POST。
+ */
+router.post('/teacher/personal-classes/:id/students', requireAuth(), requireTeacher(), async (req, res) => {
+  return replacePersonalClassStudents(req, res);
+});
+
+async function replacePersonalClassStudents(req, res) {
   try {
     const tid = teacherIdFromReq(req);
     if (!tid) return bad(req, res, 400, 40001, '无效用户');
@@ -632,10 +643,10 @@ router.put('/teacher/personal-classes/:id/students', requireAuth(), requireTeach
       client.release();
     }
   } catch (e) {
-    logError(`PUT /api/teacher/personal-classes/:id/students traceId=${req.traceId}`, e);
+    logError(`replacePersonalClassStudents ${req.method} traceId=${req.traceId}`, e);
     return bad(req, res, 500, 50000, e.message);
   }
-});
+}
 
 router.delete(
   '/teacher/personal-classes/:id/students/:studentId',

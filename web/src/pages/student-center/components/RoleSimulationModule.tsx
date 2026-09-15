@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { getPortalToken, parseJwtPayload } from '../../../lib/authApi';
+import AppModalPortal from '../../../components/AppModalPortal';
 
 interface SimConfig {
   budget: number;
@@ -1018,8 +1019,19 @@ const RoleSimulationModule = ({ classId, onTaskComplete, trainingEnded = false }
 
       {/* 历史记录弹窗 */}
       {recordsOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
-          <div className="w-full max-w-5xl bg-white rounded-2xl overflow-hidden shadow-xl">
+        <AppModalPortal
+          open={true}
+          onMaskClick={() => {
+            setRecordsOpen(false);
+            setRecordsData(null);
+            setMemberRecords(null);
+          }}
+          zIndex={50}
+        >
+          <div
+            className="w-full max-w-5xl bg-white rounded-2xl overflow-hidden shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
               <div className="text-base font-bold text-gray-900">仿真记录</div>
               <button
@@ -1179,7 +1191,7 @@ const RoleSimulationModule = ({ classId, onTaskComplete, trainingEnded = false }
               </div>
             </div>
           </div>
-        </div>
+        </AppModalPortal>
       )}
     </div>
   );

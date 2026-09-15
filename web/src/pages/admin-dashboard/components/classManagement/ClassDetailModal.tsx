@@ -1,5 +1,6 @@
 import { Class, Student } from './types';
 import { usePublicDictOptions } from './usePublicDictOptions';
+import AppModalPortal from '../../../../components/AppModalPortal';
 
 interface ClassDetailModalProps {
   isOpen: boolean;
@@ -29,8 +30,11 @@ export default function ClassDetailModal({
         : 'bg-gray-100 text-gray-700';
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
+    <AppModalPortal open onMaskClick={onClose} zIndex={1100}>
+      <div
+        className="bg-white rounded-xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center justify-between p-6 border-b border-gray-200">
           <h3 className="text-xl font-semibold text-gray-900">班级详情</h3>
           <button type="button" onClick={onClose} className="text-gray-400 hover:text-gray-600">
@@ -111,6 +115,6 @@ export default function ClassDetailModal({
           </button>
         </div>
       </div>
-    </div>
+    </AppModalPortal>
   );
 }

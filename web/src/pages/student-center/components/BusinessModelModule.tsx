@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { message, Modal, Spin } from 'antd';
 import VersionControl, { Version } from '../../../components/feature/VersionControl';
+import AppModalPortal from '../../../components/AppModalPortal';
 import WarRoom from '../../business-model/components/WarRoom';
 import {
   fetchBusinessModelWorkspace,
@@ -1047,8 +1048,11 @@ export default function BusinessModelModule({
 
       {/* 添加成本项弹窗 */}
       {showAddCost && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
+        <AppModalPortal open={true} onMaskClick={() => setShowAddCost(false)} zIndex={50}>
+          <div
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-base font-bold text-gray-900">添加成本项</h3>
               <button onClick={() => setShowAddCost(false)} className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 cursor-pointer">
@@ -1077,13 +1081,16 @@ export default function BusinessModelModule({
               <button onClick={handleAddCost} disabled={!newCostName.trim() || !newCostAmount} className="flex-1 px-4 py-2.5 bg-pink-500 text-white text-sm font-medium rounded-lg hover:bg-pink-600 cursor-pointer disabled:opacity-50 whitespace-nowrap">添加</button>
             </div>
           </div>
-        </div>
+        </AppModalPortal>
       )}
 
       {/* 团队共享弹窗 */}
       {showShareModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-8">
+        <AppModalPortal open={true} onMaskClick={() => setShowShareModal(false)} zIndex={50}>
+          <div
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-8"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex items-center justify-between mb-6">
               <h3 className="text-xl font-bold text-gray-900">团队共享</h3>
               <button onClick={() => setShowShareModal(false)} className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 cursor-pointer">
@@ -1116,7 +1123,7 @@ export default function BusinessModelModule({
             </div>
             <button onClick={() => setShowShareModal(false)} className="w-full mt-6 px-6 py-3 bg-gray-100 text-gray-700 text-sm font-medium rounded-xl hover:bg-gray-200 transition-colors cursor-pointer whitespace-nowrap">关闭</button>
           </div>
-        </div>
+        </AppModalPortal>
       )}
 
       {/* Toast */}

@@ -20,6 +20,7 @@ import {
   buildProductDesignUserPrompt,
   parseProductSuggestionFromLlmText,
 } from '../lib/productDesignPrompts.js';
+import { normalizeUploadFileName } from '../lib/uploadFileName.js';
 
 const router = Router();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -134,13 +135,9 @@ async function getMissingSuggestionMembers(pool, teamId, members) {
   return members.filter((m) => !has.has(String(m.id)));
 }
 
-function normalizeUploadFileName(name) {
-  const raw = String(name || 'file').trim() || 'file';
-  return raw.replace(/[\\/]/g, '_');
-}
-
 function isZipFile(file) {
-  const name = String(file.originalname || '').toLowerCase();
+  // 用规范化后的文件名判断扩展名，避免乱码/斜杠导致误判
+  const name = normalizeUploadFileName(file.originalname || '').toLowerCase();
   const mime = String(file.mimetype || '').toLowerCase();
   return name.endsWith('.zip') || mime === 'application/zip' || mime === 'application/x-zip-compressed';
 }
@@ -421,7 +418,7 @@ router.get(
       const r = rows[0];
       return ok(req, res, {
         uploaded: true,
-        originName: r.origin_name || '',
+        originName: normalizeUploadFileName(r.origin_name || ''),
         uploadedAt: r.uploaded_at ? new Date(r.uploaded_at).toISOString() : '',
         uploadedBy: String(r.uploaded_by || ''),
         sizeBytes: Number(r.size_bytes || 0),
@@ -459,9 +456,10 @@ router.post(
       if (!file) return bad(req, res, 400, 40004, '请选择压缩包文件');
       if (!isZipFile(file)) return bad(req, res, 400, 40004, '仅支持上传 ZIP 压缩包');
 
+      const originName = normalizeUploadFileName(file.originalname);
       const dir = path.join(UPLOAD_ROOT, String(ctx.classId), String(ctx.team.id));
       fs.mkdirSync(dir, { recursive: true });
-      const storageName = `${randomUUID()}_${normalizeUploadFileName(file.originalname)}`;
+      const storageName = `${randomUUID()}_${originName}`;
       const storagePath = path.join(String(ctx.classId), String(ctx.team.id), storageName);
       const abs = path.join(UPLOAD_ROOT, storagePath);
       fs.writeFileSync(abs, file.buffer);
@@ -492,7 +490,7 @@ router.post(
            uploaded_at = now()`,
         [
           ctx.team.id,
-          normalizeUploadFileName(file.originalname),
+          originName,
           storagePath.replace(/\\/g, '/'),
           file.mimetype || 'application/zip',
           file.size,
@@ -500,7 +498,7 @@ router.post(
         ]
       );
 
-      return ok(req, res, { uploaded: true });
+      return ok(req, res, { uploaded: true, originName });
     } catch (e) {
       logError(`POST product-design prototype traceId=${req.traceId}`, e);
       return bad(req, res, 500, 50000, e.message);

@@ -4,6 +4,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { getPool } from '../lib/db.js';
 import { logError } from '../lib/logError.js';
+import { normalizeUploadFileName } from '../lib/uploadFileName.js';
 import { requireAuth, requireTeacher } from '../middleware/auth.js';
 import { coerceSections, sectionsToFullText } from '../lib/businessPlanSections.js';
 import { loadSurveyQuestions, mapSurveyRow } from '../lib/marketResearchSurveyDb.js';
@@ -395,7 +396,7 @@ async function businessPlanSubmissionForTeam(pool, classId, teamId) {
     fullText,
     attachments: attRows.map((a) => ({
       id: String(a.id),
-      name: String(a.file_name || ''),
+      name: normalizeUploadFileName(a.file_name || ''),
       size: Number(a.file_size || 0),
       url: attachmentDownloadUrl(classId, submissionId, String(a.id)),
       isPpt: Boolean(a.is_ppt),
@@ -413,7 +414,7 @@ async function productPrototypeForTeam(pool, classId, teamId) {
   const r = rows[0];
   if (!r) return null;
   return {
-    originName: String(r.origin_name || ''),
+    originName: normalizeUploadFileName(r.origin_name || ''),
     sizeBytes: Number(r.size_bytes || 0),
     uploadedBy: String(r.uploaded_by || ''),
     uploadedAt: fmtZh(r.uploaded_at),
@@ -845,7 +846,7 @@ router.get(
       const r = rows[0];
       const abs = path.join(PRODUCT_PROTOTYPE_UPLOAD_ROOT, String(r.storage_path || ''));
       if (!fs.existsSync(abs)) return bad(req, res, 404, 40405, '文件不存在');
-      return res.download(abs, r.origin_name || 'prototype.zip');
+      return res.download(abs, normalizeUploadFileName(r.origin_name || 'prototype.zip'));
     } catch (e) {
       logError(`GET product-prototype download traceId=${req.traceId}`, e);
       return bad(req, res, 500, 50000, e.message);

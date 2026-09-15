@@ -110,14 +110,15 @@ export class BusinessPlanConflictError extends Error {
 }
 
 async function studentFetchAllowConflict<T>(path: string, opts: RequestInit = {}): Promise<T> {
-  const { getPortalToken } = await import('./authApi');
+  const { getPortalToken, rewriteUnsafeHttpMethod, compatFetch } = await import('./authApi');
   const token = getPortalToken('student') || '';
+  const safeOpts = rewriteUnsafeHttpMethod(opts);
   const headers: Record<string, string> = {
-    ...(opts.headers as Record<string, string> | undefined),
+    ...(safeOpts.headers as Record<string, string> | undefined),
   };
   if (token) headers.Authorization = `Bearer ${token}`;
-  if (opts.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
-  const r = await fetch(path, { ...opts, headers });
+  if (safeOpts.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
+  const r = await compatFetch(path, { ...safeOpts, headers });
   const j = await r.json().catch(() => ({ code: -1, message: '无效 JSON', data: null }));
   if (r.status === 409) {
     const ws = (j.data?.workspace || (j.data?.sections ? j.data : null) || null) as BusinessPlanWorkspace | null;

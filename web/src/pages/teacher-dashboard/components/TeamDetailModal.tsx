@@ -2,6 +2,7 @@ import { TeamProject } from './TeamCard';
 import { useState } from 'react';
 import { fetchTeacherMonitorTeamSubmissions, type TeacherMonitorSubmissionItem } from '../../../lib/teacherMonitorApi';
 import UserAvatar from '../../../components/UserAvatar';
+import AppModalPortal from '../../../components/AppModalPortal';
 import { getPortalToken } from '../../../lib/authApi';
 import { message } from 'antd';
 import { sanitizeRichText } from '../../../lib/richText';
@@ -283,13 +284,10 @@ export default function TeamDetailModal({ classId, team, onClose, onIntervene }:
   };
 
   return (
-    <div
-      className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
-      onClick={onClose}
-    >
+    <AppModalPortal open onMaskClick={onClose} zIndex={1100}>
       <div
         className="bg-white rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto shadow-2xl"
-        onClick={e => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
       >
         {/* 头部 */}
         <div className={`sticky top-0 z-10 px-8 py-5 border-b border-gray-100 bg-white`}>
@@ -539,7 +537,7 @@ export default function TeamDetailModal({ classId, team, onClose, onIntervene }:
 
           {/* 预览弹窗（数据上传） */}
           {preview && preview.kind !== 'file' && (
-            <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4" onClick={() => setPreview(null)}>
+            <AppModalPortal open onMaskClick={() => setPreview(null)} zIndex={1200}>
               <div
                 className={`bg-white rounded-2xl shadow-2xl w-full overflow-hidden ${
                   (preview.stageKey === 'marketResearch' && preview.title === '市场调研报告') ||
@@ -566,7 +564,7 @@ export default function TeamDetailModal({ classId, team, onClose, onIntervene }:
                   {renderSubmissionPreview(preview)}
                 </div>
               </div>
-            </div>
+            </AppModalPortal>
           )}
 
           {/* 操作按钮 */}
@@ -592,6 +590,6 @@ export default function TeamDetailModal({ classId, team, onClose, onIntervene }:
           </div>
         </div>
       </div>
-    </div>
+    </AppModalPortal>
   );
 }

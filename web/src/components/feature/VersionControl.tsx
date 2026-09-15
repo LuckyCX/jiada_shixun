@@ -1,5 +1,6 @@
 
 import { useMemo, useState } from 'react';
+import AppModalPortal from '../AppModalPortal';
 
 export interface Version {
   id: string;
@@ -101,12 +102,11 @@ export default function VersionControl({
 
       {/* 历史版本侧边抽屉 */}
       {isOpen && (
-        <div className="fixed inset-0 z-50 flex">
+        <AppModalPortal open={true} onMaskClick={() => setIsOpen(false)} zIndex={50} placement="right">
           <div
-            className="absolute inset-0 bg-black/50 backdrop-blur-sm"
-            onClick={() => setIsOpen(false)}
-          ></div>
-          <div className="ml-auto w-full max-w-md bg-white shadow-2xl flex flex-col relative">
+            className="w-full max-w-md h-full bg-white shadow-2xl flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="p-6 border-b border-gray-200">
               <div className="flex items-center justify-between mb-2">
                 <h3 className="text-lg font-bold text-gray-900">版本历史</h3>
@@ -193,13 +193,16 @@ export default function VersionControl({
               )}
             </div>
           </div>
-        </div>
+        </AppModalPortal>
       )}
 
       {/* 保存版本弹窗 */}
       {showSaveModal && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6">
+        <AppModalPortal open={true} onMaskClick={() => setShowSaveModal(false)} zIndex={50}>
+          <div
+            className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex items-center justify-between mb-5">
               <h3 className="text-lg font-bold text-gray-900">保存当前版本</h3>
               <button
@@ -240,13 +243,16 @@ export default function VersionControl({
               </button>
             </div>
           </div>
-        </div>
+        </AppModalPortal>
       )}
 
       {/* 回撤确认弹窗 */}
       {showRestoreConfirm && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6">
+        <AppModalPortal open={true} onMaskClick={() => setShowRestoreConfirm(null)} zIndex={60}>
+          <div
+            className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex items-center gap-3 mb-5">
               <div className="w-12 h-12 bg-amber-100 rounded-full flex items-center justify-center flex-shrink-0">
                 <i className="ri-error-warning-line text-amber-600 text-2xl"></i>
@@ -280,7 +286,7 @@ export default function VersionControl({
               </button>
             </div>
           </div>
-        </div>
+        </AppModalPortal>
       )}
     </>
   );

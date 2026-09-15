@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { message } from 'antd';
+import AppModalPortal from '../../../components/AppModalPortal';
 import {
   WAR_ROOM_MODULE_DEFS,
   adoptWarRoomMessage,
@@ -838,14 +839,11 @@ export default function WarRoom({ classId, studentDisplayName = '同学', onReco
       </div>
 
       {recordsDialogOpen ? (
-        <div
-          className="fixed inset-0 z-[300] flex items-center justify-center p-4 bg-black/40"
-          role="dialog"
-          aria-modal="true"
-          onClick={() => setRecordsDialogOpen(false)}
-        >
+        <AppModalPortal open onMaskClick={() => setRecordsDialogOpen(false)} zIndex={300}>
           <div
             className="bg-white rounded-xl shadow-xl w-full max-w-5xl max-h-[min(88vh,720px)] flex flex-col overflow-hidden"
+            role="dialog"
+            aria-modal="true"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="px-4 py-3 border-b border-gray-200 flex items-center justify-between shrink-0">
@@ -902,7 +900,7 @@ export default function WarRoom({ classId, studentDisplayName = '同学', onReco
               </div>
             </div>
           </div>
-        </div>
+        </AppModalPortal>
       ) : null}
     </div>
   );

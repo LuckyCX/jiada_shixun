@@ -346,22 +346,54 @@ export function redirectStudentSessionExpired(): void {
 }
 
 /**
+ * 教室 360 / 校园网常拦截 PUT、PATCH、DELETE。
+ * 统一改为 POST，并由后端根据 X-HTTP-Method-Override 还原。
+ */
+export function rewriteUnsafeHttpMethod(opts: RequestInit = {}): RequestInit {
+  const method = String(opts.method || 'GET').toUpperCase();
+  if (method !== 'PUT' && method !== 'PATCH' && method !== 'DELETE') return opts;
+  const incoming = { ...(opts.headers as Record<string, string> | undefined) };
+  return {
+    ...opts,
+    method: 'POST',
+    headers: {
+      ...incoming,
+      'X-HTTP-Method-Override': method,
+    },
+  };
+}
+
+function humanizeNetworkError(err: unknown): Error {
+  const raw = err instanceof Error ? err.message : String(err || '');
+  if (/failed to fetch|networkerror|load failed|network request failed/i.test(raw)) {
+    return new Error('网络请求失败，请检查网络后重试（部分浏览器或校园网可能拦截 PUT/DELETE）');
+  }
+  return err instanceof Error ? err : new Error(raw || '网络请求失败');
+}
+
+/**
  * 带 Bearer 的 API 请求；access 过期时自动 refresh 并重试一次。
+ * 自动将 PUT/PATCH/DELETE 改写为 POST + 方法覆盖头，规避旧浏览器 Failed to fetch。
  */
 export async function portalAuthenticatedFetch(
   role: PortalRole,
   path: string,
   opts: RequestInit = {}
 ): Promise<unknown> {
+  const safeOpts = rewriteUnsafeHttpMethod(opts);
   const runOnce = async (accessToken: string) => {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
-      ...(opts.headers as Record<string, string>),
+      ...(safeOpts.headers as Record<string, string>),
     };
     if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
-    const r = await fetch(path, { ...opts, headers });
-    const j = await r.json().catch(() => ({ code: -1, message: '无效 JSON' }));
-    return { r, j };
+    try {
+      const r = await fetch(path, { ...safeOpts, headers });
+      const j = await r.json().catch(() => ({ code: -1, message: '无效 JSON' }));
+      return { r, j };
+    } catch (e) {
+      throw humanizeNetworkError(e);
+    }
   };
 
   let access = getPortalToken(role) || '';
@@ -395,6 +427,18 @@ export async function portalAuthenticatedFetch(
     throw err;
   }
   return j.data;
+}
+
+/**
+ * 供未走 portalAuthenticatedFetch 的原生 fetch 使用（上传、keepalive 等）。
+ */
+export async function compatFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const safe = rewriteUnsafeHttpMethod(init || {});
+  try {
+    return await fetch(input, safe);
+  } catch (e) {
+    throw humanizeNetworkError(e);
+  }
 }
 
 /**

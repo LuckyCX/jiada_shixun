@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import { useState, useEffect } from 'react';
 import VersionControl from '../../components/feature/VersionControl';
+import { appAlert, appConfirm } from '../../lib/appDialog';
 
 interface Version {
   id: number;
@@ -248,7 +249,7 @@ def get_neighbors(point, obstacles):
     if (version) {
       setFeaturesCurrentVersion(versionNumber);
       // 这里可以恢复功能设计的数据
-      alert(`已回撤到版本 v${versionNumber}`);
+      void appAlert(`已回撤到版本 v${versionNumber}`);
     }
   };
 
@@ -331,7 +332,7 @@ def get_neighbors(point, obstacles):
 
   const handleGenerateCode = () => {
     if (!codeRequirement.trim()) {
-      alert('请输入需求描述');
+      void appAlert('请输入需求描述');
       return;
     }
 
@@ -378,7 +379,7 @@ public class Algorithm {
 
   const handleSaveCode = () => {
     if (!generatedCode && !externalLink) {
-      alert('请先生成代码或填写外部链接');
+      void appAlert('请先生成代码或填写外部链接');
       return;
     }
 
@@ -396,12 +397,12 @@ public class Algorithm {
     setCodeRequirement('');
     setGeneratedCode('');
     setExternalLink('');
-    alert('代码已保存到版本记录');
+    void appAlert('代码已保存到版本记录');
   };
 
   const handleGenerateUI = () => {
     if (!uiDescription.trim()) {
-      alert('请输入页面描述');
+      void appAlert('请输入页面描述');
       return;
     }
 
@@ -435,7 +436,7 @@ public class Algorithm {
     const file = e.target.files?.[0];
     if (file) {
       if (file.size > 5 * 1024 * 1024) {
-        alert('文件大小不能超过5MB');
+        void appAlert('文件大小不能超过5MB');
         return;
       }
       const reader = new FileReader();
@@ -448,7 +449,7 @@ public class Algorithm {
 
   const handleSaveUI = () => {
     if (!generatedUI && !uploadedImage) {
-      alert('请先生成UI或上传设计稿');
+      void appAlert('请先生成UI或上传设计稿');
       return;
     }
 
@@ -466,11 +467,11 @@ public class Algorithm {
     setUiDescription('');
     setGeneratedUI(null);
     setUploadedImage('');
-    alert('设计稿已保存到版本管理');
+    void appAlert('设计稿已保存到版本管理');
   };
 
-  const handleDeleteUI = (id: number) => {
-    if (confirm('确定要删除这个设计稿吗？')) {
+  const handleDeleteUI = async (id: number) => {
+    if (await appConfirm('确定要删除这个设计稿吗？')) {
       setUiVersions(uiVersions.filter(v => v.id !== id));
     }
   };
@@ -808,7 +809,7 @@ public class Algorithm {
                         <button
                           onClick={() => {
                             navigator.clipboard.writeText(generatedCode);
-                            alert('代码已复制到剪贴板');
+                            void appAlert('代码已复制到剪贴板');
                           }}
                           className="px-3 py-1 bg-gray-100 text-gray-700 text-xs font-medium rounded-lg hover:bg-gray-200 transition-colors whitespace-nowrap cursor-pointer"
                         >

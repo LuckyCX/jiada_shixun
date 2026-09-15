@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { getPool } from '../lib/db.js';
 import { logError } from '../lib/logError.js';
+import { normalizeUploadFileName } from '../lib/uploadFileName.js';
 import { requireAuth, requireStudent } from '../middleware/auth.js';
 
 const router = Router();
@@ -104,7 +105,7 @@ router.get(
         records.push({
           id: `case-${r.progress_id}`,
           type: 'case',
-          title: r.origin_name || '案例',
+          title: normalizeUploadFileName(r.origin_name || '案例'),
           module: r.module_name || '案例参考',
           date: formatTs(r.ts),
           status: r.completed_at ? '已完成' : '已记录',

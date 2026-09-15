@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import AppModalPortal from '../../../../components/AppModalPortal';
 import { User } from './types';
 import { initialPasswordFromIdNumber } from './AddUserModal';
 
@@ -79,8 +80,11 @@ export default function ResetPasswordModal({ isOpen, user, onClose, onConfirm }:
   if (!isOpen || !user) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-xl w-full max-w-md shadow-xl">
+    <AppModalPortal open onMaskClick={handleClose} zIndex={1100}>
+      <div
+        className="bg-white rounded-xl w-full max-w-md shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="p-6">
           <div className="flex items-center justify-between mb-5">
             <div className="flex items-center gap-3">
@@ -223,6 +227,6 @@ export default function ResetPasswordModal({ isOpen, user, onClose, onConfirm }:
           </div>
         </div>
       </div>
-    </div>
+    </AppModalPortal>
   );
 }

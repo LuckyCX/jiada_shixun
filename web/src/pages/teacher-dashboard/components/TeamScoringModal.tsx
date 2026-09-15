@@ -1,5 +1,5 @@
-
 import { useState } from 'react';
+import AppModalPortal from '../../../components/AppModalPortal';
 
 interface TeamScoringData {
   id: number;
@@ -158,10 +158,7 @@ export default function TeamScoringModal({ team, onClose, onSubmit }: TeamScorin
   const level = getScoreLevel(finalScore);
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
-      onClick={onClose}
-    >
+    <AppModalPortal open onMaskClick={onClose} zIndex={1100}>
       <div
         className="bg-white rounded-3xl shadow-2xl w-full max-w-3xl max-h-[92vh] flex flex-col overflow-hidden"
         onClick={(e) => e.stopPropagation()}
@@ -514,6 +511,6 @@ export default function TeamScoringModal({ team, onClose, onSubmit }: TeamScorin
           )}
         </div>
       </div>
-    </div>
+    </AppModalPortal>
   );
 }

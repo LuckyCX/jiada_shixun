@@ -1,4 +1,6 @@
 import { useState } from 'react';
+import { appAlert } from '../../../lib/appDialog';
+import AppModalPortal from '../../../components/AppModalPortal';
 import { submitTeacherMonitorBatchScoring } from '../../../lib/teacherMonitorApi';
 
 interface TeamProject {
@@ -57,7 +59,7 @@ export default function BatchScoringModal({ classId, teams, onClose, onSubmitted
 
   const handleApplyUnified = () => {
     if (!unifiedScore || parseFloat(unifiedScore) < 0 || parseFloat(unifiedScore) > 100) {
-      alert('请输入0-100之间的有效分数');
+      void appAlert('请输入0-100之间的有效分数');
       return;
     }
     const newScores: Record<number, { score: string; comment: string }> = {};
@@ -100,17 +102,17 @@ export default function BatchScoringModal({ classId, teams, onClose, onSubmitted
     });
 
     if (hasError) {
-      alert('请为所有选中团队填写有效的评分（0-100）');
+      await appAlert('请为所有选中团队填写有效的评分（0-100）');
       return;
     }
 
     if (results.length === 0) {
-      alert('请至少选择一个团队并填写评分');
+      await appAlert('请至少选择一个团队并填写评分');
       return;
     }
 
     if (!classId) {
-      alert('请先选择班级');
+      await appAlert('请先选择班级');
       return;
     }
 
@@ -120,7 +122,7 @@ export default function BatchScoringModal({ classId, teams, onClose, onSubmitted
       setSuccessMessage(`已完成 ${results.length} 个团队的评分`);
       if (onSubmitted) onSubmitted();
     } catch (e) {
-      alert(e instanceof Error ? e.message : '评分提交失败');
+      await appAlert(e instanceof Error ? e.message : '评分提交失败');
     } finally {
       setIsSubmitting(false);
     }
@@ -129,8 +131,11 @@ export default function BatchScoringModal({ classId, teams, onClose, onSubmitted
   const currentTask = TASK_TYPES.find(t => t.value === selectedTask);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-      <div className="bg-white rounded-3xl shadow-2xl w-full max-w-5xl max-h-[90vh] flex flex-col overflow-hidden">
+    <AppModalPortal open onMaskClick={onClose} zIndex={1100}>
+      <div
+        className="bg-white rounded-3xl shadow-2xl w-full max-w-5xl max-h-[90vh] flex flex-col overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* 头部 */}
         <div className="bg-gradient-to-r from-teal-500 to-cyan-500 px-8 py-6 flex items-center justify-between flex-shrink-0">
           <div className="flex items-center gap-4">
@@ -373,6 +378,6 @@ export default function BatchScoringModal({ classId, teams, onClose, onSubmitted
           </div>
         )}
       </div>
-    </div>
+    </AppModalPortal>
   );
 }

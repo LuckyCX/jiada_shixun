@@ -1,6 +1,7 @@
 
 import { Link } from 'react-router-dom';
 import { useState } from 'react';
+import AppModalPortal from '../../components/AppModalPortal';
 
 type AbilityProfile = {
   techGeek: number;
@@ -395,8 +396,11 @@ export default function TeamFormation() {
 
         {/* 队长推荐弹窗 */}
         {showLeaderPrompt && (
-          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-8">
+          <AppModalPortal open={true} onMaskClick={() => setShowLeaderPrompt(false)} zIndex={50}>
+            <div
+              className="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-8"
+              onClick={(e) => e.stopPropagation()}
+            >
               <div className="text-center mb-6">
                 <div className="w-20 h-20 bg-gradient-to-br from-amber-400 to-orange-500 rounded-full flex items-center justify-center mx-auto mb-4">
                   <i className="ri-vip-crown-fill text-4xl text-white"></i>
@@ -416,13 +420,16 @@ export default function TeamFormation() {
                 </button>
               </div>
             </div>
-          </div>
+          </AppModalPortal>
         )}
 
         {/* 创建队伍弹窗 */}
         {showCreateModal && (
-          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full p-8 max-h-[90vh] overflow-y-auto">
+          <AppModalPortal open={true} onMaskClick={() => setShowCreateModal(false)} zIndex={50}>
+            <div
+              className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full p-8 max-h-[90vh] overflow-y-auto"
+              onClick={(e) => e.stopPropagation()}
+            >
               <div className="flex items-center justify-between mb-6">
                 <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2"><i className="ri-team-line text-teal-600"></i>创建队伍</h3>
                 <button onClick={() => setShowCreateModal(false)} className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg cursor-pointer"><i className="ri-close-line text-xl"></i></button>
@@ -458,13 +465,16 @@ export default function TeamFormation() {
                 </button>
               </div>
             </div>
-          </div>
+          </AppModalPortal>
         )}
 
         {/* 申请加入弹窗 */}
         {showApplyModal && applyTarget && (
-          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-8">
+          <AppModalPortal open={true} onMaskClick={() => setShowApplyModal(false)} zIndex={50}>
+            <div
+              className="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-8"
+              onClick={(e) => e.stopPropagation()}
+            >
               <div className="flex items-center justify-between mb-6">
                 <h3 className="text-xl font-bold text-gray-900">申请加入</h3>
                 <button onClick={() => setShowApplyModal(false)} className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg cursor-pointer"><i className="ri-close-line text-xl"></i></button>
@@ -489,13 +499,16 @@ export default function TeamFormation() {
                 </button>
               </div>
             </div>
-          </div>
+          </AppModalPortal>
         )}
 
         {/* 审核申请弹窗 */}
         {showReviewModal && reviewApp && (
-          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-8">
+          <AppModalPortal open={true} onMaskClick={() => setShowReviewModal(false)} zIndex={50}>
+            <div
+              className="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-8"
+              onClick={(e) => e.stopPropagation()}
+            >
               <div className="flex items-center justify-between mb-6">
                 <h3 className="text-xl font-bold text-gray-900">审核申请</h3>
                 <button onClick={() => setShowReviewModal(false)} className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg cursor-pointer"><i className="ri-close-line text-xl"></i></button>
@@ -548,7 +561,7 @@ export default function TeamFormation() {
                 </button>
               </div>
             </div>
-          </div>
+          </AppModalPortal>
         )}
 
         {/* Tabs */}

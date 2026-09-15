@@ -35,3 +35,117 @@
     animation: pulse-border 2s infinite;
   }
 }
+
+/*
+ * 教室功能机 / 旧版 360 等内核兼容：
+ * 1) 不支持 CSS inset 简写时，Tailwind 的 inset-0 / Ant Design 遮罩宽高会变成 0 → 弹窗“点了不显示”
+ * 2) 全屏遮罩上的 backdrop-filter 在部分旧内核会整层不绘制（含子节点）
+ * 3) 现代 rgb(0 0 0 / .5) 在极旧内核无效，遮罩透明看不见
+ */
+.inset-0 {
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+}
+.inset-x-0 {
+  left: 0;
+  right: 0;
+}
+.inset-y-0 {
+  top: 0;
+  bottom: 0;
+}
+
+.fixed.inset-0 {
+  width: 100%;
+  height: 100%;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+/* 自建弹层遮罩（AppModalPortal） */
+.app-modal-mask {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  padding: 16px;
+  background-color: rgba(0, 0, 0, 0.5);
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+.app-modal-mask--right {
+  align-items: stretch;
+  justify-content: flex-end;
+  padding: 0;
+}
+
+.app-modal-mask--fullscreen {
+  align-items: stretch;
+  justify-content: stretch;
+  padding: 0;
+}
+
+.app-modal-mask--no-mask {
+  background-color: transparent !important;
+}
+
+/* Ant Design Modal / Drawer / ImagePreview */
+.ant-modal-wrap,
+.ant-drawer-wrap,
+.ant-image-preview-wrap,
+.ant-modal-root .ant-modal-wrap {
+  top: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  left: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.ant-modal-mask,
+.ant-drawer-mask,
+.ant-image-preview-mask {
+  top: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  left: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  background-color: rgba(0, 0, 0, 0.45) !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+/* 常见半透明黑遮罩：补经典 rgba，避免仅依赖现代 color 语法 */
+.bg-black\/40 {
+  background-color: rgba(0, 0, 0, 0.4) !important;
+}
+.bg-black\/50 {
+  background-color: rgba(0, 0, 0, 0.5) !important;
+}
+.bg-black\/60 {
+  background-color: rgba(0, 0, 0, 0.6) !important;
+}
+
+.h-dvh {
+  height: 100vh;
+  height: 100dvh;
+}
+.max-h-dvh {
+  max-height: 100vh;
+  max-height: 100dvh;
+}
+.min-h-dvh {
+  min-height: 100vh;
+  min-height: 100dvh;
+}

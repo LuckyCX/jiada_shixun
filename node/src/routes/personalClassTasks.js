@@ -14,6 +14,7 @@ import {
   MAX_TASK_ATTACHMENT_BYTES,
   TASK_MODULE_TO_TRAINING_ID,
 } from '../lib/personalClassTaskConstants.js';
+import { normalizeUploadFileName } from '../lib/uploadFileName.js';
 
 const router = Router();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -81,15 +82,6 @@ function normalizeTaskDeadlineInput(raw) {
   const parsed = new Date(s);
   if (!Number.isNaN(parsed.getTime())) return `${formatTaskDeadline(parsed)}:00`;
   return s;
-}
-
-function normalizeUploadFileName(name) {
-  const raw = String(name || 'file').trim() || 'file';
-  const decoded = Buffer.from(raw, 'latin1').toString('utf8');
-  const looksLatin1Mojibake = /[\u0080-\u00ff]/.test(raw);
-  const decodedLooksValid =
-    decoded && decoded !== raw && !decoded.includes('\uFFFD') && /[^\u0000-\u00ff]/.test(decoded);
-  return looksLatin1Mojibake && decodedLooksValid ? decoded : raw;
 }
 
 function formatDateOnly(val) {
@@ -348,7 +340,7 @@ async function loadSubmissionAttachments(pool, taskId, studentId) {
   return rows.map((r) => ({
     id: String(r.id),
     storageKey: r.storageKey,
-    fileName: r.fileName,
+    fileName: normalizeUploadFileName(r.fileName),
     fileSize: Number(r.fileSize),
     size: formatSize(Number(r.fileSize)),
   }));
@@ -399,7 +391,7 @@ async function loadTaskAttachments(pool, taskId) {
   return rows.map((r) => ({
     id: String(r.id),
     storageKey: r.storageKey,
-    fileName: r.fileName,
+    fileName: normalizeUploadFileName(r.fileName),
     fileSize: Number(r.fileSize),
     size: formatSize(Number(r.fileSize)),
   }));
@@ -498,10 +490,11 @@ async function loadTaskResourceNodes(pool, taskId, { publishedLeavesOnly = false
   for (const row of fileRows) {
     const key = String(row.node_id);
     const items = resourcesByNode.get(key) || [];
+    const originName = normalizeUploadFileName(row.origin_name || '');
     items.push({
       id: String(row.id),
       nodeId: String(row.node_id),
-      name: row.origin_name,
+      name: originName,
       type: row.resource_type,
       previewType: previewTypeFromMime(row.preview_mime_type || row.mime_type, row.resource_type),
       previewStatus: row.preview_status || 'ready',
@@ -509,7 +502,7 @@ async function loadTaskResourceNodes(pool, taskId, { publishedLeavesOnly = false
       mimeType: row.mime_type || '',
       sizeBytes: Number(row.size_bytes || 0),
       size: formatSize(Number(row.size_bytes || 0)),
-      canPreview: (row.preview_status || 'ready') === 'ready' && row.resource_type !== 'archive' && canPreviewCourseResource(row.preview_mime_type || row.mime_type, row.origin_name),
+      canPreview: (row.preview_status || 'ready') === 'ready' && row.resource_type !== 'archive' && canPreviewCourseResource(row.preview_mime_type || row.mime_type, originName),
       progress: progressByHash.get(row.content_hash) || { progressPercent: 0, lastPosition: {}, completed: false },
     });
     resourcesByNode.set(key, items);
@@ -626,10 +619,11 @@ async function loadModuleResourceNodes(pool, moduleName, { studentId = null } = 
   for (const row of fileRows) {
     const key = String(row.node_id);
     const items = resourcesByNode.get(key) || [];
+    const originName = normalizeUploadFileName(row.origin_name || '');
     items.push({
       id: String(row.id),
       nodeId: String(row.node_id),
-      name: row.origin_name,
+      name: originName,
       type: row.resource_type,
       previewType: previewTypeFromMime(row.preview_mime_type || row.mime_type, row.resource_type),
       previewStatus: row.preview_status || 'ready',
@@ -637,7 +631,7 @@ async function loadModuleResourceNodes(pool, moduleName, { studentId = null } = 
       mimeType: row.mime_type || '',
       sizeBytes: Number(row.size_bytes || 0),
       size: formatSize(Number(row.size_bytes || 0)),
-      canPreview: (row.preview_status || 'ready') === 'ready' && row.resource_type !== 'archive' && canPreviewCourseResource(row.preview_mime_type || row.mime_type, row.origin_name),
+      canPreview: (row.preview_status || 'ready') === 'ready' && row.resource_type !== 'archive' && canPreviewCourseResource(row.preview_mime_type || row.mime_type, originName),
       progress: progressByHash.get(row.content_hash) || { progressPercent: 0, lastPosition: {}, completed: false },
     });
     resourcesByNode.set(key, items);
@@ -1484,7 +1478,10 @@ router.get(
         [attachmentId, taskId]
       );
       if (!rows.length) return bad(req, res, 404, 40404, '附件不存在');
-      return res.download(submissionAttachmentAbsPath(rows[0].storage_key), rows[0].file_name);
+      return res.download(
+        submissionAttachmentAbsPath(rows[0].storage_key),
+        normalizeUploadFileName(rows[0].file_name || 'file')
+      );
     } catch (e) {
       logError(`GET submission attachment traceId=${req.traceId}`, e);
       return bad(req, res, 500, 50000, e.message);
@@ -1669,7 +1666,7 @@ router.get(
       if (!rows.length) return bad(req, res, 404, 40404, '附件不存在');
       const abs = attachmentAbsPath(rows[0].storageKey);
       if (!fs.existsSync(abs)) return bad(req, res, 404, 40405, '文件不存在');
-      return res.download(abs, rows[0].fileName);
+      return res.download(abs, normalizeUploadFileName(rows[0].fileName || 'file'));
     } catch (e) {
       logError(`GET student task attachment download traceId=${req.traceId}`, e);
       return bad(req, res, 500, 50000, e.message);
@@ -2015,7 +2012,7 @@ router.get(
       if (!rows.length) return bad(req, res, 404, 40404, '附件不存在');
       const abs = guidanceAttachmentAbs(rows[0].storageKey);
       if (!fs.existsSync(abs)) return bad(req, res, 404, 40405, '文件不存在');
-      return res.download(abs, rows[0].fileName);
+      return res.download(abs, normalizeUploadFileName(rows[0].fileName || 'file'));
     } catch (e) {
       logError(`GET student guidance attachment traceId=${req.traceId}`, e);
       return bad(req, res, 500, 50000, e.message);
@@ -2115,7 +2112,7 @@ router.get(
       if (!rows.length) return bad(req, res, 404, 40404, '附件不存在');
       const abs = guidanceAttachmentAbs(rows[0].storageKey);
       if (!fs.existsSync(abs)) return bad(req, res, 404, 40405, '文件不存在');
-      return res.download(abs, rows[0].fileName);
+      return res.download(abs, normalizeUploadFileName(rows[0].fileName || 'file'));
     } catch (e) {
       logError(`GET teacher guidance attachment traceId=${req.traceId}`, e);
       return bad(req, res, 500, 50000, e.message);
@@ -2165,7 +2162,7 @@ router.get(
             if (!attachmentsByBatch[a.batchId]) attachmentsByBatch[a.batchId] = [];
             attachmentsByBatch[a.batchId].push({
               id: a.id,
-              fileName: a.fileName,
+              fileName: normalizeUploadFileName(a.fileName || ''),
               fileSize: Number(a.fileSize) || 0,
             });
           }
@@ -2241,7 +2238,7 @@ router.get(
             if (!attachmentsByBatch[a.batchId]) attachmentsByBatch[a.batchId] = [];
             attachmentsByBatch[a.batchId].push({
               id: a.id,
-              fileName: a.fileName,
+              fileName: normalizeUploadFileName(a.fileName || ''),
               fileSize: Number(a.fileSize) || 0,
             });
           }

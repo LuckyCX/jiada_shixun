@@ -1,5 +1,6 @@
 
 import { useState } from 'react';
+import AppModalPortal from '../../../../components/AppModalPortal';
 import type { PendingResource, ResourceStatus } from './types';
 import { RESOURCE_STATUS_MAP } from './types';
 import { MOCK_PENDING_RESOURCES } from './mockData';
@@ -260,9 +261,14 @@ export default function ResourceReview() {
       </div>
 
       {/* 驳回弹窗 */}
-      {showRejectModal && rejectTarget && (
-        <div className={`fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4`}>
-          <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl">
+      {showRejectModal && rejectTarget ? (
+        <AppModalPortal open onMaskClick={() => setShowRejectModal(false)} zIndex={50}>
+          <div
+            className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl"
+            role="dialog"
+            aria-modal="true"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-bold text-gray-900">填写驳回原因</h3>
               <button
@@ -320,8 +326,8 @@ export default function ResourceReview() {
               </button>
             </div>
           </div>
-        </div>
-      )}
+        </AppModalPortal>
+      ) : null}
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import { useState } from 'react';
 import VersionControl from '../../components/feature/VersionControl';
+import { appAlert } from '../../lib/appDialog';
 
 interface Version {
   id: number;
@@ -65,7 +66,7 @@ export default function Ideation() {
       if (version.data.activeMethod) {
         setActiveMethod(version.data.activeMethod);
       }
-      alert(`已回撤到版本 v${versionNumber}`);
+      void appAlert(`已回撤到版本 v${versionNumber}`);
     }
   };
 
@@ -577,7 +578,7 @@ export default function Ideation() {
 
   const handleConfirmTheme = () => {
     if (!canSubmit()) {
-      alert('请确保所有字段都满足最小字数要求');
+      void appAlert('请确保所有字段都满足最小字数要求');
       return;
     }
     setIsSubmitting(true);

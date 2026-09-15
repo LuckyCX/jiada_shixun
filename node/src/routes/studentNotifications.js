@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { getPool } from '../lib/db.js';
 import { logError } from '../lib/logError.js';
+import { normalizeUploadFileName } from '../lib/uploadFileName.js';
 import { requireAuth, requireStudent } from '../middleware/auth.js';
 
 const router = Router();
@@ -59,7 +60,7 @@ router.get('/student/notifications', requireAuth(), requireStudent(), async (req
           if (!attachmentsByBatch.has(a.batchId)) attachmentsByBatch.set(a.batchId, []);
           attachmentsByBatch.get(a.batchId).push({
             id: String(a.id),
-            fileName: a.fileName,
+            fileName: normalizeUploadFileName(a.fileName || ''),
             fileSize: Number(a.fileSize),
           });
         }

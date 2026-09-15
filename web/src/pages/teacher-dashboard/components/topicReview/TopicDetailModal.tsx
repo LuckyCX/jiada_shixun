@@ -1,3 +1,4 @@
+import AppModalPortal from '../../../../components/AppModalPortal';
 import type { TopicSubmission } from './types';
 
 interface TopicDetailModalProps {
@@ -25,8 +26,11 @@ export default function TopicDetailModal({ topic, onClose }: TopicDetailModalPro
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl shadow-2xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">
+    <AppModalPortal open onMaskClick={onClose} zIndex={1100}>
+      <div
+        className="bg-white rounded-2xl shadow-2xl max-w-3xl w-full max-h-[90vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* Header */}
         <div className="sticky top-0 bg-gradient-to-r from-purple-600 to-pink-600 text-white px-6 py-4 rounded-t-2xl">
           <div className="flex items-center justify-between">
@@ -197,6 +201,6 @@ export default function TopicDetailModal({ topic, onClose }: TopicDetailModalPro
           </button>
         </div>
       </div>
-    </div>
+    </AppModalPortal>
   );
 }

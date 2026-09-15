@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import VersionControl, { Version } from '../../../components/feature/VersionControl';
+import AppModalPortal from '../../../components/AppModalPortal';
 import TeamFormationAssessmentPanel from './TeamFormationAssessmentPanel';
 import UserAvatar from '../../../components/UserAvatar';
 import { getPortalToken, parseJwtPayload } from '../../../lib/authApi';
@@ -864,8 +865,11 @@ export default function TeamFormationModule({ classId, className, initialSubTab,
 
                   {/* 编辑团队信息弹窗 */}
                   {editingTeamInfo && (
-                    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-                      <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6">
+                    <AppModalPortal open={true} onMaskClick={() => setEditingTeamInfo(false)} zIndex={50}>
+                      <div
+                        className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6"
+                        onClick={(e) => e.stopPropagation()}
+                      >
                         <div className="flex items-center justify-between mb-5">
                           <h3 className="text-lg font-bold text-gray-900">完善团队信息</h3>
                           <button onClick={() => setEditingTeamInfo(false)} className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg cursor-pointer">
@@ -908,7 +912,7 @@ export default function TeamFormationModule({ classId, className, initialSubTab,
                           </button>
                         </div>
                       </div>
-                    </div>
+                    </AppModalPortal>
                   )}
 
                   {/* 团队成员 */}

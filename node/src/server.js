@@ -35,6 +35,7 @@ import studentTrainingPrerequisiteRoutes from './routes/studentTrainingPrerequis
 import publicMarketSurveyRoutes from './routes/publicMarketSurvey.js';
 import courseSettingsRoutes from './routes/courseSettings.js';
 import { startCourseSettingReminderJob } from './jobs/courseSettingReminderJob.js';
+import { httpMethodOverride } from './middleware/httpMethodOverride.js';
 
 const app = express();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -47,6 +48,7 @@ app.use(
   })
 );
 app.use(express.json({ limit: '2mb' }));
+app.use(httpMethodOverride);
 app.use('/uploads/avatars', express.static(AVATAR_UPLOAD_ROOT));
 
 app.use((req, res, next) => {

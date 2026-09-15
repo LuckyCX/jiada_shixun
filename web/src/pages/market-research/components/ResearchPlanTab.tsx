@@ -1,5 +1,6 @@
 
 import { useState } from 'react';
+import { appAlert } from '../../../lib/appDialog';
 import { ResearchPlan } from '../types';
 
 interface Props {
@@ -17,7 +18,7 @@ export default function ResearchPlanTab({ plan, onChange }: Props) {
 
   const handleSave = () => {
     if (!plan.goal.trim()) {
-      alert('请填写调研目标');
+      void appAlert('请填写调研目标');
       return;
     }
     setSaving(true);

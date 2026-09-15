@@ -1,6 +1,7 @@
 
 import { useState } from 'react';
 import { UserPersona } from '../types';
+import AppModalPortal from '../../../components/AppModalPortal';
 
 interface Props {
   personas: UserPersona[];
@@ -43,8 +44,11 @@ function EditModal({ persona, onSave, onClose }: EditModalProps) {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl max-h-[90vh] flex flex-col">
+    <AppModalPortal open={true} onMaskClick={onClose} zIndex={50}>
+      <div
+        className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl max-h-[90vh] flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center justify-between p-6 border-b border-gray-100">
           <h3 className="text-lg font-bold text-gray-900">编辑用户画像</h3>
           <button onClick={onClose} className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-gray-600 rounded-lg cursor-pointer">
@@ -146,7 +150,7 @@ function EditModal({ persona, onSave, onClose }: EditModalProps) {
           </button>
         </div>
       </div>
-    </div>
+    </AppModalPortal>
   );
 }
 
@@ -185,8 +189,11 @@ function CreateModal({ onSave, onClose }: { onSave: (p: UserPersona) => void; on
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl max-h-[90vh] flex flex-col">
+    <AppModalPortal open={true} onMaskClick={onClose} zIndex={50}>
+      <div
+        className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl max-h-[90vh] flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center justify-between p-6 border-b border-gray-100">
           <h3 className="text-lg font-bold text-gray-900">创建新用户画像</h3>
           <button onClick={onClose} className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-gray-600 rounded-lg cursor-pointer">
@@ -245,7 +252,7 @@ function CreateModal({ onSave, onClose }: { onSave: (p: UserPersona) => void; on
           </button>
         </div>
       </div>
-    </div>
+    </AppModalPortal>
   );
 }
 

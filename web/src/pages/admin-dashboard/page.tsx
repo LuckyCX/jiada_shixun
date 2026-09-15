@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { message, Modal } from 'antd';
+import AppModalPortal from '../../components/AppModalPortal';
 import { useSiteBrand } from '../../lib/publicSite';
 import Overview from './components/overview';
 import ClassManagement from './components/classManagement';
@@ -286,10 +287,15 @@ export default function AdminDashboard() {
 
               {showNotifications && (
                 <>
-                  <div
-                    className="fixed inset-0 z-40"
-                    onClick={() => setShowNotifications(false)}
-                  ></div>
+                  <AppModalPortal
+                    open={showNotifications}
+                    onMaskClick={() => setShowNotifications(false)}
+                    mask={false}
+                    zIndex={40}
+                    className="p-0"
+                  >
+                    {null}
+                  </AppModalPortal>
                   <div className="absolute right-0 top-12 w-80 bg-white rounded-lg shadow-lg border border-gray-200 z-50">
                     <div className="p-4 border-b border-gray-200">
                       <h3 className="font-semibold text-gray-900">系统通知</h3>

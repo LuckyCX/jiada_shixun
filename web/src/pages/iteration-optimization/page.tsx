@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom';
 import { useState } from 'react';
+import AppModalPortal from '../../components/AppModalPortal';
 
 interface IterationCycle {
   id: number;
@@ -872,9 +873,19 @@ export default function IterationOptimization() {
       </div>
 
       {/* 复盘报告创建弹窗 */}
-      {showRetrospectiveModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-6" onClick={() => setShowRetrospectiveModal(false)}>
-          <div className="bg-white rounded-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+      {showRetrospectiveModal ? (
+        <AppModalPortal
+          open
+          onMaskClick={() => setShowRetrospectiveModal(false)}
+          zIndex={50}
+          className="p-6"
+        >
+          <div
+            className="bg-white rounded-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto"
+            role="dialog"
+            aria-modal="true"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="sticky top-0 bg-white border-b border-gray-200 px-8 py-6 z-10">
               <div className="flex items-center justify-between">
                 <h3 className="text-2xl font-bold text-gray-900">创建败因复盘报告</h3>
@@ -967,8 +978,8 @@ export default function IterationOptimization() {
               </div>
             </div>
           </div>
-        </div>
-      )}
+        </AppModalPortal>
+      ) : null}
     </div>
   );
 }

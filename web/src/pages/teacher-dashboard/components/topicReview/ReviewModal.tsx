@@ -1,4 +1,6 @@
 import { useState } from 'react';
+import AppModalPortal from '../../../../components/AppModalPortal';
+import { appAlert } from '../../../../lib/appDialog';
 import type { TopicSubmission } from './types';
 
 interface ReviewModalProps {
@@ -13,15 +15,18 @@ export default function ReviewModal({ topic, onClose, onSubmit }: ReviewModalPro
 
   const handleSubmit = () => {
     if (!comment.trim()) {
-      alert('请填写审核意见');
+      void appAlert('请填写审核意见');
       return;
     }
     onSubmit(topic.id, reviewStatus, comment);
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+    <AppModalPortal open onMaskClick={onClose} zIndex={1100}>
+      <div
+        className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* Header */}
         <div className="sticky top-0 bg-gradient-to-r from-purple-600 to-pink-600 text-white px-6 py-4 rounded-t-2xl">
           <div className="flex items-center justify-between">
@@ -187,6 +192,6 @@ export default function ReviewModal({ topic, onClose, onSubmit }: ReviewModalPro
           </button>
         </div>
       </div>
-    </div>
+    </AppModalPortal>
   );
 }

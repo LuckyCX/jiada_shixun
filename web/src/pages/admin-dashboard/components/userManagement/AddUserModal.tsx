@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { Form, Input, Select, Button } from 'antd';
+import AppModalPortal from '../../../../components/AppModalPortal';
 import { UserRole } from './types';
 import { useCollegeDictOptions } from './useCollegeDictOptions';
 import { useMajorOptions } from './useMajorOptions';
@@ -96,8 +97,11 @@ export default function AddUserModal({ isOpen, onClose, onSubmit, fixedRole, fix
   const defaultPwd = initialPasswordFromIdNumber(idNumber);
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+    <AppModalPortal open onMaskClick={handleClose} zIndex={1100}>
+      <div
+        className="bg-white rounded-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
           <h3 className="text-xl font-semibold text-gray-900">新增用户</h3>
           <button
@@ -243,6 +247,6 @@ export default function AddUserModal({ isOpen, onClose, onSubmit, fixedRole, fix
           </div>
         </Form>
       </div>
-    </div>
+    </AppModalPortal>
   );
 }

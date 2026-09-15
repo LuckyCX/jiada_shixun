@@ -187,7 +187,10 @@ export type UploadProductPrototypeError = Error & {
   missingMembers?: { id: string; name: string }[];
 };
 
-export async function uploadTeamProductPrototype(classId: string, file: File): Promise<{ uploaded: boolean }> {
+export async function uploadTeamProductPrototype(
+  classId: string,
+  file: File
+): Promise<{ uploaded: boolean; originName: string }> {
   const token = getPortalToken('student');
   const form = new FormData();
   form.append('file', file);
@@ -202,12 +205,15 @@ export async function uploadTeamProductPrototype(classId: string, file: File): P
   const j = (await r.json().catch(() => ({ code: -1, message: '无效响应' }))) as {
     code: number;
     message?: string;
-    data?: { uploaded?: boolean; missingMembers?: { id: string; name: string }[] };
+    data?: { uploaded?: boolean; originName?: string; missingMembers?: { id: string; name: string }[] };
   };
   if (!r.ok || j.code !== 0) {
     const err = new Error(typeof j.message === 'string' ? j.message : '上传失败') as UploadProductPrototypeError;
     if (j.data?.missingMembers?.length) err.missingMembers = j.data.missingMembers;
     throw err;
   }
-  return { uploaded: Boolean(j.data?.uploaded) };
+  return {
+    uploaded: Boolean(j.data?.uploaded),
+    originName: typeof j.data?.originName === 'string' ? j.data.originName : file.name,
+  };
 }

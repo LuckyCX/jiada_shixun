@@ -16,6 +16,7 @@ import {
 import { studentHasActivePersonalClassWithToken } from '../../lib/studentPortalApi';
 import { useSiteBrand } from '../../lib/publicSite';
 import { USER_GUIDE_PATH } from '../../lib/appPaths';
+import AppModalPortal from '../../components/AppModalPortal';
 import bg from '../../assets/images/bg.jpg';
 
 function getRequiredPortalRole(link: string): PortalRole | null {
@@ -566,14 +567,28 @@ export default function Home() {
         </div>
       </footer>
 
-      {/* Login Modal */}
-      {showLoginModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
+      {/* Login Modal：portal + 兼容遮罩，教室 360 / 功能机可显示 */}
+      <AppModalPortal
+        open={showLoginModal}
+        onMaskClick={() => {
+          setShowLoginModal(false);
+          setPendingNavTarget('');
+          setLoginError('');
+          setLoginCardMode('login');
+        }}
+        zIndex={1100}
+      >
+          <div
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden"
+            role="dialog"
+            aria-modal="true"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="bg-gradient-to-r from-teal-500 to-cyan-600 p-6 text-white">
               <div className="flex items-center justify-between mb-2">
                 <h2 className="text-2xl font-bold">{loginCardMode === 'login' ? '登录' : '重置密码'}</h2>
                 <button
+                  type="button"
                   onClick={() => {
                     setShowLoginModal(false);
                     setPendingNavTarget('');
@@ -778,8 +793,7 @@ export default function Home() {
               </form>
             </div>
           </div>
-        </div>
-      )}
+      </AppModalPortal>
     </div>
   );
 }

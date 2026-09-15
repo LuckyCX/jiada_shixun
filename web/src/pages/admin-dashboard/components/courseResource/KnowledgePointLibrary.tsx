@@ -1,5 +1,6 @@
 
 import { useState } from 'react';
+import AppModalPortal from '../../../../components/AppModalPortal';
 import type { KnowledgePoint, ResourceType } from './types';
 import { TYPE_MAP, MODULES } from './types';
 import { MOCK_KNOWLEDGE_POINTS } from './mockData';
@@ -346,9 +347,14 @@ export default function KnowledgePointLibrary() {
       </div>
 
       {/* 新增/编辑弹窗 */}
-      {showAddModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl p-6 max-w-lg w-full shadow-2xl max-h-[90vh] overflow-y-auto">
+      {showAddModal ? (
+        <AppModalPortal open onMaskClick={() => setShowAddModal(false)} zIndex={50}>
+          <div
+            className="bg-white rounded-2xl p-6 max-w-lg w-full shadow-2xl max-h-[90vh] overflow-y-auto"
+            role="dialog"
+            aria-modal="true"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex items-center justify-between mb-5">
               <h3 className="text-lg font-bold text-gray-900">
                 {editingPoint ? '编辑知识点' : '新增知识点'}
@@ -504,8 +510,8 @@ export default function KnowledgePointLibrary() {
               </button>
             </div>
           </div>
-        </div>
-      )}
+        </AppModalPortal>
+      ) : null}
     </div>
   );
 }

@@ -135,8 +135,9 @@ export async function putPersonalClassStudents(
   classId: string,
   studentIds: string[]
 ): Promise<{ studentCount: number }> {
+  // 使用 POST：教室 360 / 部分校园网会拦截 PUT，表现为 Failed to fetch
   return teacherFetch(`/api/teacher/personal-classes/${classId}/students`, {
-    method: 'PUT',
+    method: 'POST',
     body: JSON.stringify({ studentIds }),
   }) as Promise<{ studentCount: number }>;
 }

@@ -1,5 +1,6 @@
 
 import { useState } from 'react';
+import AppModalPortal from '../../components/AppModalPortal';
 
 interface Tool {
   id: string;
@@ -707,9 +708,23 @@ export default new UserAuthService();`;
       </div>
 
       {/* 代码生成模态框 */}
-      {showCodeModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-6">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+      {showCodeModal ? (
+        <AppModalPortal
+          open
+          onMaskClick={() => {
+            setShowCodeModal(false);
+            setCodePrompt('');
+            setGeneratedCode('');
+          }}
+          zIndex={50}
+          className="p-6"
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col"
+            role="dialog"
+            aria-modal="true"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="p-6 border-b border-gray-200 flex items-center justify-between">
               <h3 className="text-2xl font-bold text-gray-900">代码生成智能体</h3>
               <button
@@ -783,13 +798,27 @@ export default new UserAuthService();`;
               </div>
             </div>
           </div>
-        </div>
-      )}
+        </AppModalPortal>
+      ) : null}
 
       {/* UI设计生成模态框 */}
-      {showDesignModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-6">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+      {showDesignModal ? (
+        <AppModalPortal
+          open
+          onMaskClick={() => {
+            setShowDesignModal(false);
+            setDesignPrompt('');
+            setGeneratedDesign('');
+          }}
+          zIndex={50}
+          className="p-6"
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col"
+            role="dialog"
+            aria-modal="true"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="p-6 border-b border-gray-200 flex items-center justify-between">
               <h3 className="text-2xl font-bold text-gray-900">UI设计智能体</h3>
               <button
@@ -866,8 +895,8 @@ export default new UserAuthService();`;
               </div>
             </div>
           </div>
-        </div>
-      )}
+        </AppModalPortal>
+      ) : null}
     </div>
   );
 }

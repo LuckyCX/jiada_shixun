@@ -4,6 +4,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { getPool } from '../lib/db.js';
 import { logError } from '../lib/logError.js';
+import { normalizeUploadFileName } from '../lib/uploadFileName.js';
 import { requireAuth, requireTeacher } from '../middleware/auth.js';
 import { coerceSections, sectionsToFullText } from '../lib/businessPlanSections.js';
 
@@ -56,7 +57,7 @@ async function loadSubmissionAttachments(pool, submissionId, classId) {
   return {
     pptUrl: ppt ? attachmentDownloadUrl(classId, submissionId, ppt.id) : '',
     attachments: others.map((r) => ({
-      name: String(r.file_name || ''),
+      name: normalizeUploadFileName(r.file_name || ''),
       url: attachmentDownloadUrl(classId, submissionId, r.id),
       size: formatSize(r.file_size),
     })),
@@ -182,7 +183,7 @@ router.get(
       if (!rows.length) return bad(req, res, 404, 40404, '附件不存在');
       const abs = attachmentAbsPath(rows[0].storage_key);
       if (!fs.existsSync(abs)) return bad(req, res, 404, 40405, '附件文件不存在');
-      return res.download(abs, rows[0].file_name);
+      return res.download(abs, normalizeUploadFileName(rows[0].file_name || 'file'));
     } catch (e) {
       logError(`GET teacher business-plan attachment download traceId=${req.traceId}`, e);
       return bad(req, res, 500, 50000, e.message);

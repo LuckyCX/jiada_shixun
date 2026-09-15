@@ -34,6 +34,7 @@ import {
 } from './teacherPortalApi';
 import { fetchTeacherMonitorTeams } from '../../lib/teacherMonitorApi';
 import UserAvatar from '../../components/UserAvatar';
+import AppModalPortal from '../../components/AppModalPortal';
 
 type TabKey =
   | 'monitor'
@@ -876,8 +877,11 @@ export default function TeacherDashboard() {
 
       {/* 退出登录确认弹窗 */}
       {showLogoutConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm mx-4 overflow-hidden">
+        <AppModalPortal open={true} onMaskClick={() => setShowLogoutConfirm(false)} zIndex={50}>
+          <div
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="p-6">
               <div className="flex items-center gap-4 mb-5">
                 <div className="w-12 h-12 flex items-center justify-center bg-red-50 rounded-full flex-shrink-0">
@@ -908,7 +912,7 @@ export default function TeacherDashboard() {
               </div>
             </div>
           </div>
-        </div>
+        </AppModalPortal>
       )}
     </div>
   );

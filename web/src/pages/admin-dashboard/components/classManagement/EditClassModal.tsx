@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Button, Form, Input, Select } from 'antd';
+import AppModalPortal from '../../../../components/AppModalPortal';
 import { Class } from './types';
 import { useCollegeDictOptions } from '../userManagement/useCollegeDictOptions';
 import { useMajorOptions } from '../userManagement/useMajorOptions';
@@ -50,8 +51,11 @@ export default function EditClassModal({ isOpen, onClose, onConfirm, classData }
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-xl w-full max-w-lg p-6">
+    <AppModalPortal open onMaskClick={onClose} zIndex={1100}>
+      <div
+        className="bg-white rounded-xl w-full max-w-lg p-6"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center justify-between mb-6">
           <h3 className="text-xl font-semibold text-gray-900">编辑班级</h3>
           <button type="button" onClick={onClose} className="text-gray-400 hover:text-gray-600">
@@ -94,6 +98,6 @@ export default function EditClassModal({ isOpen, onClose, onConfirm, classData }
           </Button>
         </div>
       </div>
-    </div>
+    </AppModalPortal>
   );
 }

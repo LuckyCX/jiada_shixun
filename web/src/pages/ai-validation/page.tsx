@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom';
 import { useState } from 'react';
+import AppModalPortal from '../../components/AppModalPortal';
 
 interface Message {
   id: number;
@@ -713,8 +714,11 @@ export default function AIValidation() {
 
       {/* Plan Modal */}
       {showPlanModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-6">
-          <div className="bg-white rounded-2xl max-w-3xl w-full max-h-[80vh] overflow-y-auto">
+        <AppModalPortal open={true} onMaskClick={() => setShowPlanModal(false)} zIndex={50}>
+          <div
+            className="bg-white rounded-2xl max-w-3xl w-full max-h-[80vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="sticky top-0 bg-white border-b border-gray-200 px-8 py-6">
               <div className="flex items-center justify-between">
                 <h3 className="text-2xl font-bold text-gray-900">提交商业计划</h3>
@@ -761,7 +765,7 @@ export default function AIValidation() {
               </div>
             </div>
           </div>
-        </div>
+        </AppModalPortal>
       )}
     </div>
   );

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Button, Cascader, message, Select, Space } from 'antd';
+import AppModalPortal from '../../../../components/AppModalPortal';
 import type { ImportConflict, ImportResult } from './types';
 import type { BatchImportRow } from './adminUsersApi';
 import { fetchAdminClasses } from './adminUsersApi';
@@ -458,8 +459,11 @@ export default function BatchImportModal({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-xl w-full max-w-3xl max-h-[90vh] overflow-y-auto">
+    <AppModalPortal open onMaskClick={handleClose} zIndex={1100}>
+      <div
+        className="bg-white rounded-xl w-full max-w-3xl max-h-[90vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
           <h3 className="text-xl font-semibold text-gray-900">{modalTitle}</h3>
           <button
@@ -801,6 +805,6 @@ export default function BatchImportModal({
           )}
         </div>
       </div>
-    </div>
+    </AppModalPortal>
   );
 }

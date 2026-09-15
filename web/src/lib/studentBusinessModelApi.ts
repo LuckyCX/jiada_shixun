@@ -178,7 +178,8 @@ export async function saveBusinessModelBmc(
   bmc: BmcPayload
 ): Promise<BusinessModelWorkspacePayload> {
   const token = getPortalToken('student');
-  const r = await fetch(`${base(classId)}/bmc/save`, {
+  const { rewriteUnsafeHttpMethod, compatFetch } = await import('./authApi');
+  const init = rewriteUnsafeHttpMethod({
     method: 'PUT',
     headers: {
       'Content-Type': 'application/json',
@@ -186,6 +187,7 @@ export async function saveBusinessModelBmc(
     },
     body: JSON.stringify({ bmc }),
   });
+  const r = await compatFetch(`${base(classId)}/bmc/save`, init);
   const j = (await r.json().catch(() => ({ code: -1, message: '无效响应' }))) as {
     code: number;
     message?: string;

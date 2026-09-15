@@ -279,7 +279,13 @@ export default function AddStudentsTransferModal({
       onSaved();
       onClose();
     } catch (e: unknown) {
-      message.error(e instanceof Error ? e.message : t('teacher_class.add_students.save_fail'));
+      const raw = e instanceof Error ? e.message : '';
+      // 旧版 360 / 校园网拦截 PUT 时常见英文 Failed to fetch，给出可读提示
+      const msg =
+        /failed to fetch|networkerror|load failed|network request failed/i.test(raw)
+          ? '网络请求失败，请检查网络后重试；若使用 360 等浏览器仍失败，可换 Chrome 或刷新后再试'
+          : raw || t('teacher_class.add_students.save_fail');
+      message.error(msg);
     } finally {
       setSubmitting(false);
     }

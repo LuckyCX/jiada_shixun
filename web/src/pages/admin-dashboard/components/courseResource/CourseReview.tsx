@@ -1,5 +1,6 @@
 
 import { useState } from 'react';
+import AppModalPortal from '../../../../components/AppModalPortal';
 import type { Course, CourseStatus } from './types';
 import { COURSE_STATUS_MAP, MODULES } from './types';
 import { MOCK_COURSES } from './mockData';
@@ -298,9 +299,14 @@ export default function CourseReview() {
       </div>
 
       {/* 课程详情弹窗 */}
-      {showDetailModal && selectedCourse && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl p-6 max-w-2xl w-full shadow-2xl max-h-[90vh] overflow-y-auto">
+      {showDetailModal && selectedCourse ? (
+        <AppModalPortal open onMaskClick={() => setShowDetailModal(false)} zIndex={50}>
+          <div
+            className="bg-white rounded-2xl p-6 max-w-2xl w-full shadow-2xl max-h-[90vh] overflow-y-auto"
+            role="dialog"
+            aria-modal="true"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex items-center justify-between mb-5">
               <h3 className="text-lg font-bold text-gray-900">
                 课程详情审核
@@ -425,13 +431,18 @@ export default function CourseReview() {
               </div>
             )}
           </div>
-        </div>
-      )}
+        </AppModalPortal>
+      ) : null}
 
       {/* 驳回原因弹窗 */}
-      {showRejectModal && rejectTarget && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl">
+      {showRejectModal && rejectTarget ? (
+        <AppModalPortal open onMaskClick={() => setShowRejectModal(false)} zIndex={50}>
+          <div
+            className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl"
+            role="dialog"
+            aria-modal="true"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-bold text-gray-900">
                 填写驳回原因
@@ -492,8 +503,8 @@ export default function CourseReview() {
               </button>
             </div>
           </div>
-        </div>
-      )}
+        </AppModalPortal>
+      ) : null}
     </div>
   );
 }

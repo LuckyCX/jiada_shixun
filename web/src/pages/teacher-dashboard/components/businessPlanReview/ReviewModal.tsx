@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import AppModalPortal from '../../../../components/AppModalPortal';
 import { ReviewFormData } from './types';
 
 interface ReviewModalProps {
@@ -26,8 +27,11 @@ export default function ReviewModal({ planName, teamName, onClose, onSubmit }: R
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl w-full max-w-2xl overflow-hidden">
+    <AppModalPortal open onMaskClick={onClose} zIndex={1100}>
+      <div
+        className="bg-white rounded-2xl w-full max-w-2xl overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* 头部 */}
         <div className="bg-gradient-to-r from-indigo-600 to-purple-600 text-white p-6">
           <div className="flex items-start justify-between">
@@ -186,6 +190,6 @@ export default function ReviewModal({ planName, teamName, onClose, onSubmit }: R
           </button>
         </div>
       </div>
-    </div>
+    </AppModalPortal>
   );
 }
