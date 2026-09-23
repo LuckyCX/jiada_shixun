@@ -35,7 +35,7 @@ WHERE u.username = 'admin' AND r.code = 'admin';
 
 INSERT INTO system_config (config_key, config_value, description, updated_by) VALUES
   ('site', '{"siteTitle":"大学生创业实训平台","logoUrl":"","econoverseOrigin":"http://localhost:5173"}'::jsonb, '站点与品牌（Logo 建议 128×128，由管理端上传；econoverseOrigin 为创世纪游戏外链）', 1),
-  ('security', '{"jwt":{"accessTtlSec":43200,"refreshTtlSec":604800,"issuer":"jiada-shixun","secret":"CHANGE_ME_IN_ADMIN_UI_USE_LONG_RANDOM_SECRET_DEV_ONLY"},"passwordMinLength":8}'::jsonb, 'JWT 与会话策略；accessTtlSec 为访问令牌秒数（默认 12h）；secret 请在管理端修改后保存', 1),
+  ('security', '{"jwt":{"accessTtlSec":86400,"refreshTtlSec":604800,"renewalMinIntervalSec":60,"issuer":"jiada-shixun","secret":"CHANGE_ME_IN_ADMIN_UI_USE_LONG_RANDOM_SECRET_DEV_ONLY"},"passwordMinLength":8}'::jsonb, 'JWT 与会话策略；accessTtlSec 默认 86400（1 天）；renewalMinIntervalSec 为活跃续期最短间隔；口令须≥8且含大小写与数字；secret 请在管理端修改', 1),
   ('upload', '{"maxSizeMb":50,"allowedExtensions":["pdf","doc","docx","ppt","pptx","png","jpg","zip"]}'::jsonb, '上传策略', 1),
   ('smtp_config', '{"host":"","port":465,"secure":true,"user":"","pass":"","from":""}'::jsonb, 'SMTP 邮件（在后台填写后保存；与常见 QQ 配置一致默认 465+SSL）', 1),
   (

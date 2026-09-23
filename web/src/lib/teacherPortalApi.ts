@@ -1,5 +1,4 @@
-import { portalAuthenticatedFetch } from './authApi';
-import { getPortalToken } from './authApi';
+import { getPortalToken, isPortalRememberMe, portalAuthenticatedFetch, setPortalToken } from './authApi';
 
 async function teacherFetch(path: string, opts: RequestInit = {}) {
   return portalAuthenticatedFetch('teacher', path, opts);
@@ -20,7 +19,15 @@ export async function getTeacherProfile(): Promise<TeacherProfile> {
 }
 
 export async function updateTeacherProfile(body: { email?: string; oldPassword?: string; newPassword?: string }) {
-  return teacherFetch('/api/teacher/me', { method: 'PATCH', body: JSON.stringify(body) }) as Promise<{ saved: boolean }>;
+  const data = (await teacherFetch('/api/teacher/me', {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  })) as { saved?: boolean; token?: string; refreshToken?: string };
+  // 改密成功后服务端签发无 mustChangePassword 的新 token，需替换本地登录态
+  if (data?.token) {
+    setPortalToken('teacher', data.token, isPortalRememberMe('teacher'), data.refreshToken);
+  }
+  return data;
 }
 
 export async function uploadTeacherAvatar(file: File) {

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import AppModalPortal from '../../../../components/AppModalPortal';
+import { PASSWORD_POLICY_HINT, validatePasswordStrength } from '../../../../lib/passwordPolicy';
 import { User } from './types';
 import { initialPasswordFromIdNumber } from './AddUserModal';
 
@@ -53,8 +54,9 @@ export default function ResetPasswordModal({ isOpen, user, onClose, onConfirm }:
         setError('请输入新密码');
         return;
       }
-      if (newPassword.length < 6) {
-        setError('密码长度不能少于 6 位');
+      const strength = validatePasswordStrength(newPassword);
+      if (!strength.ok) {
+        setError(strength.message);
         return;
       }
       if (newPassword !== confirmPassword) {
@@ -117,7 +119,7 @@ export default function ResetPasswordModal({ isOpen, user, onClose, onConfirm }:
               }`}
             >
               <i className="ri-magic-line mr-1.5"></i>
-              学号/工号后六位
+              自动生成
             </button>
             <button
               type="button"
@@ -139,7 +141,7 @@ export default function ResetPasswordModal({ isOpen, user, onClose, onConfirm }:
               <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
                 <div className="flex items-center gap-2 mb-2">
                   <i className="ri-information-line text-amber-500 text-sm"></i>
-                  <span className="text-xs font-medium text-amber-700">与新建用户一致：学号/工号后 6 位</span>
+                  <span className="text-xs font-medium text-amber-700">与新建用户一致：Jd + 学号/工号后 6 位</span>
                 </div>
                 <div className="flex items-center justify-between bg-white rounded-md px-3 py-2 border border-amber-200">
                   <span className="text-sm font-mono font-semibold text-gray-800 tracking-wider">
@@ -172,7 +174,7 @@ export default function ResetPasswordModal({ isOpen, user, onClose, onConfirm }:
                       setNewPassword(e.target.value);
                       setError('');
                     }}
-                    placeholder="至少 6 位"
+                    placeholder={PASSWORD_POLICY_HINT}
                     className="w-full px-3 py-2.5 pr-10 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-amber-400 focus:border-transparent"
                   />
                   <button

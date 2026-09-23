@@ -4,6 +4,7 @@ import { getPool } from '../lib/db.js';
 import { logError } from '../lib/logError.js';
 import { cleanupStudentTeamsBeforeUserDelete } from '../lib/cleanupStudentTeamsOnUserDelete.js';
 import { requireAuth, requireAdmin } from '../middleware/auth.js';
+import { validatePasswordStrength } from '../lib/passwordPolicy.js';
 
 const router = Router();
 
@@ -388,6 +389,8 @@ router.post('/admin/users', requireAuth(), requireAdmin(), async (req, res) => {
     }
 
     if (!pwd) return bad(req, res, 400, 40005, '缺少初始密码');
+    const strength = validatePasswordStrength(pwd);
+    if (!strength.ok) return bad(req, res, 400, 40020, strength.message);
 
     const password_hash = await bcrypt.hash(pwd, 10);
     const student_no = role === 'student' ? id : null;
@@ -634,7 +637,8 @@ router.patch('/admin/users/:id/password', requireAuth(), requireAdmin(), async (
     const id = Number(req.params.id);
     if (!Number.isFinite(id) || id <= 0) return bad(req, res, 400, 40001, '无效用户 id');
     const password = String(req.body?.password || '');
-    if (password.length < 6) return bad(req, res, 400, 40002, '密码至少 6 位');
+    const strength = validatePasswordStrength(password);
+    if (!strength.ok) return bad(req, res, 400, 40020, strength.message);
 
     const password_hash = await bcrypt.hash(password, 10);
     const { rowCount } = await getPool().query(`UPDATE users SET password_hash = $1 WHERE id = $2`, [password_hash, id]);
@@ -954,7 +958,12 @@ router.post('/admin/users/batch', requireAuth(), requireAdmin(), async (req, res
         continue;
       }
 
-      const pwd = idNumber.slice(-6) || idNumber;
+      const pwd = `Jd${(idNumber.slice(-6) || idNumber).padStart(6, '0')}`;
+      const strength = validatePasswordStrength(pwd);
+      if (!strength.ok) {
+        errors.push({ row: rowNo, reason: strength.message });
+        continue;
+      }
       try {
         if (!(await collegeIsActive(collegeIdNum))) {
           errors.push({ row: rowNo, reason: '学院不存在或已停用' });

@@ -13,8 +13,22 @@ import { randomInt } from 'crypto';
 import { sendSmtpMail } from '../lib/mailProvider.js';
 import { requireAuth, requireStudent, requireTeacher } from '../middleware/auth.js';
 import { getPool } from '../lib/db.js';
+import { validatePasswordStrength } from '../lib/passwordPolicy.js';
+import { rateLimitByIpAccount } from '../middleware/securityHardening.js';
 
 const router = Router();
+
+const loginRateLimit = rateLimitByIpAccount({
+  windowSec: 60,
+  maxHits: 20,
+  accountKey: (req) => String(req.body?.username || '').trim().toLowerCase(),
+});
+
+const resetCodeRateLimit = rateLimitByIpAccount({
+  windowSec: 60,
+  maxHits: 10,
+  accountKey: (req) => String(req.body?.email || '').trim().toLowerCase(),
+});
 
 function parsePersonalClassId(body) {
   const id = Number(String(body?.personalClassId ?? '').trim());
@@ -100,7 +114,7 @@ function genEmailCode() {
   return String(n).padStart(6, '0');
 }
 
-router.post('/login', async (req, res) => {
+router.post('/login', loginRateLimit, async (req, res) => {
   try {
     const { username, password } = req.body || {};
     if (!username || !password) {
@@ -122,9 +136,13 @@ router.post('/login', async (req, res) => {
     if (!ok) {
       return res.status(401).json({ code: 40103, message: '用户名或密码不正确', data: null, traceId: req.traceId });
     }
+    // 仅账号+密码登录：用本次明文密码做强度检测（不得从 hash 反推）
+    const strength = validatePasswordStrength(password);
+    const mustChangePassword = !strength.ok;
     const user = { id: u.id, username: u.username, role: u.role };
-    const token = await signAccessToken(user);
-    const refreshToken = await signRefreshToken(user);
+    const tokenOpts = { mustChangePassword };
+    const token = await signAccessToken(user, tokenOpts);
+    const refreshToken = await signRefreshToken(user, tokenOpts);
     await query('UPDATE users SET last_login_at = now() WHERE id = $1', [u.id]);
     return res.json({
       code: 0,
@@ -132,6 +150,7 @@ router.post('/login', async (req, res) => {
       data: {
         token,
         refreshToken,
+        mustChangePassword,
         user: { id: u.id, username: u.username, role: u.role },
       },
       traceId: req.traceId,
@@ -142,7 +161,97 @@ router.post('/login', async (req, res) => {
   }
 });
 
-router.post('/password-reset/code', async (req, res) => {
+/** 当前登录用户基础信息（强制改密白名单） */
+router.get('/me', requireAuth(), async (req, res) => {
+  try {
+    const id = Number(req.user?.sub);
+    if (!Number.isFinite(id) || id <= 0) {
+      return res.status(400).json({ code: 40001, message: '无效用户', data: null, traceId: req.traceId });
+    }
+    const { rows } = await query(
+      `SELECT id, username, real_name, role, status FROM users WHERE id = $1`,
+      [id]
+    );
+    if (!rows.length) {
+      return res.status(404).json({ code: 40401, message: '用户不存在', data: null, traceId: req.traceId });
+    }
+    const u = rows[0];
+    return res.json({
+      code: 0,
+      message: 'OK',
+      data: {
+        id: String(u.id),
+        username: u.username,
+        realName: u.real_name || '',
+        role: u.role,
+        status: u.status,
+        mustChangePassword: Boolean(req.user?.mustChangePassword),
+      },
+      traceId: req.traceId,
+    });
+  } catch (e) {
+    logError(`GET /api/auth/me traceId=${req.traceId}`, e);
+    return res.status(500).json({ code: 50000, message: e.message, data: null, traceId: req.traceId });
+  }
+});
+
+/**
+ * 已登录改密（全角色）：校验旧密码 + 强度；成功后签发不含 mustChangePassword 的新 token
+ */
+router.post('/change-password', requireAuth(), async (req, res) => {
+  try {
+    const userId = Number(req.user?.sub);
+    if (!Number.isFinite(userId) || userId <= 0) {
+      return res.status(400).json({ code: 40001, message: '无效用户', data: null, traceId: req.traceId });
+    }
+    const oldPassword = String(req.body?.oldPassword || '');
+    const newPassword = String(req.body?.newPassword || '');
+    const confirmPassword = String(req.body?.confirmPassword ?? req.body?.newPasswordConfirm ?? '');
+    if (!oldPassword) {
+      return res.status(400).json({ code: 40002, message: '请输入旧密码', data: null, traceId: req.traceId });
+    }
+    const strength = validatePasswordStrength(newPassword);
+    if (!strength.ok) {
+      return res.status(400).json({ code: 40020, message: strength.message, data: null, traceId: req.traceId });
+    }
+    if (!confirmPassword) {
+      return res.status(400).json({ code: 40004, message: '请再次输入新密码', data: null, traceId: req.traceId });
+    }
+    if (newPassword !== confirmPassword) {
+      return res.status(400).json({ code: 40004, message: '两次输入的新密码不一致', data: null, traceId: req.traceId });
+    }
+    if (oldPassword === newPassword) {
+      return res.status(400).json({ code: 40005, message: '新密码不能与旧密码相同', data: null, traceId: req.traceId });
+    }
+    const { rows } = await query(`SELECT id, username, role, password_hash, status FROM users WHERE id = $1`, [
+      userId,
+    ]);
+    if (!rows.length || rows[0].status !== 'active') {
+      return res.status(404).json({ code: 40401, message: '用户不存在或已停用', data: null, traceId: req.traceId });
+    }
+    const u = rows[0];
+    const okPwd = await bcrypt.compare(oldPassword, u.password_hash);
+    if (!okPwd) {
+      return res.status(400).json({ code: 40006, message: '旧密码不正确', data: null, traceId: req.traceId });
+    }
+    const password_hash = await bcrypt.hash(newPassword, 10);
+    await query(`UPDATE users SET password_hash = $1, updated_at = now() WHERE id = $2`, [password_hash, userId]);
+    const fresh = { id: u.id, username: u.username, role: u.role };
+    const token = await signAccessToken(fresh, { mustChangePassword: false });
+    const refreshToken = await signRefreshToken(fresh, { mustChangePassword: false });
+    return res.json({
+      code: 0,
+      message: '密码已更新',
+      data: { saved: true, token, refreshToken, mustChangePassword: false },
+      traceId: req.traceId,
+    });
+  } catch (e) {
+    logError(`POST /api/auth/change-password traceId=${req.traceId}`, e);
+    return res.status(500).json({ code: 50000, message: e.message, data: null, traceId: req.traceId });
+  }
+});
+
+router.post('/password-reset/code', resetCodeRateLimit, async (req, res) => {
   try {
     const email = normalizeEmail(req.body?.email);
     if (!email) {
@@ -202,8 +311,12 @@ router.post('/password-reset/confirm', async (req, res) => {
     const newPassword = String(req.body?.newPassword || '');
     if (!email) return res.status(400).json({ code: 40001, message: '邮箱格式错误', data: null, traceId: req.traceId });
     if (!code) return res.status(400).json({ code: 40003, message: '请输入验证码', data: null, traceId: req.traceId });
-    if (!newPassword || newPassword.length < 6) {
-      return res.status(400).json({ code: 40004, message: '新密码至少 6 位', data: null, traceId: req.traceId });
+    if (!newPassword) {
+      return res.status(400).json({ code: 40004, message: '请输入新密码', data: null, traceId: req.traceId });
+    }
+    const strength = validatePasswordStrength(newPassword);
+    if (!strength.ok) {
+      return res.status(400).json({ code: 40020, message: strength.message, data: null, traceId: req.traceId });
     }
     const { rows } = await query(
       `SELECT id, role
@@ -393,13 +506,15 @@ router.post('/refresh', async (req, res) => {
       return res.status(401).json({ code: 40102, message: '账号不可用', data: null, traceId: req.traceId });
     }
     const u = rows[0];
+    const mustChangePassword = Boolean(user.mustChangePassword);
     const fresh = { id: u.id, username: u.username, role: u.role };
-    const token = await signAccessToken(fresh);
-    const newRefreshToken = await signRefreshToken(fresh);
+    const tokenOpts = { mustChangePassword };
+    const token = await signAccessToken(fresh, tokenOpts);
+    const newRefreshToken = await signRefreshToken(fresh, tokenOpts);
     return res.json({
       code: 0,
       message: 'OK',
-      data: { token, refreshToken: newRefreshToken },
+      data: { token, refreshToken: newRefreshToken, mustChangePassword },
       traceId: req.traceId,
     });
   } catch (e) {

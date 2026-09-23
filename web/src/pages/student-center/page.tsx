@@ -2343,7 +2343,7 @@ export default function StudentCenterPage() {
               <div className="text-sm font-semibold text-gray-900 mb-3">修改密码</div>
               <div className="space-y-3">
                 <Input.Password value={profileOldPwd} onChange={(e) => setProfileOldPwd(e.target.value)} placeholder="旧密码" />
-                <Input.Password value={profileNewPwd} onChange={(e) => setProfileNewPwd(e.target.value)} placeholder="新密码（至少6位）" />
+                <Input.Password value={profileNewPwd} onChange={(e) => setProfileNewPwd(e.target.value)} placeholder="新密码（至少8位，含大小写与数字）" />
                 <div className="flex justify-end">
                   <Button
                     type="primary"
@@ -2353,6 +2353,12 @@ export default function StudentCenterPage() {
                     onClick={async () => {
                       setProfileSaving(true);
                       try {
+                        const { validatePasswordStrength, PASSWORD_POLICY_HINT } = await import('../../lib/passwordPolicy');
+                        const strength = validatePasswordStrength(profileNewPwd);
+                        if (!strength.ok) {
+                          antdMessage.warning(PASSWORD_POLICY_HINT);
+                          return;
+                        }
                         await updateStudentProfile({ oldPassword: profileOldPwd, newPassword: profileNewPwd });
                         setProfileOldPwd('');
                         setProfileNewPwd('');

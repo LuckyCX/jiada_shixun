@@ -10,6 +10,8 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { randomInt, randomUUID } from 'crypto';
 import { sendSmtpMail } from '../lib/mailProvider.js';
+import { validatePasswordStrength } from '../lib/passwordPolicy.js';
+import { signAccessToken, signRefreshToken } from '../lib/authTokens.js';
 
 const router = Router();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -188,8 +190,9 @@ router.patch('/teacher/me', requireAuth(), requireTeacher(), async (req, res) =>
 
     if (newPassword || oldPassword) {
       if (!oldPassword) return bad(req, res, 400, 40003, '请输入旧密码');
-      if (!newPassword || newPassword.length < 6) return bad(req, res, 400, 40004, '新密码至少 6 位');
-      const { rows } = await getPool().query(`SELECT password_hash FROM users WHERE id = $1 AND role = 'teacher'`, [tid]);
+      const strength = validatePasswordStrength(newPassword);
+      if (!strength.ok) return bad(req, res, 400, 40020, strength.message);
+      const { rows } = await getPool().query(`SELECT id, username, role, password_hash FROM users WHERE id = $1 AND role = 'teacher'`, [tid]);
       if (!rows.length) return bad(req, res, 404, 40401, '教师不存在');
       const okPwd = await bcrypt.compare(oldPassword, rows[0].password_hash);
       if (!okPwd) return bad(req, res, 400, 40005, '旧密码不正确');
@@ -209,7 +212,21 @@ router.patch('/teacher/me', requireAuth(), requireTeacher(), async (req, res) =>
       });
     }
 
-    return ok(req, res, { saved: true }, '已保存');
+    const out = { saved: true };
+    if (newPassword || oldPassword) {
+      const { rows: urows } = await getPool().query(
+        `SELECT id, username, role FROM users WHERE id = $1 AND role = 'teacher'`,
+        [tid]
+      );
+      if (urows.length) {
+        const fresh = { id: urows[0].id, username: urows[0].username, role: urows[0].role };
+        out.token = await signAccessToken(fresh, { mustChangePassword: false });
+        out.refreshToken = await signRefreshToken(fresh, { mustChangePassword: false });
+        out.mustChangePassword = false;
+      }
+    }
+
+    return ok(req, res, out, '已保存');
   } catch (e) {
     logError(`PATCH /api/teacher/me traceId=${req.traceId}`, e);
     return bad(req, res, 500, 50000, e.message);

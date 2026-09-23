@@ -36,15 +36,19 @@ import publicMarketSurveyRoutes from './routes/publicMarketSurvey.js';
 import courseSettingsRoutes from './routes/courseSettings.js';
 import { startCourseSettingReminderJob } from './jobs/courseSettingReminderJob.js';
 import { httpMethodOverride } from './middleware/httpMethodOverride.js';
+import { securityHardening } from './middleware/securityHardening.js';
 
 const app = express();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const AVATAR_UPLOAD_ROOT = path.join(__dirname, '../uploads/avatars');
 
+app.disable('x-powered-by');
+app.use(securityHardening());
 app.use(
   cors({
     origin: true,
     credentials: true,
+    exposedHeaders: ['X-Access-Token'],
   })
 );
 app.use(express.json({ limit: '2mb' }));

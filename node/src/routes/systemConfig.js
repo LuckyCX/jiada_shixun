@@ -8,6 +8,8 @@ import { sendSmsCode } from '../lib/smsProvider.js';
 import { friendlyLlmErrorMessage, testLlmConnectivity } from '../lib/llmGateway.js';
 import { requireAuth, requireAdmin } from '../middleware/auth.js';
 import { insertAdminOperationLog } from '../lib/adminOperationLog.js';
+import { validatePasswordStrength } from '../lib/passwordPolicy.js';
+import { signAccessToken, signRefreshToken } from '../lib/authTokens.js';
 
 const router = Router();
 
@@ -179,8 +181,9 @@ router.post('/admin/me/password', requireAuth(), requireAdmin(), async (req, res
     if (!oldPassword) {
       return res.status(400).json({ code: 40002, message: '请输入旧密码', data: null, traceId: req.traceId });
     }
-    if (!newPassword || newPassword.length < 6) {
-      return res.status(400).json({ code: 40003, message: '新密码至少 6 位', data: null, traceId: req.traceId });
+    const strength = validatePasswordStrength(newPassword);
+    if (!strength.ok) {
+      return res.status(400).json({ code: 40020, message: strength.message, data: null, traceId: req.traceId });
     }
     if (confirmPassword && newPassword !== confirmPassword) {
       return res.status(400).json({ code: 40004, message: '两次输入的新密码不一致', data: null, traceId: req.traceId });
@@ -193,7 +196,7 @@ router.post('/admin/me/password', requireAuth(), requireAdmin(), async (req, res
     }
 
     const { rows } = await getPool().query(
-      `SELECT id, password_hash FROM users WHERE id = $1 AND role = 'admin'`,
+      `SELECT id, username, role, password_hash FROM users WHERE id = $1 AND role = 'admin'`,
       [adminId]
     );
     if (!rows.length) {
@@ -216,7 +219,15 @@ router.post('/admin/me/password', requireAuth(), requireAdmin(), async (req, res
       detailText: '管理员修改登录密码',
       detailJson: {},
     });
-    return res.json({ code: 0, message: '密码已更新', data: { saved: true }, traceId: req.traceId });
+    const fresh = { id: rows[0].id, username: rows[0].username, role: rows[0].role };
+    const token = await signAccessToken(fresh, { mustChangePassword: false });
+    const refreshToken = await signRefreshToken(fresh, { mustChangePassword: false });
+    return res.json({
+      code: 0,
+      message: '密码已更新',
+      data: { saved: true, token, refreshToken, mustChangePassword: false },
+      traceId: req.traceId,
+    });
   } catch (e) {
     logError(`POST /api/admin/me/password traceId=${req.traceId}`, e);
     return res.status(500).json({ code: 50000, message: e.message || '修改失败', data: null, traceId: req.traceId });

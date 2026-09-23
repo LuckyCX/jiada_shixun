@@ -1,4 +1,4 @@
-import { getPortalToken, portalAuthenticatedFetch, redirectStudentSessionExpired } from './authApi';
+import { getPortalToken, isPortalRememberMe, portalAuthenticatedFetch, redirectStudentSessionExpired, setPortalToken } from './authApi';
 
 export { redirectStudentSessionExpired };
 
@@ -42,8 +42,21 @@ export async function getStudentProfile(): Promise<StudentProfile> {
   return studentFetch('/api/student/me') as Promise<StudentProfile>;
 }
 
-export async function updateStudentProfile(body: { email?: string; code?: string; oldPassword?: string; newPassword?: string }) {
-  return studentFetch('/api/student/me', { method: 'PATCH', body: JSON.stringify(body) }) as Promise<{ saved: boolean }>;
+export async function updateStudentProfile(body: {
+  email?: string;
+  code?: string;
+  oldPassword?: string;
+  newPassword?: string;
+}) {
+  const data = (await studentFetch('/api/student/me', {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  })) as { saved?: boolean; token?: string; refreshToken?: string };
+  // 改密成功后服务端签发无 mustChangePassword 的新 token，需替换本地登录态
+  if (data?.token) {
+    setPortalToken('student', data.token, isPortalRememberMe('student'), data.refreshToken);
+  }
+  return data;
 }
 
 export async function sendStudentEmailCode(email: string) {

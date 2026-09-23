@@ -7,6 +7,7 @@ import {
   getSavedLoginForm,
   isJwtLikelyValid,
   loginWithApi,
+  notifyMustChangePasswordIfNeeded,
   parseJwtPayload,
   refreshPortalAccessToken,
   saveLoginForm,
@@ -133,12 +134,13 @@ export default function Home() {
     const expected = loginRole as PortalRole;
     setLoginLoading(true);
     try {
-      const { token, refreshToken, user } = await loginWithApi(username, password);
+      const { token, refreshToken, user, mustChangePassword } = await loginWithApi(username, password);
       if (user.role !== expected) {
         if (expected === 'teacher') throw new Error('该账号不是教师，请使用教师账号登录');
         throw new Error('该账号不是学生，请使用学生账号登录');
       }
-      if (expected === 'student') {
+      // 弱口令须先改密：跳过入班门禁等业务校验，避免 40310
+      if (expected === 'student' && !mustChangePassword) {
         const gate = await assertStudentCanLoginWithToken(token);
         if (!gate.ok) {
           throw new Error(gate.message);
@@ -149,6 +151,7 @@ export default function Home() {
       setUserInfo({ name: user.username, role: expected });
       setIsLoggedIn(true);
       setShowLoginModal(false);
+      notifyMustChangePasswordIfNeeded(expected, token, mustChangePassword);
 
       if (pendingNavTarget) {
         const req = getRequiredPortalRole(pendingNavTarget);
@@ -751,7 +754,7 @@ export default function Home() {
                         value={resetNewPassword}
                         onChange={(ev) => setResetNewPassword(ev.target.value)}
                         className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all text-sm"
-                        placeholder="至少 6 位"
+                        placeholder="至少 8 位，须含大写、小写字母与数字"
                       />
                     </div>
                     <button
@@ -760,6 +763,12 @@ export default function Home() {
                       onClick={async () => {
                         setResetLoading(true);
                         try {
+                          const { validatePasswordStrength, PASSWORD_POLICY_HINT } = await import('../../lib/passwordPolicy');
+                          const strength = validatePasswordStrength(resetNewPassword);
+                          if (!strength.ok) {
+                            message.warning(PASSWORD_POLICY_HINT);
+                            return;
+                          }
                           const r = await fetch('/api/auth/password-reset/confirm', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },

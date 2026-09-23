@@ -248,6 +248,9 @@ export default function SystemConfigPanel() {
   const [pwdNew, setPwdNew] = useState('');
   const [pwdConfirm, setPwdConfirm] = useState('');
   const [pwdSaving, setPwdSaving] = useState(false);
+  const [accessTtlSec, setAccessTtlSec] = useState(86400);
+  const [renewalMinIntervalSec, setRenewalMinIntervalSec] = useState(60);
+  const [sessionSaving, setSessionSaving] = useState(false);
 
   const [rtc, setRtc] = useState('{}');
 
@@ -314,6 +317,12 @@ export default function SystemConfigPanel() {
     setRtc(JSON.stringify(rtcVal ?? {}, null, 2));
     const llmVal = data.llm_gateway_config?.value;
     setLlmProviders(parseLlmProviders(llmVal));
+    const sec = (data.security?.value || {}) as Record<string, unknown>;
+    const jwtCfg = (sec.jwt && typeof sec.jwt === 'object' ? sec.jwt : {}) as Record<string, unknown>;
+    const ttl = Number(jwtCfg.accessTtlSec);
+    setAccessTtlSec(Number.isFinite(ttl) && ttl > 0 ? Math.floor(ttl) : 86400);
+    const renew = Number(jwtCfg.renewalMinIntervalSec);
+    setRenewalMinIntervalSec(Number.isFinite(renew) && renew > 0 ? Math.floor(renew) : 60);
   }, []);
 
   const loadConfig = useCallback(async () => {
@@ -337,7 +346,7 @@ export default function SystemConfigPanel() {
 
   const handleLogin = async () => {
     try {
-      const { token: t, refreshToken, user } = await loginWithApi(loginUser, loginPass);
+      const { token: t, refreshToken, user, mustChangePassword } = await loginWithApi(loginUser, loginPass);
       if (user.role !== 'admin') {
         messageApi.error('该账号不是管理员');
         return;
@@ -346,6 +355,8 @@ export default function SystemConfigPanel() {
       setToken(t);
       setLoginPass('');
       messageApi.success('登录成功');
+      const { notifyMustChangePasswordIfNeeded } = await import('../../../../lib/authApi');
+      notifyMustChangePasswordIfNeeded('admin', t, mustChangePassword);
     } catch (e) {
       messageApi.error((e as Error).message);
     }
@@ -691,8 +702,10 @@ export default function SystemConfigPanel() {
       messageApi.warning('请输入旧密码');
       return;
     }
-    if (!newPassword || newPassword.length < 6) {
-      messageApi.warning('新密码至少 6 位');
+    const { validatePasswordStrength, PASSWORD_POLICY_HINT } = await import('../../../../lib/passwordPolicy');
+    const strength = validatePasswordStrength(newPassword);
+    if (!strength.ok) {
+      messageApi.warning(PASSWORD_POLICY_HINT);
       return;
     }
     if (newPassword !== confirmPassword) {
@@ -701,11 +714,16 @@ export default function SystemConfigPanel() {
     }
     setPwdSaving(true);
     try {
-      await apiFetch('/api/admin/me/password', {
+      const j = await apiFetch('/api/admin/me/password', {
         method: 'POST',
         token,
         body: JSON.stringify({ oldPassword, newPassword, confirmPassword }),
       });
+      const payload = j.data as { token?: string; refreshToken?: string } | null;
+      if (payload?.token) {
+        setPortalToken('admin', payload.token, false, payload.refreshToken);
+        setToken(payload.token);
+      }
       messageApi.success('密码已更新');
       setPwdOld('');
       setPwdNew('');
@@ -714,6 +732,35 @@ export default function SystemConfigPanel() {
       messageApi.error((e as Error).message || '修改失败');
     } finally {
       setPwdSaving(false);
+    }
+  };
+
+  const saveSessionPolicy = async () => {
+    const ttl = Math.floor(Number(accessTtlSec));
+    const renew = Math.floor(Number(renewalMinIntervalSec));
+    if (!Number.isFinite(ttl) || ttl < 300) {
+      messageApi.warning('访问令牌有效期至少 300 秒');
+      return;
+    }
+    if (!Number.isFinite(renew) || renew < 30) {
+      messageApi.warning('续期最短间隔至少 30 秒');
+      return;
+    }
+    setSessionSaving(true);
+    try {
+      await savePatch({
+        security: {
+          jwt: {
+            accessTtlSec: ttl,
+            renewalMinIntervalSec: renew,
+            secret: '********',
+            refreshTtlSec: '********',
+            issuer: '********',
+          },
+        },
+      });
+    } finally {
+      setSessionSaving(false);
     }
   };
 
@@ -1317,42 +1364,76 @@ export default function SystemConfigPanel() {
     },
     {
       key: 'password',
-      label: '更改密码',
+      label: '安全与密码',
       forceRender: true,
       children: (
-        <div className="p-6 max-w-lg">
-          <p className="text-sm text-gray-500 mb-4">修改当前登录管理员的密码。需验证旧密码，并输入两次新密码确认。</p>
-          <Form {...formItemLayout} layout="vertical" requiredMark={false}>
-            <Form.Item label="旧密码" required>
-              <Input.Password
-                value={pwdOld}
-                onChange={(e) => setPwdOld(e.target.value)}
-                placeholder="当前登录密码"
-                autoComplete="current-password"
-              />
-            </Form.Item>
-            <Form.Item label="新密码" required extra="至少 6 位">
-              <Input.Password
-                value={pwdNew}
-                onChange={(e) => setPwdNew(e.target.value)}
-                placeholder="新密码"
-                autoComplete="new-password"
-              />
-            </Form.Item>
-            <Form.Item label="确认新密码" required>
-              <Input.Password
-                value={pwdConfirm}
-                onChange={(e) => setPwdConfirm(e.target.value)}
-                placeholder="再次输入新密码"
-                autoComplete="new-password"
-              />
-            </Form.Item>
-            <Form.Item>
-              <Button type="primary" loading={pwdSaving} onClick={() => void changeAdminPassword()}>
-                确认修改
-              </Button>
-            </Form.Item>
-          </Form>
+        <div className="p-6 max-w-lg space-y-8">
+          <div>
+            <p className="text-sm font-medium text-gray-800 mb-1">会话策略</p>
+            <p className="text-sm text-gray-500 mb-4">
+              访问令牌有效期仅以本配置为准（默认 86400 秒 = 1 天）。持续访问时按最短间隔滑动续期。
+            </p>
+            <Form {...formItemLayout} layout="vertical" requiredMark={false}>
+              <Form.Item label="访问令牌有效期（秒）" extra="建议 86400（1 天）；最小 300">
+                <Input
+                  type="number"
+                  min={300}
+                  value={accessTtlSec}
+                  onChange={(e) => setAccessTtlSec(Number(e.target.value) || 86400)}
+                />
+              </Form.Item>
+              <Form.Item label="活跃续期最短间隔（秒）" extra="同一用户续签最短间隔，防刷；建议 60">
+                <Input
+                  type="number"
+                  min={30}
+                  value={renewalMinIntervalSec}
+                  onChange={(e) => setRenewalMinIntervalSec(Number(e.target.value) || 60)}
+                />
+              </Form.Item>
+              <Form.Item>
+                <Button type="primary" loading={sessionSaving} onClick={() => void saveSessionPolicy()}>
+                  保存会话策略
+                </Button>
+              </Form.Item>
+            </Form>
+          </div>
+          <div>
+            <p className="text-sm font-medium text-gray-800 mb-1">更改密码</p>
+            <p className="text-sm text-gray-500 mb-4">
+              修改当前登录管理员的密码。新密码至少 8 位，且须包含大写、小写字母与数字。
+            </p>
+            <Form {...formItemLayout} layout="vertical" requiredMark={false}>
+              <Form.Item label="旧密码" required>
+                <Input.Password
+                  value={pwdOld}
+                  onChange={(e) => setPwdOld(e.target.value)}
+                  placeholder="当前登录密码"
+                  autoComplete="current-password"
+                />
+              </Form.Item>
+              <Form.Item label="新密码" required extra="至少 8 位，须含大写、小写字母与数字">
+                <Input.Password
+                  value={pwdNew}
+                  onChange={(e) => setPwdNew(e.target.value)}
+                  placeholder="新密码"
+                  autoComplete="new-password"
+                />
+              </Form.Item>
+              <Form.Item label="确认新密码" required>
+                <Input.Password
+                  value={pwdConfirm}
+                  onChange={(e) => setPwdConfirm(e.target.value)}
+                  placeholder="再次输入新密码"
+                  autoComplete="new-password"
+                />
+              </Form.Item>
+              <Form.Item>
+                <Button type="primary" loading={pwdSaving} onClick={() => void changeAdminPassword()}>
+                  确认修改
+                </Button>
+              </Form.Item>
+            </Form>
+          </div>
         </div>
       ),
     },

@@ -4,6 +4,7 @@ import { message } from 'antd';
 import {
   getSavedLoginForm,
   loginWithApi,
+  notifyMustChangePasswordIfNeeded,
   saveLoginForm,
   setPortalToken,
   type PortalRole,
@@ -43,10 +44,11 @@ export default function AdminLoginPage() {
     setLoginLoading(true);
     try {
       const expected = 'admin' as PortalRole;
-      const { token, refreshToken, user } = await loginWithApi(username, password);
+      const { token, refreshToken, user, mustChangePassword } = await loginWithApi(username, password);
       if (user.role !== expected) throw new Error('该账号不是管理员，请使用管理员账号登录');
       saveLoginForm(expected, { remember, username, password });
       setPortalToken(expected, token, remember, refreshToken);
+      notifyMustChangePasswordIfNeeded(expected, token, mustChangePassword);
       message.success('登录成功');
       navigate('/admin-dashboard', { replace: true });
     } catch (e: any) {

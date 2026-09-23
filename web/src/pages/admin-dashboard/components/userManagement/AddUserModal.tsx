@@ -21,11 +21,15 @@ interface AddUserModalProps {
   fixedMajorLabel?: string;
 }
 
-/** 新建/导入统一规则：学号或工号的后 6 位作为初始密码（不足 6 位则取全部） */
+/**
+ * 新建/导入/自动重置统一初始密码：`Jd` + 学号/工号后 6 位（不足左补 0）
+ * 满足口令强度：≥8、含大写/小写/数字
+ */
 export function initialPasswordFromIdNumber(idNumber: string): string {
   const s = idNumber.trim();
   if (!s) return '';
-  return s.slice(-6);
+  const tail = s.slice(-6).padStart(6, '0');
+  return `Jd${tail}`;
 }
 
 export default function AddUserModal({
@@ -335,11 +339,11 @@ export default function AddUserModal({
               {defaultPwd ? (
                 <span className="font-mono tracking-wide">{defaultPwd}</span>
               ) : (
-                <span className="text-gray-400">填写{idLabel}后自动取后 6 位</span>
+                <span className="text-gray-400">填写{idLabel}后自动生成（Jd + 后 6 位）</span>
               )}
             </div>
             <p className="text-xs text-gray-500 mt-1.5">
-              默认密码为{idLabel}后 6 位；用户首次登录后需修改密码
+              默认密码为 Jd + {idLabel}后 6 位（满足强度规则）；请告知用户妥善保管
             </p>
           </div>
 

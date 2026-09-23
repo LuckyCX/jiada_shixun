@@ -647,14 +647,14 @@ export default function BatchImportModal({
                           <li>• 每行一名教师：「学号或工号」列填写<strong>工号</strong>（与登录账号一致）</li>
                           <li>• 表头须含：<strong>姓名、学号或工号</strong>；<strong>邮箱</strong>列可整列省略；<strong>无需「角色」列</strong>，身份按本页「教师」自动写入</li>
                           <li>• 学院、专业不在 CSV 中：须先选择<strong>学院与专业</strong>；导入的教师归属该学院与专业，<strong>不与班级绑定</strong></li>
-                          <li>• 初始密码为工号<strong>后 6 位</strong>（与单个新增教师一致）</li>
+                          <li>• 初始密码为 <strong>Jd + 工号后 6 位</strong>（与单个新增教师一致，满足强度规则）</li>
                         </>
                       ) : lockedRole === 'student' ? (
                         <>
                           <li>• 每行一名学生：「学号或工号」列填写<strong>学号</strong></li>
                           <li>• 表头须含：<strong>姓名、学号或工号</strong>；<strong>邮箱</strong>可整列省略；<strong>无需「角色」列</strong>，身份按本页「学生」自动写入</li>
                           <li>• 学院、专业、班级不在 CSV 中：须先选择<strong>学院、专业与班级</strong>；学生将入所选班级</li>
-                          <li>• 初始密码为学号<strong>后 6 位</strong>（与单个新增学生一致）</li>
+                          <li>• 初始密码为 <strong>Jd + 学号后 6 位</strong>（与单个新增学生一致，满足强度规则）</li>
                         </>
                       ) : (
                         <>
@@ -662,7 +662,7 @@ export default function BatchImportModal({
                           <li>• 必填列：姓名、角色、学号或工号；邮箱可整列省略</li>
                           <li>• 学院、班级不在 CSV 中填写：请先在本页上方选择学院与班级，再下载模板或上传文件；学生将入所选班级，教师仅归属所选学院</li>
                           <li>• 若文件中包含学生，必须已选择班级；仅教师时可只选学院</li>
-                          <li>• 邮箱为选填；初始密码为学号/工号后 6 位（与单个新建一致）</li>
+                          <li>• 邮箱为选填；初始密码为 Jd + 学号/工号后 6 位（与单个新建一致）</li>
                         </>
                       )}
                       <li>• 单次最多导入 500 条数据</li>

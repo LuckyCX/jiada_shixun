@@ -66,7 +66,8 @@ function refreshStorageKeyForRole(role: PortalRole): string {
   return STUDENT_REFRESH_TOKEN_KEY;
 }
 
-function isPortalRememberMe(role: PortalRole): boolean {
+/** 当前作用域 token 是否以 Cookie「记住我」方式存储（改密续签时需保持同一存储介质） */
+export function isPortalRememberMe(role: PortalRole): boolean {
   return Boolean(getAuthCookie(storageKeyForRole(role)));
 }
 
@@ -113,13 +114,53 @@ function base64UrlDecode(s: string): string {
 }
 
 /** 客户端解析 JWT payload（不验签，仅用于展示与路由角色判断） */
-export function parseJwtPayload(token: string): { sub?: string; username?: string; role?: string; exp?: number } | null {
+export function parseJwtPayload(
+  token: string
+): { sub?: string; username?: string; role?: string; exp?: number; mustChangePassword?: boolean } | null {
   try {
     const parts = token.split('.');
     if (parts.length < 2) return null;
-    return JSON.parse(base64UrlDecode(parts[1])) as { sub?: string; username?: string; role?: string; exp?: number };
+    return JSON.parse(base64UrlDecode(parts[1])) as {
+      sub?: string;
+      username?: string;
+      role?: string;
+      exp?: number;
+      mustChangePassword?: boolean;
+    };
   } catch {
     return null;
+  }
+}
+
+export function jwtRequiresPasswordChange(token: string): boolean {
+  const p = parseJwtPayload(token);
+  return Boolean(p?.mustChangePassword);
+}
+
+type MustChangeListener = (role: PortalRole) => void;
+const mustChangeListeners = new Set<MustChangeListener>();
+
+export function onMustChangePasswordRequired(cb: MustChangeListener): () => void {
+  mustChangeListeners.add(cb);
+  return () => {
+    mustChangeListeners.delete(cb);
+  };
+}
+
+export function emitMustChangePasswordRequired(role: PortalRole): void {
+  mustChangeListeners.forEach((cb) => {
+    try {
+      cb(role);
+    } catch {
+      /* ignore */
+    }
+  });
+}
+
+/** 登录成功后若需强制改密则弹出全局弹窗 */
+export function notifyMustChangePasswordIfNeeded(role: PortalRole, token: string, flag?: boolean): void {
+  if (flag === true || jwtRequiresPasswordChange(token)) {
+    emitMustChangePasswordRequired(role);
   }
 }
 
@@ -279,6 +320,7 @@ export type LoginUser = {
 export type LoginResponse = {
   token: string;
   refreshToken?: string;
+  mustChangePassword?: boolean;
   user: LoginUser;
 };
 
@@ -389,6 +431,11 @@ export async function portalAuthenticatedFetch(
     if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
     try {
       const r = await fetch(path, { ...safeOpts, headers });
+      const renewed = r.headers.get('X-Access-Token');
+      if (renewed) {
+        const remember = isPortalRememberMe(role);
+        setPortalToken(role, renewed, remember);
+      }
       const j = await r.json().catch(() => ({ code: -1, message: '无效 JSON' }));
       return { r, j };
     } catch (e) {
@@ -417,6 +464,18 @@ export async function portalAuthenticatedFetch(
           : '登录已失效，请返回首页重新登录';
     throw new Error(typeof j.message === 'string' ? j.message : msg);
   }
+
+  // 弱口令强制改密：业务 API 40310
+  if (r.status === 403 && (j.code === 40310 || j.data?.mustChangePassword === true)) {
+    emitMustChangePasswordRequired(role);
+    const err = new Error(
+      typeof j.message === 'string' ? j.message : '密码强度过低，请修改密码后再使用系统'
+    ) as Error & { code?: number; data?: unknown };
+    err.code = typeof j.code === 'number' ? j.code : 40310;
+    if (j.data !== undefined) err.data = j.data;
+    throw err;
+  }
+
   if (!r.ok || j.code !== 0) {
     const err = new Error(typeof j.message === 'string' ? j.message : `HTTP ${r.status}`) as Error & {
       code?: number;
@@ -459,4 +518,20 @@ export async function loginWithApi(username: string, password: string): Promise<
     throw new Error('登录响应缺少 token 或用户信息');
   }
   return data;
+}
+
+/**
+ * POST /api/auth/change-password（强制改密 / 主动改密）
+ */
+export async function changePasswordWithApi(
+  role: PortalRole,
+  body: { oldPassword: string; newPassword: string; confirmPassword: string }
+): Promise<void> {
+  const data = (await portalAuthenticatedFetch(role, '/api/auth/change-password', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })) as { token?: string; refreshToken?: string } | null;
+  if (data?.token) {
+    setPortalToken(role, data.token, isPortalRememberMe(role), data.refreshToken);
+  }
 }
