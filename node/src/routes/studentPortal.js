@@ -345,7 +345,8 @@ router.get('/student/personal-class-enrollments', requireAuth(), requireStudent(
                   jsonb_build_object(
                     'moduleKey', cs.module_key,
                     'startDate', to_char(cs.start_date, 'YYYY-MM-DD'),
-                    'deadlineDate', to_char(cs.deadline_date, 'YYYY-MM-DD')
+                    'deadlineDate', to_char(cs.deadline_date, 'YYYY-MM-DD'),
+                    'skipped', CASE WHEN cs.module_key = 'team' THEN false ELSE COALESCE(cs.skipped, false) END
                   )
                   ORDER BY CASE cs.module_key
                     WHEN 'team' THEN 1

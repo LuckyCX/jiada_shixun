@@ -30,7 +30,7 @@ interface DesignTool {
   color: string;
 }
 
-const MIN_PROJECT_CONTEXT_CHARS = 100;
+const MIN_PROJECT_CONTEXT_CHARS = 30;
 
 const designTools: DesignTool[] = [
   {

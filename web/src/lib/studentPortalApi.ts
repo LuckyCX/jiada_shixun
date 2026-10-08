@@ -21,6 +21,7 @@ export type StudentPersonalEnrollment = {
     moduleKey: string;
     startDate: string;
     deadlineDate: string;
+    skipped?: boolean;
   }[];
 };
 
@@ -97,6 +98,7 @@ export async function fetchStudentPersonalEnrollments(): Promise<StudentPersonal
           moduleKey: String(setting.moduleKey || ''),
           startDate: setting.startDate || '',
           deadlineDate: setting.deadlineDate || '',
+          skipped: Boolean(setting.skipped),
         }))
       : [],
   }));

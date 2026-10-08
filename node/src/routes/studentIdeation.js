@@ -1,13 +1,32 @@
 import { Router } from 'express';
+import { randomUUID } from 'crypto';
 import { getPool } from '../lib/db.js';
 import { logError } from '../lib/logError.js';
 import { requireAuth, requireStudent, requireTeacher } from '../middleware/auth.js';
-import { chatCompletion, friendlyLlmErrorMessage, getEnabledProvider, logPromptToConsole } from '../lib/llmGateway.js';
+import {
+  buildNoThinkingExtraBody,
+  chatCompletion,
+  friendlyLlmErrorMessage,
+  getEnabledProvider,
+  logPromptToConsole,
+} from '../lib/llmGateway.js';
 import {
   getIdeationMethodPrompt,
   IDEATION_METHOD_LABELS,
   padIdeationStringList,
 } from '../lib/ideationPrompts.js';
+import {
+  HAT_STUDIO_DRAFT_KEYS,
+  HAT_STUDIO_DRAFT_LABELS,
+  HAT_STUDIO_ROUND_SYSTEM_PROMPT,
+  HAT_STUDIO_SINGLE_REPLY_SYSTEM_PROMPT,
+  buildHatStudioRoundOrder,
+  buildHatStudioRoundUserPrompt,
+  buildHatStudioSingleReplyUserPrompt,
+  parseHatStudioRoundFromLlmText,
+  parseHatStudioSingleReplyFromLlmText,
+  parseMentionedHatFromText,
+} from '../lib/ideationHatStudioPrompts.js';
 import { evaluateModulePrerequisiteForStudent } from '../lib/trainingModulePrerequisite.js';
 
 const router = Router();
@@ -284,15 +303,16 @@ function validateTopicBody(body) {
   const marketSize = normalizeText(body?.marketSize);
   const competitiveAdvantage = normalizeText(body?.competitiveAdvantage);
 
-  if (projectName.length < 5) return { error: '项目名称至少需要5个字' };
+  // 所有文本填入项统一最低 15 字；项目方向为下拉，仅校验必选
+  if (projectName.length < 15) return { error: '项目名称至少需要15个字' };
   if (!projectDirection) return { error: '请填写项目方向' };
-  if (!projectDescription) return { error: '请填写项目描述' };
-  if (coreValue.length < 20) return { error: '核心价值主张至少需要20个字' };
-  if (targetUsers.length < 10) return { error: '目标用户描述至少需要10个字' };
-  if (coreProblem.length < 50) return { error: '解决的核心问题至少需要50个字' };
-  if (solutionOverview.length < 100) return { error: '解决方案概述至少需要100个字' };
-  if (!marketSize) return { error: '请填写市场规模' };
-  if (!competitiveAdvantage) return { error: '请填写竞争优势' };
+  if (projectDescription.length < 15) return { error: '项目描述至少需要15个字' };
+  if (coreValue.length < 15) return { error: '核心价值主张至少需要15个字' };
+  if (targetUsers.length < 15) return { error: '目标用户描述至少需要15个字' };
+  if (coreProblem.length < 15) return { error: '解决的核心问题至少需要15个字' };
+  if (solutionOverview.length < 15) return { error: '解决方案概述至少需要15个字' };
+  if (marketSize.length < 15) return { error: '市场规模至少需要15个字' };
+  if (competitiveAdvantage.length < 15) return { error: '竞争优势至少需要15个字' };
 
   return {
     projectName,
@@ -721,7 +741,27 @@ router.post('/student/personal-classes/:classId/ideation/ideas/analyze', require
     const provider = await getEnabledProvider('multimodal');
     if (!prompt || !provider) return bad(req, res, 400, 40011, '未配置已启用的多模态模型');
 
-    const userPrompt = `方法：${IDEATION_METHOD_LABELS[methodKey]}\n学生原始表单：\n${JSON.stringify(formPayload, null, 2)}`;
+    // 六帽创想室：只把工作区笔记交给模型汇总，避免把拼接长文当最终创意
+    let userPrompt;
+    if (methodKey === 'six_hats') {
+      const notes = {
+        ideaTitle: String(formPayload.ideaTitle || formPayload.title || '').trim(),
+        problemInsight: String(formPayload.problemInsight || '').trim(),
+        userValue: String(formPayload.userValue || '').trim(),
+        solutionPoints: String(formPayload.solutionPoints || '').trim(),
+        riskDiff: String(formPayload.riskDiff || '').trim(),
+      };
+      const filled = Object.values(notes).filter(Boolean).length;
+      if (filled < 2) return bad(req, res, 400, 40016, '请先完善至少 2 个工作区字段，再让 AI 汇总入库');
+      userPrompt = `方法：六帽创想室
+任务：根据下列「工作区原始笔记」汇总成可入库的创业创意，并完成评分分析。
+要求：title 必须是简短创意名；description 必须是你重写的结构化概述，禁止整段复制笔记原文。
+
+工作区原始笔记：
+${JSON.stringify(notes, null, 2)}`;
+    } else {
+      userPrompt = `方法：${IDEATION_METHOD_LABELS[methodKey]}\n学生原始表单：\n${JSON.stringify(formPayload, null, 2)}`;
+    }
     logPromptToConsole(provider, prompt, userPrompt);
 
     let raw;
@@ -750,11 +790,34 @@ router.post('/student/personal-classes/:classId/ideation/ideas/analyze', require
     }
     const analysis = normalizeAnalysis(parsed);
 
-    const submittedTitle = String(formPayload.title || '').trim();
+    const submittedTitle = String(formPayload.title || formPayload.ideaTitle || '').trim();
     const submittedDescription = String(formPayload.description || formPayload.solution || '').trim();
-    const title = methodKey === 'ai' ? analysis.title : submittedTitle;
-    const description = methodKey === 'ai' ? analysis.description : submittedDescription;
+    // AI创意 / 六帽创想室：入库标题与描述一律用模型汇总结果
+    const useAiCopy = methodKey === 'ai' || methodKey === 'six_hats';
+    let title = useAiCopy ? analysis.title : submittedTitle;
+    let description = useAiCopy ? analysis.description : submittedDescription;
     if (!title || !description) return bad(req, res, 400, 40016, 'AI 未返回有效创意内容');
+    // 六帽：标题过长时截断，避免模型偶发把长笔记当成标题
+    if (methodKey === 'six_hats' && title.length > 40) {
+      title = `${title.slice(0, 40).replace(/[，。；、\s]+$/, '')}…`;
+    }
+    // 六帽入库：form_payload 保留工作区原文 + AI 汇总；列表展示用 title/description
+    const storePayload =
+      methodKey === 'six_hats'
+        ? {
+            ...formPayload,
+            workspaceNotes: {
+              ideaTitle: String(formPayload.ideaTitle || '').trim(),
+              problemInsight: String(formPayload.problemInsight || '').trim(),
+              userValue: String(formPayload.userValue || '').trim(),
+              solutionPoints: String(formPayload.solutionPoints || '').trim(),
+              riskDiff: String(formPayload.riskDiff || '').trim(),
+            },
+            aiSummarized: true,
+            title,
+            description,
+          }
+        : formPayload;
 
     const { rows } = await pool.query(
       `INSERT INTO teacher_personal_class_team_ideas
@@ -767,7 +830,7 @@ router.post('/student/personal-classes/:classId/ideation/ideas/analyze', require
         IDEATION_METHOD_LABELS[methodKey],
         title,
         description,
-        JSON.stringify(formPayload),
+        JSON.stringify(storePayload),
         JSON.stringify({
           overallScore: analysis.overallScore,
           novelty: analysis.novelty,
@@ -870,5 +933,513 @@ router.post('/student/personal-classes/:classId/ideation/discussions', requireAu
     return bad(req, res, 500, 50000, e.message);
   }
 });
+
+/* ========== 六帽创想室 ========== */
+
+const HAT_STUDIO_UPDATED_BY = {
+  white: '白帽 - 数据分析师',
+  red: '红帽 - 用户代表',
+  black: '黑帽 - 风险预警员',
+  yellow: '黄帽 - 乐观倡导者',
+  green: '绿帽 - 创意设计师',
+  blue: '蓝帽 - 项目经理',
+};
+
+function defaultHatStudioDraft() {
+  const o = {};
+  for (const k of HAT_STUDIO_DRAFT_KEYS) o[k] = { content: '', updatedBy: '' };
+  return o;
+}
+
+function coerceHatStudioDraft(j) {
+  const base = defaultHatStudioDraft();
+  if (!j || typeof j !== 'object' || Array.isArray(j)) return base;
+  for (const k of HAT_STUDIO_DRAFT_KEYS) {
+    const cell = j[k];
+    if (cell && typeof cell === 'object') {
+      base[k] = {
+        content: String(cell.content ?? ''),
+        updatedBy: String(cell.updatedBy ?? ''),
+      };
+    }
+  }
+  return base;
+}
+
+function coerceHatStudioFills(arr) {
+  if (!Array.isArray(arr)) return undefined;
+  const out = [];
+  for (const f of arr) {
+    const k = String(f?.targetModule || '').trim();
+    const c = String(f?.moduleContent || '').trim();
+    if (HAT_STUDIO_DRAFT_KEYS.includes(k) && c) out.push({ targetModule: k, moduleContent: c });
+  }
+  return out.length ? out : undefined;
+}
+
+function coerceHatStudioTranscript(j) {
+  const empty = { messages: [], roundCount: 0 };
+  if (!j || typeof j !== 'object') return empty;
+  const messages = Array.isArray(j.messages)
+    ? j.messages.map((m) => ({
+        id: String(m.id || randomUUID()),
+        hat: String(m.hat || 'white'),
+        content: String(m.content || ''),
+        targetModule: m.targetModule && HAT_STUDIO_DRAFT_KEYS.includes(m.targetModule) ? m.targetModule : null,
+        moduleContent: String(m.moduleContent || ''),
+        fills: coerceHatStudioFills(m.fills),
+        adoptedModules: Array.isArray(m.adoptedModules)
+          ? m.adoptedModules.filter((x) => HAT_STUDIO_DRAFT_KEYS.includes(x))
+          : [],
+        status:
+          m.status === 'adopted' || m.status === 'ignored' || m.status === 'guide' ? m.status : undefined,
+        roundIndex: Number(m.roundIndex || 0),
+        createdAt: String(m.createdAt || new Date().toISOString()),
+      }))
+    : [];
+  return { messages, roundCount: Number(j.roundCount || 0) };
+}
+
+function mapHatStudioMessage(m) {
+  return {
+    id: m.id,
+    hat: m.hat,
+    content: m.content,
+    targetModule: m.targetModule,
+    moduleContent: m.moduleContent,
+    fills: m.fills,
+    adoptedModules: m.adoptedModules || [],
+    status: m.status,
+    roundIndex: m.roundIndex,
+    createdAt: m.createdAt,
+  };
+}
+
+function appendHatStudioRound(transcript, roundMessages, roundIndex) {
+  const next = { ...transcript, messages: [...transcript.messages] };
+  for (const m of roundMessages) {
+    next.messages.push({
+      id: randomUUID(),
+      hat: m.hat,
+      content: m.content,
+      targetModule: m.targetModule,
+      moduleContent: m.moduleContent,
+      fills: m.fills,
+      adoptedModules: [],
+      roundIndex,
+      createdAt: new Date().toISOString(),
+    });
+  }
+  next.roundCount = roundIndex + 1;
+  return next;
+}
+
+async function runHatStudioJsonLlm(provider, system, user, options = {}) {
+  const { extraBody } = options;
+  logPromptToConsole(provider, system, user);
+  try {
+    return await chatCompletion({ provider, system, user, jsonMode: true, extraBody });
+  } catch (e) {
+    const sm = String(e?.message || '');
+    if (!/response_format|json_object|json mode/i.test(sm)) throw e;
+    return await chatCompletion({ provider, system, user, jsonMode: false, extraBody });
+  }
+}
+
+async function loadHatStudioContextText(pool, teamId) {
+  const { rows } = await pool.query(
+    `SELECT title, description, method_name
+     FROM teacher_personal_class_team_ideas
+     WHERE team_id = $1
+     ORDER BY created_at DESC
+     LIMIT 8`,
+    [teamId]
+  );
+  if (!rows.length) return '（团队创意库尚无条目，请围绕创业实训场景发散）';
+  return rows
+    .map((r, i) => `${i + 1}. [${r.method_name}] ${r.title}\n${String(r.description || '').slice(0, 200)}`)
+    .join('\n\n');
+}
+
+async function loadHatStudioMember(pool, teamId, studentId) {
+  const { rows } = await pool.query(
+    `SELECT draft_json, transcript_json
+     FROM teacher_personal_class_team_hat_studio_member
+     WHERE team_id = $1 AND student_id = $2`,
+    [teamId, studentId]
+  );
+  if (!rows.length) {
+    return { draft: defaultHatStudioDraft(), transcript: { messages: [], roundCount: 0 } };
+  }
+  return {
+    draft: coerceHatStudioDraft(rows[0].draft_json),
+    transcript: coerceHatStudioTranscript(rows[0].transcript_json),
+  };
+}
+
+async function upsertHatStudioMember(pool, teamId, studentId, draft, transcript) {
+  await pool.query(
+    `INSERT INTO teacher_personal_class_team_hat_studio_member
+       (team_id, student_id, draft_json, transcript_json, updated_at)
+     VALUES ($1, $2, $3::jsonb, $4::jsonb, now())
+     ON CONFLICT (team_id, student_id) DO UPDATE SET
+       draft_json = EXCLUDED.draft_json,
+       transcript_json = EXCLUDED.transcript_json,
+       updated_at = now()`,
+    [teamId, studentId, JSON.stringify(draft), JSON.stringify(transcript)]
+  );
+}
+
+function buildHatStudioApiPayload(draft, transcript) {
+  const filledCount = HAT_STUDIO_DRAFT_KEYS.filter((k) => String(draft[k]?.content || '').trim()).length;
+  return {
+    draft,
+    draftDefs: HAT_STUDIO_DRAFT_KEYS.map((key) => ({ key, label: HAT_STUDIO_DRAFT_LABELS[key] })),
+    transcript: {
+      messages: transcript.messages.map(mapHatStudioMessage),
+      roundCount: transcript.roundCount,
+    },
+    filledCount,
+  };
+}
+
+async function requireHatStudioTeam(req, res) {
+  const sid = studentIdFromReq(req);
+  const classId = parseId(req.params.classId);
+  if (!sid || !classId) {
+    bad(req, res, 400, 40003, '参数无效');
+    return null;
+  }
+  const pool = getPool();
+  if (!(await studentEnrolledInClass(pool, sid, classId))) {
+    bad(req, res, 403, 40301, '未加入该班级');
+    return null;
+  }
+  const team = await getConfirmedTeam(pool, sid, classId);
+  if (!team) {
+    bad(req, res, 400, 40014, '教师确认组队后可使用六帽创想室');
+    return null;
+  }
+  return { pool, sid, classId, teamId: Number(team.id) };
+}
+
+function normalizeHatStudioHat(h) {
+  const s = String(h || '').trim().toLowerCase();
+  if (['white', 'red', 'black', 'yellow', 'green', 'blue'].includes(s)) return s;
+  return parseMentionedHatFromText(`@${h}`);
+}
+
+router.get('/student/personal-classes/:classId/ideation/hat-studio', requireAuth(), requireStudent(), async (req, res) => {
+  try {
+    const ctx = await requireHatStudioTeam(req, res);
+    if (!ctx) return;
+    const state = await loadHatStudioMember(ctx.pool, ctx.teamId, ctx.sid);
+    return ok(req, res, buildHatStudioApiPayload(state.draft, state.transcript));
+  } catch (e) {
+    logError(`GET ideation hat-studio traceId=${req.traceId}`, e);
+    return bad(req, res, 500, 50000, e.message);
+  }
+});
+
+/** 生成开场引导语（开始 / 重置共用） */
+function buildHatStudioGuideMessage(studentDisplayName) {
+  const name = String(studentDisplayName || '同学').trim() || '同学';
+  return {
+    id: randomUUID(),
+    hat: 'blue',
+    content: `${name}，欢迎进入六帽创想室。请先在下方用几句话描述你的创业创意：想解决什么问题、给谁用、大致怎么做。点击「发送发言」后，六顶思考帽会基于你的内容展开引导式讨论；之后也可 @白帽/@红帽/@黑帽/@黄帽/@绿帽/@蓝帽 追问某一角色，或不 @ 继续多轮讨论。讨论中出现的要点可点「采纳/写入」到右侧创意工作区。`,
+    targetModule: null,
+    moduleContent: '',
+    adoptedModules: [],
+    status: 'guide',
+    roundIndex: 0,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+router.post(
+  '/student/personal-classes/:classId/ideation/hat-studio/debate/start',
+  requireAuth(),
+  requireStudent(),
+  async (req, res) => {
+    try {
+      const ctx = await requireHatStudioTeam(req, res);
+      if (!ctx) return;
+      const state = await loadHatStudioMember(ctx.pool, ctx.teamId, ctx.sid);
+      if (state.transcript.messages.length > 0) {
+        return bad(req, res, 400, 40021, '讨论已开始，请在下方继续发言或点击「清空重开」');
+      }
+      // 开始讨论：不立刻调模型，先插入引导语，等学生描述创意后再进入六帽引导
+      const studentDisplayName = String(req.body?.studentDisplayName || '同学').trim() || '同学';
+      const guide = buildHatStudioGuideMessage(studentDisplayName);
+      const transcript = { messages: [guide], roundCount: 0 };
+      await upsertHatStudioMember(ctx.pool, ctx.teamId, ctx.sid, state.draft, transcript);
+      return ok(req, res, {
+        roundMessages: [mapHatStudioMessage(guide)],
+        studio: buildHatStudioApiPayload(state.draft, transcript),
+        awaitingStudentIdea: true,
+      });
+    } catch (e) {
+      logError(`POST hat-studio debate/start traceId=${req.traceId}`, e);
+      return bad(req, res, 500, 50000, e.message);
+    }
+  }
+);
+
+/** 清空本轮讨论记录并重新插入引导语，便于重新开始 */
+router.post(
+  '/student/personal-classes/:classId/ideation/hat-studio/reset',
+  requireAuth(),
+  requireStudent(),
+  async (req, res) => {
+    try {
+      const ctx = await requireHatStudioTeam(req, res);
+      if (!ctx) return;
+      const state = await loadHatStudioMember(ctx.pool, ctx.teamId, ctx.sid);
+      const studentDisplayName = String(req.body?.studentDisplayName || '同学').trim() || '同学';
+      const clearDraft = req.body?.clearDraft === true;
+      const guide = buildHatStudioGuideMessage(studentDisplayName);
+      const transcript = { messages: [guide], roundCount: 0 };
+      const nextDraft = clearDraft ? defaultHatStudioDraft() : state.draft;
+      await upsertHatStudioMember(ctx.pool, ctx.teamId, ctx.sid, nextDraft, transcript);
+      return ok(req, res, {
+        roundMessages: [mapHatStudioMessage(guide)],
+        studio: buildHatStudioApiPayload(nextDraft, transcript),
+        awaitingStudentIdea: true,
+      });
+    } catch (e) {
+      logError(`POST hat-studio reset traceId=${req.traceId}`, e);
+      return bad(req, res, 500, 50000, e.message);
+    }
+  }
+);
+
+router.post(
+  '/student/personal-classes/:classId/ideation/hat-studio/debate/round',
+  requireAuth(),
+  requireStudent(),
+  async (req, res) => {
+    try {
+      const ctx = await requireHatStudioTeam(req, res);
+      if (!ctx) return;
+      const userMessage = String(req.body?.userMessage ?? '').trim();
+      if (parseMentionedHatFromText(userMessage)) {
+        return bad(req, res, 400, 40022, '已 @ 某顶帽子，请使用单帽回复接口');
+      }
+      if (!userMessage) return bad(req, res, 400, 40004, '请先描述你的创意或继续发言');
+      const state = await loadHatStudioMember(ctx.pool, ctx.teamId, ctx.sid);
+      if (!state.transcript.messages.length) {
+        return bad(req, res, 400, 40023, '请先点击开始讨论');
+      }
+
+      let transcript = { ...state.transcript, messages: [...state.transcript.messages] };
+      const transcriptStartLen = transcript.messages.length;
+      transcript.messages.push({
+        id: randomUUID(),
+        hat: 'user',
+        content: userMessage,
+        targetModule: null,
+        moduleContent: '',
+        adoptedModules: [],
+        roundIndex: transcript.roundCount,
+        createdAt: new Date().toISOString(),
+      });
+
+      const provider = await getEnabledProvider('multimodal');
+      if (!provider) return bad(req, res, 400, 40011, '未配置已启用的多模态模型');
+
+      const contextText = await loadHatStudioContextText(ctx.pool, ctx.teamId);
+      const studentDisplayName = String(req.body?.studentDisplayName || '同学').trim() || '同学';
+      const roundIndex = transcript.roundCount;
+      const hatOrder = buildHatStudioRoundOrder();
+      // 完整 transcript（含引导语 + 历史 + 本轮学生发言）传入模型，保证多轮不丢上下文
+      const user = buildHatStudioRoundUserPrompt({
+        contextText,
+        transcriptMessages: transcript.messages,
+        roundIndex,
+        hatOrder,
+        studentDisplayName,
+        draftSnapshot: state.draft,
+      });
+      const raw = await runHatStudioJsonLlm(provider, HAT_STUDIO_ROUND_SYSTEM_PROMPT, user, {
+        extraBody: buildNoThinkingExtraBody(provider),
+      });
+      const norm = parseHatStudioRoundFromLlmText(raw, hatOrder);
+      if (norm.error) return bad(req, res, 400, 40016, norm.error);
+
+      transcript = appendHatStudioRound(transcript, norm.messages, roundIndex);
+      await upsertHatStudioMember(ctx.pool, ctx.teamId, ctx.sid, state.draft, transcript);
+      const roundMessages = transcript.messages.slice(transcriptStartLen).map(mapHatStudioMessage);
+      return ok(req, res, {
+        roundMessages,
+        studio: buildHatStudioApiPayload(state.draft, transcript),
+      });
+    } catch (e) {
+      logError(`POST hat-studio debate/round traceId=${req.traceId}`, e);
+      return bad(req, res, 500, 50000, friendlyLlmErrorMessage(e));
+    }
+  }
+);
+
+router.post(
+  '/student/personal-classes/:classId/ideation/hat-studio/debate/reply',
+  requireAuth(),
+  requireStudent(),
+  async (req, res) => {
+    try {
+      const ctx = await requireHatStudioTeam(req, res);
+      if (!ctx) return;
+      const userMessage = String(req.body?.userMessage ?? '').trim();
+      if (!userMessage) return bad(req, res, 400, 40004, '请输入发言内容');
+      let mentionedHat = normalizeHatStudioHat(req.body?.hat);
+      if (!mentionedHat) mentionedHat = parseMentionedHatFromText(userMessage);
+      if (!mentionedHat) return bad(req, res, 400, 40024, '请 @ 某一顶帽子后再发言');
+
+      const state = await loadHatStudioMember(ctx.pool, ctx.teamId, ctx.sid);
+      if (!state.transcript.messages.length) {
+        return bad(req, res, 400, 40023, '请先点击开始讨论');
+      }
+
+      let transcript = { ...state.transcript, messages: [...state.transcript.messages] };
+      transcript.messages.push({
+        id: randomUUID(),
+        hat: 'user',
+        content: userMessage,
+        targetModule: null,
+        moduleContent: '',
+        adoptedModules: [],
+        roundIndex: transcript.roundCount,
+        createdAt: new Date().toISOString(),
+      });
+
+      const provider = await getEnabledProvider('multimodal');
+      if (!provider) return bad(req, res, 400, 40011, '未配置已启用的多模态模型');
+
+      const contextText = await loadHatStudioContextText(ctx.pool, ctx.teamId);
+      const studentDisplayName = String(req.body?.studentDisplayName || '同学').trim() || '同学';
+      const user = buildHatStudioSingleReplyUserPrompt({
+        contextText,
+        transcriptMessages: transcript.messages,
+        mentionedHat,
+        userMessage,
+        studentDisplayName,
+        draftSnapshot: state.draft,
+      });
+      const raw = await runHatStudioJsonLlm(provider, HAT_STUDIO_SINGLE_REPLY_SYSTEM_PROMPT, user);
+      const norm = parseHatStudioSingleReplyFromLlmText(raw, mentionedHat);
+      if (norm.error) return bad(req, res, 400, 40016, norm.error);
+
+      const reply = {
+        id: randomUUID(),
+        hat: norm.message.hat,
+        content: norm.message.content,
+        targetModule: norm.message.targetModule,
+        moduleContent: norm.message.moduleContent,
+        fills: norm.message.fills,
+        adoptedModules: [],
+        roundIndex: transcript.roundCount,
+        createdAt: new Date().toISOString(),
+      };
+      transcript.messages.push(reply);
+      await upsertHatStudioMember(ctx.pool, ctx.teamId, ctx.sid, state.draft, transcript);
+      return ok(req, res, {
+        message: mapHatStudioMessage(reply),
+        studio: buildHatStudioApiPayload(state.draft, transcript),
+      });
+    } catch (e) {
+      logError(`POST hat-studio debate/reply traceId=${req.traceId}`, e);
+      return bad(req, res, 500, 50000, friendlyLlmErrorMessage(e));
+    }
+  }
+);
+
+router.put('/student/personal-classes/:classId/ideation/hat-studio/draft', requireAuth(), requireStudent(), async (req, res) => {
+  try {
+    const ctx = await requireHatStudioTeam(req, res);
+    if (!ctx) return;
+    const moduleKey = String(req.body?.moduleKey || '').trim();
+    const content = String(req.body?.content ?? '');
+    if (!HAT_STUDIO_DRAFT_KEYS.includes(moduleKey)) {
+      return bad(req, res, 400, 40004, '无效工作区字段');
+    }
+    const state = await loadHatStudioMember(ctx.pool, ctx.teamId, ctx.sid);
+    state.draft[moduleKey] = { content, updatedBy: '学生编辑' };
+    await upsertHatStudioMember(ctx.pool, ctx.teamId, ctx.sid, state.draft, state.transcript);
+    return ok(req, res, buildHatStudioApiPayload(state.draft, state.transcript));
+  } catch (e) {
+    logError(`PUT hat-studio draft traceId=${req.traceId}`, e);
+    return bad(req, res, 500, 50000, e.message);
+  }
+});
+
+router.post(
+  '/student/personal-classes/:classId/ideation/hat-studio/messages/:messageId/adopt',
+  requireAuth(),
+  requireStudent(),
+  async (req, res) => {
+    try {
+      const ctx = await requireHatStudioTeam(req, res);
+      if (!ctx) return;
+      const messageId = String(req.params.messageId || '').trim();
+      if (!messageId) return bad(req, res, 400, 40004, '参数无效');
+
+      const state = await loadHatStudioMember(ctx.pool, ctx.teamId, ctx.sid);
+      const msg = state.transcript.messages.find((m) => m.id === messageId);
+      if (!msg) return bad(req, res, 404, 40404, '消息不存在');
+
+      // 支持学生手动选择写入字段；可传 content 覆盖（从发言正文摘选）
+      const reqKey = String(req.body?.moduleKey || '').trim();
+      const overrideContent = String(req.body?.content || '').trim();
+      let moduleKey = reqKey || msg.targetModule;
+      let moduleContent = '';
+      if (overrideContent) {
+        moduleContent = overrideContent;
+      } else if (msg.fills?.length && moduleKey) {
+        const fill = msg.fills.find((f) => f.targetModule === moduleKey);
+        moduleContent = fill?.moduleContent?.trim() || '';
+      }
+      if (!moduleContent) {
+        moduleKey = reqKey || msg.targetModule;
+        moduleContent = String(msg.moduleContent || '').trim();
+      }
+      if (!moduleContent && msg.hat !== 'user' && msg.status !== 'guide') {
+        // 无结构化要点时，允许把发言正文写入所选工作区
+        moduleContent = String(msg.content || '').trim().slice(0, 2000);
+      }
+      if (!moduleKey || !moduleContent) {
+        return bad(req, res, 400, 40025, '请选择工作区字段，或该消息暂无可写入内容');
+      }
+      if (!HAT_STUDIO_DRAFT_KEYS.includes(moduleKey)) {
+        return bad(req, res, 400, 40004, '无效工作区字段');
+      }
+
+      state.draft[moduleKey] = {
+        content: moduleContent,
+        updatedBy: HAT_STUDIO_UPDATED_BY[msg.hat] || msg.hat,
+      };
+      const adoptedModules = [...new Set([...(msg.adoptedModules || []), moduleKey])];
+      const requiredKeys =
+        msg.fills?.length > 0
+          ? msg.fills.map((f) => f.targetModule)
+          : msg.targetModule
+            ? [msg.targetModule]
+            : [];
+      const allAdopted = requiredKeys.length > 0 && requiredKeys.every((k) => adoptedModules.includes(k));
+      const transcript = {
+        ...state.transcript,
+        messages: state.transcript.messages.map((m) =>
+          m.id === messageId
+            ? { ...m, adoptedModules, status: allAdopted ? 'adopted' : m.status }
+            : m
+        ),
+      };
+      await upsertHatStudioMember(ctx.pool, ctx.teamId, ctx.sid, state.draft, transcript);
+      return ok(req, res, buildHatStudioApiPayload(state.draft, transcript));
+    } catch (e) {
+      logError(`POST hat-studio adopt traceId=${req.traceId}`, e);
+      return bad(req, res, 500, 50000, e.message);
+    }
+  }
+);
 
 export default router;

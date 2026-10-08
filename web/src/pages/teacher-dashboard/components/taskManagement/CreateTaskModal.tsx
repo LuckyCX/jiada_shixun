@@ -35,6 +35,8 @@ type Props = {
   onSuccess: () => void;
   /** 页内嵌表单，不使用 Modal */
   variant?: 'modal' | 'inline';
+  /** 可选实训模块标签；缺省为全部 TASK_MODULES */
+  availableModules?: readonly string[];
 };
 
 const MAX_ATTACH = 5;
@@ -47,6 +49,7 @@ export default function CreateTaskModal({
   onClose,
   onSuccess,
   variant = 'modal',
+  availableModules,
 }: Props) {
   const inline = variant === 'inline';
   const [form] = Form.useForm<TaskFormValues>();
@@ -57,6 +60,8 @@ export default function CreateTaskModal({
   const [pendingFiles, setPendingFiles] = useState<{ id: string; file: File }[]>([]);
   const attachSlotRef = useRef(0);
   const editMode = Boolean(taskId);
+  const moduleOptions = availableModules?.length ? availableModules : TASK_MODULES;
+  const defaultModule = moduleOptions[0] || TASK_MODULES[0];
 
   useEffect(() => {
     attachSlotRef.current = existingAttachments.length + pendingFiles.length;
@@ -97,7 +102,7 @@ export default function CreateTaskModal({
           form.setFieldsValue({
             title: '',
             description: '',
-            module: TASK_MODULES[0],
+            module: defaultModule,
             priority: 'normal',
             deadline: '',
             attachmentsEnabled: false,
@@ -114,7 +119,7 @@ export default function CreateTaskModal({
     return () => {
       cancelled = true;
     };
-  }, [open, inline, classId, taskId, editMode, form]);
+  }, [open, inline, classId, taskId, editMode, form, defaultModule]);
 
   const buildBody = (values: TaskFormValues) => ({
     title: values.title.trim(),
@@ -175,7 +180,7 @@ export default function CreateTaskModal({
         form.setFieldsValue({
           title: '',
           description: '',
-          module: TASK_MODULES[0],
+          module: defaultModule,
           priority: 'normal',
           deadline: '',
           attachmentsEnabled: false,
@@ -247,7 +252,7 @@ export default function CreateTaskModal({
         <Form form={form} layout="vertical" className={inline ? '' : 'mt-2'}>
         <Form.Item name="module" label="实训模块" rules={[{ required: true }]}>
             <Select
-              options={TASK_MODULES.map((m) => ({ value: m, label: m }))}
+              options={moduleOptions.map((m) => ({ value: m, label: m }))}
             />
           </Form.Item>
           <Form.Item name="scope" label="发布对象" rules={[{ required: true }]}>

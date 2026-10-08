@@ -34,7 +34,7 @@ import {
   formatSurveyOnlyForPrompt,
   mergeAnalysisCharts,
   formatUploadsForPrompt,
-  projectTopicTextFromRow,
+  loadProjectTopicTextForTeam,
   UPLOAD_METHODS,
 } from '../lib/marketResearchContext.js';
 import {
@@ -615,13 +615,7 @@ router.post(
       if (!planRow?.saved_at) return bad(req, res, 400, 40015, '请先保存调研计划');
       const planPayload = planPayloadFromRow(planRow, ctx.members);
       planPayload.methods = filterPlanMethods(planPayload.methods || []);
-      const { rows: topicRows } = await ctx.pool.query(
-        `SELECT project_name, project_direction, project_description, target_users, core_value,
-                core_problem, solution_overview, market_size, competitive_advantage
-         FROM teacher_personal_class_team_project_topics WHERE team_id = $1 LIMIT 1`,
-        [ctx.team.id]
-      );
-      const projectTopicText = projectTopicTextFromRow(topicRows[0]);
+      const projectTopicText = await loadProjectTopicTextForTeam(ctx.pool, ctx.team.id);
       const fullCtx = await buildMarketResearchContext(ctx.pool, ctx.team.id, UPLOAD_ROOT);
       const uploadsText = formatUploadsForPrompt(fullCtx.uploads);
       const userPrompt = buildMarketSurveyUserPrompt(planPayload, params, {
@@ -667,11 +661,14 @@ router.get(
     try {
       const ctx = await requireTeamContext(req, res);
       if (!ctx) return;
+      // collected 以答卷表实时计数为准，避免缓存字段滞后导致画像/分析页仍显示 0 份
       const { rows } = await ctx.pool.query(
-        `SELECT id, title, status, collected_count, public_slug, source, created_at, published_at, closes_at
-         FROM teacher_personal_class_team_surveys
-         WHERE team_id = $1
-         ORDER BY COALESCE(published_at, created_at) ASC, id ASC`,
+        `SELECT s.id, s.title, s.status, s.public_slug, s.source, s.created_at, s.published_at, s.closes_at,
+                (SELECT COUNT(*)::int FROM teacher_personal_class_team_survey_responses r WHERE r.survey_id = s.id)
+                  AS collected_count
+         FROM teacher_personal_class_team_surveys s
+         WHERE s.team_id = $1
+         ORDER BY COALESCE(s.published_at, s.created_at) ASC, s.id ASC`,
         [ctx.team.id]
       );
       const list = [];

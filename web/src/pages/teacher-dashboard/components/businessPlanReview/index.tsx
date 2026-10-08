@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { message } from 'antd';
 import { BusinessPlan, ReviewFormData } from './types';
-import DetailModal from './DetailModal';
 import ReviewModal from './ReviewModal';
 import type { TeacherPersonalClassRow } from '../../teacherPortalApi';
 import {
@@ -11,17 +10,23 @@ import {
 
 type BusinessPlanReviewProps = {
   personalClass: TeacherPersonalClassRow;
+  onOpenDetail: (submissionId: string) => void;
 };
 
-export default function BusinessPlanReview({ personalClass }: BusinessPlanReviewProps) {
+function stripHtmlPreview(raw: string) {
+  return String(raw || '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export default function BusinessPlanReview({ personalClass, onOpenDetail }: BusinessPlanReviewProps) {
   const classId = personalClass.id;
   const [plans, setPlans] = useState<BusinessPlan[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'approved' | 'rejected'>('all');
-  const [selectedPlan, setSelectedPlan] = useState<BusinessPlan | null>(null);
   const [reviewingPlan, setReviewingPlan] = useState<BusinessPlan | null>(null);
-  const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
   const loadPlans = useCallback(() => {
     setLoading(true);
@@ -38,18 +43,17 @@ export default function BusinessPlanReview({ personalClass }: BusinessPlanReview
     void loadPlans();
   }, [loadPlans]);
 
-  // 统计数据
   const stats = {
     total: plans.length,
-    pending: plans.filter(p => p.status === 'pending').length,
-    approved: plans.filter(p => p.status === 'approved').length,
-    rejected: plans.filter(p => p.status === 'rejected').length
+    pending: plans.filter((p) => p.status === 'pending').length,
+    approved: plans.filter((p) => p.status === 'approved').length,
+    rejected: plans.filter((p) => p.status === 'rejected').length,
   };
 
-  // 过滤计划书
-  const filteredPlans = plans.filter(plan => {
-    const matchSearch = plan.teamName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                       plan.projectName.toLowerCase().includes(searchTerm.toLowerCase());
+  const filteredPlans = plans.filter((plan) => {
+    const matchSearch =
+      plan.teamName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      plan.projectName.toLowerCase().includes(searchTerm.toLowerCase());
     const matchStatus = statusFilter === 'all' || plan.status === statusFilter;
     return matchSearch && matchStatus;
   });
@@ -59,13 +63,10 @@ export default function BusinessPlanReview({ personalClass }: BusinessPlanReview
     void reviewTeacherBusinessPlanSubmission(classId, reviewingPlan.id, data)
       .then(() => {
         setReviewingPlan(null);
-        setSelectedPlan(null);
         void loadPlans();
-        setNotification({
-          message: data.status === 'approved' ? '审核通过，该团队实训流程已结束' : '已退回，团队可重新提交',
-          type: 'success',
-        });
-        setTimeout(() => setNotification(null), 3000);
+        message.success(
+          data.status === 'approved' ? '审核通过，该团队实训流程已结束' : '已退回，团队可重新提交'
+        );
       })
       .catch((e) => {
         message.error(e instanceof Error ? e.message : '审核失败');
@@ -76,271 +77,167 @@ export default function BusinessPlanReview({ personalClass }: BusinessPlanReview
     const styles = {
       pending: 'bg-amber-100 text-amber-700 border-amber-200',
       approved: 'bg-emerald-100 text-emerald-700 border-emerald-200',
-      rejected: 'bg-rose-100 text-rose-700 border-rose-200'
+      rejected: 'bg-rose-100 text-rose-700 border-rose-200',
     };
     const labels = {
       pending: '待审核',
       approved: '已通过',
-      rejected: '已退回'
-    };
-    const icons = {
-      pending: 'ri-time-line',
-      approved: 'ri-check-line',
-      rejected: 'ri-close-line'
+      rejected: '已退回',
     };
     return (
-      <span className={`px-3 py-1 rounded-full text-sm font-medium border ${styles[status as keyof typeof styles]}`}>
-        <i className={`${icons[status as keyof typeof icons]} mr-1`}></i>
+      <span className={`px-2 py-0.5 rounded-full text-xs font-medium border ${styles[status as keyof typeof styles]}`}>
         {labels[status as keyof typeof labels]}
       </span>
     );
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-blue-50 p-6">
-      <div className="max-w-7xl mx-auto">
-        {/* 头部 */}
-        <div className="bg-gradient-to-r from-indigo-600 to-purple-600 rounded-2xl p-8 mb-6 text-white">
-          <div className="flex items-center justify-between mb-6">
-            <div>
-              <h1 className="text-3xl font-bold mb-2">商业计划书审核</h1>
-              <p className="text-indigo-100">审核团队提交的商业计划书，通过后可进入最终评价阶段</p>
-            </div>
-            <div className="w-16 h-16 bg-white/20 rounded-2xl flex items-center justify-center">
-              <i className="ri-file-list-3-line text-4xl"></i>
-            </div>
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        {[
+          { label: '总提交', value: stats.total, cls: 'text-gray-900' },
+          { label: '待审核', value: stats.pending, cls: 'text-amber-600' },
+          { label: '已通过', value: stats.approved, cls: 'text-emerald-600' },
+          { label: '已退回', value: stats.rejected, cls: 'text-rose-600' },
+        ].map((s) => (
+          <div key={s.label} className="bg-white rounded-xl border border-gray-100 px-3 py-2.5">
+            <div className="text-[11px] text-gray-500">{s.label}</div>
+            <div className={`text-lg font-semibold ${s.cls}`}>{s.value}</div>
           </div>
+        ))}
+      </div>
 
-          {/* 统计卡片 */}
-          <div className="grid grid-cols-4 gap-4">
-            <div className="bg-white/10 backdrop-blur-sm rounded-xl p-4 border border-white/20">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-indigo-100 text-sm">总提交数</span>
-                <i className="ri-file-text-line text-xl"></i>
-              </div>
-              <div className="text-3xl font-bold">{stats.total}</div>
-            </div>
-            <div className="bg-white/10 backdrop-blur-sm rounded-xl p-4 border border-white/20">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-indigo-100 text-sm">待审核</span>
-                <i className="ri-time-line text-xl"></i>
-              </div>
-              <div className="text-3xl font-bold text-amber-300">{stats.pending}</div>
-            </div>
-            <div className="bg-white/10 backdrop-blur-sm rounded-xl p-4 border border-white/20">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-indigo-100 text-sm">已通过</span>
-                <i className="ri-check-line text-xl"></i>
-              </div>
-              <div className="text-3xl font-bold text-emerald-300">{stats.approved}</div>
-            </div>
-            <div className="bg-white/10 backdrop-blur-sm rounded-xl p-4 border border-white/20">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-indigo-100 text-sm">已退回</span>
-                <i className="ri-close-line text-xl"></i>
-              </div>
-              <div className="text-3xl font-bold text-rose-300">{stats.rejected}</div>
-            </div>
+      <div className="bg-white rounded-xl border border-gray-100 p-3">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+          <div className="flex-1 relative">
+            <i className="ri-search-line absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm" />
+            <input
+              type="text"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder="搜索团队或项目…"
+              className="w-full pl-9 pr-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent"
+            />
           </div>
-        </div>
-
-        {/* 搜索和筛选 */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-6">
-          <div className="flex items-center gap-4">
-            <div className="flex-1 relative">
-              <i className="ri-search-line absolute left-4 top-1/2 -translate-y-1/2 text-gray-400"></i>
-              <input
-                type="text"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="搜索团队名称或项目名称..."
-                className="w-full pl-11 pr-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-              />
-            </div>
-            <div className="flex gap-2">
+          <div className="flex gap-1.5 flex-wrap">
+            {(
+              [
+                { key: 'all', label: '全部' },
+                { key: 'pending', label: '待审核' },
+                { key: 'approved', label: '已通过' },
+                { key: 'rejected', label: '已退回' },
+              ] as const
+            ).map((f) => (
               <button
-                onClick={() => setStatusFilter('all')}
-                className={`px-4 py-2.5 rounded-lg font-medium transition-all whitespace-nowrap ${
-                  statusFilter === 'all'
-                    ? 'bg-indigo-600 text-white'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                key={f.key}
+                type="button"
+                onClick={() => setStatusFilter(f.key)}
+                className={`px-2.5 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap cursor-pointer ${
+                  statusFilter === f.key
+                    ? 'bg-teal-500 text-white'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                 }`}
               >
-                全部
+                {f.label}
               </button>
-              <button
-                onClick={() => setStatusFilter('pending')}
-                className={`px-4 py-2.5 rounded-lg font-medium transition-all whitespace-nowrap ${
-                  statusFilter === 'pending'
-                    ? 'bg-amber-500 text-white'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
-              >
-                待审核
-              </button>
-              <button
-                onClick={() => setStatusFilter('approved')}
-                className={`px-4 py-2.5 rounded-lg font-medium transition-all whitespace-nowrap ${
-                  statusFilter === 'approved'
-                    ? 'bg-emerald-500 text-white'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
-              >
-                已通过
-              </button>
-              <button
-                onClick={() => setStatusFilter('rejected')}
-                className={`px-4 py-2.5 rounded-lg font-medium transition-all whitespace-nowrap ${
-                  statusFilter === 'rejected'
-                    ? 'bg-rose-500 text-white'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
-              >
-                已退回
-              </button>
-            </div>
+            ))}
           </div>
-        </div>
-
-        {/* 计划书列表 */}
-        <div className="space-y-4">
-          {loading ? (
-            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-12 text-center text-gray-500 text-sm">
-              加载中…
-            </div>
-          ) : filteredPlans.length === 0 ? (
-            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-12 text-center">
-              <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                <i className="ri-file-list-3-line text-4xl text-gray-400"></i>
-              </div>
-              <p className="text-gray-500 text-lg">暂无符合条件的商业计划书</p>
-            </div>
-          ) : (
-            filteredPlans.map((plan) => (
-              <div
-                key={plan.id}
-                className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 hover:shadow-md transition-all"
-              >
-                <div className="flex items-start gap-6">
-                  {/* 左侧图标 */}
-                  <div className="w-16 h-16 bg-gradient-to-br from-indigo-500 to-purple-500 rounded-xl flex items-center justify-center text-white flex-shrink-0">
-                    <i className="ri-file-text-line text-3xl"></i>
-                  </div>
-
-                  {/* 中间内容 */}
-                  <div className="flex-1">
-                    <div className="flex items-start justify-between mb-3">
-                      <div>
-                        <h3 className="text-xl font-bold text-gray-900 mb-2">{plan.projectName}</h3>
-                        <div className="flex items-center gap-4 text-sm text-gray-600">
-                          <span className="flex items-center gap-1">
-                            <i className="ri-team-line"></i>
-                            {plan.teamName}
-                          </span>
-                          <span className="flex items-center gap-1">
-                            <i className="ri-time-line"></i>
-                            提交时间：{plan.submitTime}
-                          </span>
-                        </div>
-                      </div>
-                      {getStatusBadge(plan.status)}
-                    </div>
-
-                    <p className="text-gray-700 leading-relaxed mb-4 line-clamp-2">
-                      {plan.executiveSummary}
-                    </p>
-
-                    {/* 审核记录 */}
-                    {plan.status !== 'pending' && plan.reviewComment && (
-                      <div className="bg-gray-50 rounded-lg p-4 mb-4">
-                        <div className="flex items-start gap-2 mb-2">
-                          <i className="ri-chat-check-line text-indigo-600 mt-0.5"></i>
-                          <div className="flex-1">
-                            <div className="font-medium text-gray-900 mb-1">审核意见</div>
-                            <p className="text-sm text-gray-700 line-clamp-2">{plan.reviewComment}</p>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-4 text-xs text-gray-500 mt-2">
-                          <span>审核人：{plan.reviewer}</span>
-                          <span>审核时间：{plan.reviewTime}</span>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* 操作按钮 */}
-                    <div className="flex items-center gap-3">
-                      <button
-                        onClick={() => setSelectedPlan(plan)}
-                        className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors whitespace-nowrap"
-                      >
-                        <i className="ri-eye-line mr-1"></i>
-                        查看详情
-                      </button>
-                      {plan.status === 'pending' && (
-                        <button
-                          onClick={() => setReviewingPlan(plan)}
-                          className="px-4 py-2 bg-gradient-to-r from-emerald-500 to-teal-500 text-white rounded-lg text-sm font-medium hover:shadow-lg transition-all whitespace-nowrap"
-                        >
-                          <i className="ri-check-line mr-1"></i>
-                          开始审核
-                        </button>
-                      )}
-                      {plan.status === 'rejected' && (
-                        <button
-                          onClick={() => setReviewingPlan(plan)}
-                          className="px-4 py-2 bg-amber-500 text-white rounded-lg text-sm font-medium hover:bg-amber-600 transition-colors whitespace-nowrap"
-                        >
-                          <i className="ri-refresh-line mr-1"></i>
-                          重新审核
-                        </button>
-                      )}
-                     
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ))
-          )}
         </div>
       </div>
 
-      {/* 详情弹窗 */}
-      {selectedPlan && (
-        <DetailModal
-          plan={selectedPlan}
-          onClose={() => setSelectedPlan(null)}
-          onReview={() => {
-            setReviewingPlan(selectedPlan);
-            setSelectedPlan(null);
-          }}
-        />
-      )}
+      <div className="space-y-2.5">
+        {loading ? (
+          <div className="bg-white rounded-xl border border-gray-100 py-10 text-center text-sm text-gray-400">
+            加载中…
+          </div>
+        ) : filteredPlans.length === 0 ? (
+          <div className="bg-white rounded-xl border border-dashed border-gray-200 py-10 text-center text-sm text-gray-400">
+            暂无符合条件的商业计划书
+          </div>
+        ) : (
+          filteredPlans.map((plan) => (
+            <div
+              key={plan.id}
+              className="bg-white rounded-xl border border-gray-100 p-3 md:p-4 hover:border-teal-200 transition-colors"
+            >
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 bg-teal-50 text-teal-600 rounded-lg flex items-center justify-center shrink-0">
+                  <i className="ri-file-text-line text-lg" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-start justify-between gap-2 mb-1">
+                    <h3 className="text-sm md:text-base font-semibold text-gray-900 truncate">
+                      {plan.projectName}
+                    </h3>
+                    {getStatusBadge(plan.status)}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-gray-500 mb-2">
+                    <span>{plan.teamName}</span>
+                    <span>提交于 {plan.submitTime}</span>
+                    {plan.totalScore != null ? (
+                      <span className="text-teal-600 font-medium">总分 {plan.totalScore}</span>
+                    ) : null}
+                  </div>
+                  <p className="text-xs md:text-sm text-gray-600 line-clamp-2 mb-2.5">
+                    {stripHtmlPreview(
+                      (plan.sections || []).map((s) => s.content).find((c) => stripHtmlPreview(c)) ||
+                        plan.fullText ||
+                        plan.executiveSummary ||
+                        ''
+                    ) || '（暂无正文预览）'}
+                  </p>
+                  {plan.status !== 'pending' && (plan.reviewComment || plan.totalScore != null) ? (
+                    <div className="bg-gray-50 rounded-lg px-2.5 py-2 mb-2.5 text-xs text-gray-600">
+                      {plan.totalScore != null ? (
+                        <div className="font-medium text-teal-700 mb-0.5">总分：{plan.totalScore}</div>
+                      ) : null}
+                      {plan.reviewComment ? (
+                        <p className="line-clamp-2 m-0">{plan.reviewComment}</p>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => onOpenDetail(String(plan.id))}
+                      className="px-2.5 py-1.5 bg-teal-500 text-white rounded-lg text-xs font-medium hover:bg-teal-600 cursor-pointer whitespace-nowrap"
+                    >
+                      查看详情
+                    </button>
+                    {plan.status === 'pending' ? (
+                      <button
+                        type="button"
+                        onClick={() => setReviewingPlan(plan)}
+                        className="px-2.5 py-1.5 bg-emerald-500 text-white rounded-lg text-xs font-medium hover:bg-emerald-600 cursor-pointer whitespace-nowrap"
+                      >
+                        开始审核
+                      </button>
+                    ) : null}
+                    {plan.status === 'rejected' ? (
+                      <button
+                        type="button"
+                        onClick={() => setReviewingPlan(plan)}
+                        className="px-2.5 py-1.5 bg-amber-500 text-white rounded-lg text-xs font-medium hover:bg-amber-600 cursor-pointer whitespace-nowrap"
+                      >
+                        重新审核
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
 
-      {/* 审核弹窗 */}
-      {reviewingPlan && (
+      {reviewingPlan ? (
         <ReviewModal
           planName={reviewingPlan.projectName}
           teamName={reviewingPlan.teamName}
           onClose={() => setReviewingPlan(null)}
           onSubmit={handleReviewSubmit}
         />
-      )}
-
-      {/* 通知提示 */}
-      {notification && (
-        <div className="fixed bottom-6 right-6 z-50 animate-slide-up">
-          <div className={`px-6 py-4 rounded-xl shadow-lg flex items-center gap-3 ${
-            notification.type === 'success'
-              ? 'bg-emerald-500 text-white'
-              : 'bg-rose-500 text-white'
-          }`}>
-            <i className={`text-2xl ${
-              notification.type === 'success' ? 'ri-check-line' : 'ri-error-warning-line'
-            }`}></i>
-            <span className="font-medium">{notification.message}</span>
-          </div>
-        </div>
-      )}
+      ) : null}
     </div>
   );
 }

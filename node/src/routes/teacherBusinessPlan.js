@@ -6,7 +6,8 @@ import { getPool } from '../lib/db.js';
 import { logError } from '../lib/logError.js';
 import { normalizeUploadFileName } from '../lib/uploadFileName.js';
 import { requireAuth, requireTeacher } from '../middleware/auth.js';
-import { coerceSections, sectionsToFullText } from '../lib/businessPlanSections.js';
+import { coerceCover, coerceSections, sectionsToFullText } from '../lib/businessPlanSections.js';
+import { BUSINESS_PLAN_RUBRIC_DIMENSIONS, normalizeRubricScores } from '../lib/businessPlanRubric.js';
 
 const router = Router();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -66,14 +67,17 @@ async function loadSubmissionAttachments(pool, submissionId, classId) {
 
 async function mapSubmissionRow(pool, classId, row) {
   const sections = coerceSections(row.sections_json);
+  const cover = coerceCover(row.cover_json);
   const full = sectionsToFullText(sections);
   const submissionId = String(row.submission_id);
   const attach = await loadSubmissionAttachments(pool, submissionId, classId);
+  const scoreJson = row.score_json && typeof row.score_json === 'object' ? row.score_json : {};
+  const coverProject = String(cover.projectName || '').trim();
   return {
     id: submissionId,
     teamId: String(row.team_id),
     teamName: String(row.team_name || ''),
-    projectName: String(row.project_name || row.team_name || ''),
+    projectName: coverProject || String(row.project_name || row.team_name || ''),
     submitTime: row.submitted_at ? new Date(row.submitted_at).toLocaleString('zh-CN') : '',
     status: row.status,
     reviewComment: String(row.review_comment || ''),
@@ -91,6 +95,11 @@ async function mapSubmissionRow(pool, classId, row) {
     riskAnalysis: '',
     fullText: full,
     sections,
+    cover,
+    scores: scoreJson,
+    totalScore:
+      row.total_score != null && Number.isFinite(Number(row.total_score)) ? Number(row.total_score) : null,
+    rubric: BUSINESS_PLAN_RUBRIC_DIMENSIONS,
     pptUrl: attach.pptUrl || '',
     attachments: attach.attachments,
   };
@@ -133,8 +142,9 @@ router.get(
       }
       const { rows } = await pool.query(
         `SELECT s.id AS submission_id, s.team_id, s.status, s.submitted_at, s.review_comment, s.reviewed_at,
+                s.score_json, s.total_score,
                 t.name AS team_name,
-                v.version_no, v.summary AS version_summary, v.sections_json,
+                v.version_no, v.summary AS version_summary, v.sections_json, v.cover_json,
                 tp.project_name,
                 COALESCE(tr.real_name, tr.username) AS reviewer_name
          FROM teacher_personal_class_team_business_plan_submissions s
@@ -206,6 +216,9 @@ router.post(
         return bad(req, res, 400, 40002, '审核状态无效');
       }
       const comment = String(req.body?.comment || '').trim();
+      if (!comment) return bad(req, res, 400, 40005, '请填写审核意见');
+      const scored = normalizeRubricScores(req.body?.scores);
+      if (scored.error) return bad(req, res, 400, 40006, scored.error);
       const pool = getPool();
       if (!(await ownsPersonalClass(pool, teacherId, classId))) {
         return bad(req, res, 404, 40401, '班级不存在');
@@ -221,14 +234,16 @@ router.post(
       }
       await pool.query(
         `UPDATE teacher_personal_class_team_business_plan_submissions
-         SET status = $2, review_comment = $3, reviewed_by = $4, reviewed_at = now()
+         SET status = $2, review_comment = $3, score_json = $4::jsonb, total_score = $5,
+             reviewed_by = $6, reviewed_at = now()
          WHERE id = $1`,
-        [submissionId, status, comment, teacherId]
+        [submissionId, status, comment, JSON.stringify(scored.scores), scored.totalScore, teacherId]
       );
       const { rows: detail } = await pool.query(
         `SELECT s.id AS submission_id, s.team_id, s.status, s.submitted_at, s.review_comment, s.reviewed_at,
+                s.score_json, s.total_score,
                 t.name AS team_name,
-                v.version_no, v.summary AS version_summary, v.sections_json,
+                v.version_no, v.summary AS version_summary, v.sections_json, v.cover_json,
                 tp.project_name,
                 COALESCE(tr.real_name, tr.username) AS reviewer_name
          FROM teacher_personal_class_team_business_plan_submissions s

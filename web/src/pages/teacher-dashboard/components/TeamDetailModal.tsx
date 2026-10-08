@@ -13,16 +13,18 @@ interface TeamDetailModalProps {
   team: TeamProject;
   onClose: () => void;
   onIntervene: (team: TeamProject) => void;
+  /** 启用的实训 moduleKey；缺省显示全部 */
+  enabledModuleKeys?: string[];
 }
 
 const stages = [
-  { id: 'teamFormation', name: '组队与团队管理', icon: 'ri-team-line', color: 'from-purple-500 to-pink-500' },
-  { id: 'ideation', name: '创新思维与创意生成', icon: 'ri-lightbulb-line', color: 'from-yellow-500 to-orange-500' },
-  { id: 'marketResearch', name: '市场调研与用户画像', icon: 'ri-search-line', color: 'from-teal-500 to-cyan-500' },
-  { id: 'productDesign', name: '产品设计与原型', icon: 'ri-pencil-ruler-2-line', color: 'from-green-500 to-emerald-500' },
-  { id: 'businessModel', name: '商业模式设计', icon: 'ri-bar-chart-box-line', color: 'from-indigo-500 to-purple-500' },
-  { id: 'roleSimulation', name: '项目仿真与角色推荐', icon: 'ri-user-star-line', color: 'from-orange-500 to-red-500' },
-  { id: 'businessPlan', name: '商业计划书与PPT', icon: 'ri-file-text-line', color: 'from-cyan-500 to-teal-500' },
+  { id: 'teamFormation', moduleKey: 'team', name: '组队与团队管理', icon: 'ri-team-line', color: 'from-purple-500 to-pink-500' },
+  { id: 'ideation', moduleKey: 'ideation', name: '创新思维与创意生成', icon: 'ri-lightbulb-line', color: 'from-yellow-500 to-orange-500' },
+  { id: 'marketResearch', moduleKey: 'market', name: '市场调研与用户画像', icon: 'ri-search-line', color: 'from-teal-500 to-cyan-500' },
+  { id: 'productDesign', moduleKey: 'product', name: '产品设计与原型', icon: 'ri-pencil-ruler-2-line', color: 'from-green-500 to-emerald-500' },
+  { id: 'businessModel', moduleKey: 'business', name: '商业模式设计', icon: 'ri-bar-chart-box-line', color: 'from-indigo-500 to-purple-500' },
+  { id: 'roleSimulation', moduleKey: 'simulation', name: '项目仿真与角色推荐', icon: 'ri-user-star-line', color: 'from-orange-500 to-red-500' },
+  { id: 'businessPlan', moduleKey: 'plan', name: '商业计划书与PPT', icon: 'ri-file-text-line', color: 'from-cyan-500 to-teal-500' },
 ];
 
 const statusLabel = { 'on-track': '正常', 'at-risk': '预警', 'delayed': '严重滞后' };
@@ -68,11 +70,38 @@ const BMC_PREVIEW_FIELDS: { key: string; label: string }[] = [
   { key: 'revenueStreams', label: '收入来源' },
 ];
 
-export default function TeamDetailModal({ classId, team, onClose, onIntervene }: TeamDetailModalProps) {
+export default function TeamDetailModal({
+  classId,
+  team,
+  onClose,
+  onIntervene,
+  enabledModuleKeys,
+}: TeamDetailModalProps) {
   const [activeTab, setActiveTab] = useState<'overview' | 'submissions'>('overview');
   const [submissions, setSubmissions] = useState<TeacherMonitorSubmissionItem[]>([]);
   const [submissionsLoading, setSubmissionsLoading] = useState(false);
   const [preview, setPreview] = useState<TeacherMonitorSubmissionItem | null>(null);
+
+  const visibleStages = enabledModuleKeys?.length
+    ? stages.filter((s) => enabledModuleKeys.includes(s.moduleKey))
+    : stages;
+
+  const stageKeyToModule: Record<string, string> = {
+    teamFormation: 'team',
+    ideation: 'ideation',
+    marketResearch: 'market',
+    productDesign: 'product',
+    businessModel: 'business',
+    roleSimulation: 'simulation',
+    businessPlan: 'plan',
+  };
+
+  const visibleSubmissions = enabledModuleKeys?.length
+    ? submissions.filter((s) => {
+        const mk = stageKeyToModule[s.stageKey];
+        return !mk || enabledModuleKeys.includes(mk);
+      })
+    : submissions;
 
   const downloadWithAuth = async (downloadUrl: string, filename: string) => {
     const token = getPortalToken('teacher');
@@ -386,7 +415,7 @@ export default function TeamDetailModal({ classId, team, onClose, onIntervene }:
                   <i className="ri-map-pin-line text-teal-500"></i>各阶段完成情况
                 </h3>
                 <div className="space-y-2.5">
-                  {stages.map(stage => {
+                  {visibleStages.map(stage => {
                     const prog = team.stageProgress[stage.id as keyof typeof team.stageProgress];
                     const isDone = prog === 100;
                     const isActive = prog > 0 && prog < 100;
@@ -459,7 +488,7 @@ export default function TeamDetailModal({ classId, team, onClose, onIntervene }:
             <div className="space-y-4">
               {submissionsLoading ? (
                 <div className="text-center py-12 text-gray-500 text-sm">加载中…</div>
-              ) : submissions.length === 0 ? (
+              ) : visibleSubmissions.length === 0 ? (
                 <div className="text-center py-12">
                   <div className="w-16 h-16 mx-auto mb-4 bg-gray-100 rounded-2xl flex items-center justify-center">
                     <i className="ri-file-list-3-line text-3xl text-gray-400"></i>
@@ -467,7 +496,7 @@ export default function TeamDetailModal({ classId, team, onClose, onIntervene }:
                   <p className="text-gray-500 text-sm">暂无提交记录</p>
                 </div>
               ) : (
-                submissions.map((submission) => (
+                visibleSubmissions.map((submission) => (
                   <div key={submission.id} className="border border-gray-200 rounded-xl p-5 hover:shadow-md transition-all">
                     {/* 提交头部 */}
                     <div className="flex items-start justify-between mb-3">

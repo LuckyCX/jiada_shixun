@@ -224,6 +224,11 @@ const RoleSimulationModule = ({ classId, onTaskComplete, trainingEnded = false }
   const [activeMemberId, setActiveMemberId] = useState<string>('');
   const [memberRecords, setMemberRecords] = useState<any>(null);
   const [memberRecordsLoading, setMemberRecordsLoading] = useState(false);
+  /** 环节达标进度：个人有效轮次 / 3，全员达标才算完成 */
+  const [qualifyProgress, setQualifyProgress] = useState<{
+    myEffective: number;
+    teamQualified: boolean;
+  }>({ myEffective: 0, teamQualified: false });
 
   useEffect(() => {
     return () => {
@@ -264,12 +269,28 @@ const RoleSimulationModule = ({ classId, onTaskComplete, trainingEnded = false }
       try {
         setEntryLoading(true);
         setEntryError('');
-        const { fetchRoleSimulationEntry } = await import('../../../lib/roleSimulationApi');
+        const { fetchRoleSimulationEntry, fetchRoleSimulationRecords } = await import(
+          '../../../lib/roleSimulationApi'
+        );
         const entry = await fetchRoleSimulationEntry(classId);
         if (!mounted) return;
         setEntryAllowed(Boolean(entry.allowed));
         setPrerequisiteModuleKey(String(entry.prerequisiteModuleKey || ''));
         if (!entry.allowed && entry.summary) setEntryError(entry.summary);
+        // 同步个人有效轮次，避免「做了 2 次却像 0 进度」
+        try {
+          const token = getPortalToken('student');
+          const sid = token ? String(parseJwtPayload(token)?.sub || '') : '';
+          const rec = await fetchRoleSimulationRecords(classId);
+          if (!mounted) return;
+          const mine = (rec.progress || []).find((p) => String(p.studentId) === sid);
+          setQualifyProgress({
+            myEffective: Math.max(0, Number(mine?.effectiveRounds || 0)),
+            teamQualified: Boolean(rec.teamQualified),
+          });
+        } catch {
+          /* 进度条失败不阻断进入仿真 */
+        }
       } catch (e: any) {
         if (!mounted) return;
         setEntryAllowed(false);
@@ -456,6 +477,22 @@ const RoleSimulationModule = ({ classId, onTaskComplete, trainingEnded = false }
                 tracking: data?.tracking || {},
                 optimize: data?.optimize || {},
               });
+              // 刷新达标进度（有效轮次）
+              void (async () => {
+                try {
+                  const token = getPortalToken('student');
+                  const sid = token ? String(parseJwtPayload(token)?.sub || '') : '';
+                  const { fetchRoleSimulationRecords } = await import('../../../lib/roleSimulationApi');
+                  const rec = await fetchRoleSimulationRecords(classId);
+                  const mine = (rec.progress || []).find((p) => String(p.studentId) === sid);
+                  setQualifyProgress({
+                    myEffective: Math.max(0, Number(mine?.effectiveRounds || 0)),
+                    teamQualified: Boolean(rec.teamQualified),
+                  });
+                } catch {
+                  /* ignore */
+                }
+              })();
               onTaskComplete?.();
               return;
             }
@@ -591,8 +628,29 @@ const RoleSimulationModule = ({ classId, onTaskComplete, trainingEnded = false }
 
   const totalChannel = config.channels.social + config.channels.search + config.channels.offline;
 
+  const QUALIFY_ROUNDS = 3;
+  const myShown = Math.min(QUALIFY_ROUNDS, qualifyProgress.myEffective);
+  const myPct = Math.round((myShown / QUALIFY_ROUNDS) * 100);
+
   return (
     <div className="space-y-6">
+      {/* 达标进度：有效轮次 = max(run_index)，需每人 ≥ 3 轮 */}
+      <div className="bg-white border border-emerald-100 rounded-xl p-4">
+        <div className="flex items-center justify-between gap-3 mb-2">
+          <div>
+            <p className="text-sm font-semibold text-gray-900">环节达标进度</p>
+            <p className="text-xs text-gray-500 mt-0.5">
+              个人有效模拟 {myShown}/{QUALIFY_ROUNDS} 轮
+              {qualifyProgress.teamQualified ? ' · 全员已达标' : ' · 全员各满 3 轮后本环节完成'}
+            </p>
+          </div>
+          <span className="text-lg font-bold text-emerald-600">{myPct}%</span>
+        </div>
+        <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+          <div className="h-full bg-emerald-500 rounded-full transition-all" style={{ width: `${myPct}%` }} />
+        </div>
+      </div>
+
       {/* 步骤导航 */}
       <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-xl p-4">
         {[

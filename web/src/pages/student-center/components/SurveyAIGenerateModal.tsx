@@ -27,7 +27,8 @@ export default function SurveyAIGenerateModal({
   onClose,
   onCreated,
 }: Props) {
-  const [questionCount, setQuestionCount] = useState(12);
+  // 最少 4 道（含数据分析所需的 4 道统计维度题），最多 20 道
+  const [questionCount, setQuestionCount] = useState(8);
   const [includeTypes, setIncludeTypes] = useState<SurveyQuestionType[]>(['单选', '多选', '评分', '填空']);
   const [generating, setGenerating] = useState(false);
   const [title, setTitle] = useState('');
@@ -126,7 +127,14 @@ export default function SurveyAIGenerateModal({
         <div className="space-y-4">
           <div>
             <div className="text-sm font-medium mb-1">题目数量</div>
-            <InputNumber min={10} max={20} value={questionCount} onChange={(v) => setQuestionCount(Number(v) || 10)} className="w-full" />
+            <InputNumber
+              min={4}
+              max={20}
+              value={questionCount}
+              onChange={(v) => setQuestionCount(Math.min(20, Math.max(4, Number(v) || 4)))}
+              className="w-full"
+            />
+            <p className="text-xs text-gray-500 mt-1 mb-0">至少 4 道（含年龄/消费/满意度/改进等统计维度题）</p>
           </div>
           <div>
             <div className="text-sm font-medium mb-2">包含题型</div>

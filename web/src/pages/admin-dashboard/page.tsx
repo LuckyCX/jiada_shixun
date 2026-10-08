@@ -12,6 +12,7 @@ import CourseResourceManagement from './components/courseResource';
 
 import SystemConfig from './components/systemConfig';
 import DictTypeManage from './components/dictionary/DictTypeManage';
+import AiTutorAdmin from './components/aiTutor/AiTutorAdmin';
 import DictItemManage from './components/dictionary/DictItemManage';
 import AdminUsersPanel from './components/userManagement/AdminUsersPanel';
 import { clearAdminToken, getPortalToken, redirectAdminSessionExpired } from '../../lib/authApi';
@@ -26,7 +27,8 @@ type TabType =
   | 'operation-log'
   | 'system-config'
   | 'dictionary'
-  | 'dictionary-items';
+  | 'dictionary-items'
+  | 'ai-model';
 
 const TAB_WHITELIST: TabType[] = [
   'overview',
@@ -39,6 +41,7 @@ const TAB_WHITELIST: TabType[] = [
   'system-config',
   'dictionary',
   'dictionary-items',
+  'ai-model',
 ];
 
 export default function AdminDashboard() {
@@ -158,6 +161,7 @@ export default function AdminDashboard() {
     { id: 'class-management' as TabType, label: '班级管理', icon: 'ri-team-line' },
     { id: 'dictionary' as TabType, label: '字典管理', icon: 'ri-booklet-line' },
     { id: 'system-config' as TabType, label: '系统配置', icon: 'ri-settings-3-line' },
+    { id: 'ai-model' as TabType, label: 'AI 模型', icon: 'ri-robot-2-line' },
     { id: 'operation-log' as TabType, label: '操作日志', icon: 'ri-history-line' },
   ];
 
@@ -363,6 +367,7 @@ export default function AdminDashboard() {
           {activeTab === 'course-resource' && <CourseResourceManagement />}
           {activeTab === 'operation-log' && <OperationLog />}
           {activeTab === 'system-config' && <SystemConfig />}
+          {activeTab === 'ai-model' && <AiTutorAdmin />}
           {activeTab === 'dictionary' && <DictTypeManage />}
           {activeTab === 'dictionary-items' &&
             Number.isFinite(dictionaryItemsTypeId) &&

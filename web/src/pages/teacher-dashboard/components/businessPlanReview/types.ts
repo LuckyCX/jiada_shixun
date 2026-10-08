@@ -8,7 +8,9 @@ export interface BusinessPlan {
   reviewComment?: string;
   reviewTime?: string;
   reviewer?: string;
-  
+  scores?: Record<string, number>;
+  totalScore?: number | null;
+
   // 商业计划书内容
   executiveSummary: string;
   marketAnalysis: string;
@@ -22,7 +24,14 @@ export interface BusinessPlan {
   /** 动态章节（后端返回） */
   sections?: Array<{ key: string; title: string; content: string }>;
   fullText?: string;
-  
+  cover?: {
+    projectName?: string;
+    leader?: string;
+    members?: string[];
+    collegeClass?: string;
+    advisor?: string;
+  };
+
   // 附件
   pptUrl?: string;
   attachments?: Array<{
@@ -35,4 +44,5 @@ export interface BusinessPlan {
 export interface ReviewFormData {
   status: 'approved' | 'rejected';
   comment: string;
+  scores: Record<string, number>;
 }

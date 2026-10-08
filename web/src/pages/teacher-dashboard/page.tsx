@@ -1,12 +1,13 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
+import AiTutorPanel from '../../components/AiTutorPanel';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Dropdown, Drawer, Upload, message as antdMessage, Button } from 'antd';
 import { clearPortalToken, getPortalToken, parseJwtPayload } from '../../lib/authApi';
 import ProfileContactPanels from '../../components/ProfileContactPanels';
 import { useSiteBrand } from '../../lib/publicSite';
 import TeamCard, { TeamProject } from './components/TeamCard';
-import TeamDetailModal from './components/TeamDetailModal';
 import BatchScoringModal from './components/BatchScoringModal';
+import TeamWorkspacePage from './components/teamWorkspace/TeamWorkspacePage';
 import StatsPanel from './components/StatsPanel';
 import GuidanceToolPanel from './components/GuidanceToolPanel';
 import LearningAnalysisPanel from './components/LearningAnalysisPanel';
@@ -17,6 +18,7 @@ import TeamReview from './components/teamReview';
 import TeamQuestionsPresetPage from './components/teamReview/TeamQuestionsPresetPage';
 import TopicReview from './components/topicReview';
 import BusinessPlanReview from './components/businessPlanReview';
+import BusinessPlanDetailPage from './components/businessPlanReview/DetailPage';
 import ClassProjectOverview from '../class-project-overview/page';
 import TeacherGuide from '../teacher-guide/page';
 import CourseSettings from '../course-settings/page';
@@ -31,11 +33,17 @@ import {
   type TeacherProfile,
 } from './teacherPortalApi';
 import { fetchTeacherMonitorTeams } from '../../lib/teacherMonitorApi';
+import {
+  COURSE_SETTING_STAGES,
+  fetchCourseSettings,
+  type CourseSettingStageKey,
+} from '../../lib/courseSettingsApi';
 import UserAvatar from '../../components/UserAvatar';
 import AppModalPortal from '../../components/AppModalPortal';
 
 type TabKey =
   | 'monitor'
+  | 'teamWorkspace'
   | 'analysis'
   | 'guidance'
   | 'evaluation'
@@ -59,7 +67,7 @@ type SidebarGroup = {
   }[];
 };
 
-const sidebarGroups: SidebarGroup[] = [
+const SIDEBAR_GROUPS_BASE: SidebarGroup[] = [
   {
     groupLabel: '班级与学生',
     items: [
@@ -99,14 +107,16 @@ const sidebarGroups: SidebarGroup[] = [
   },
 ];
 
-// flat list for lookup
-const sidebarItems = sidebarGroups.flatMap((g) => g.items);
+const DEFAULT_ENABLED_MODULE_KEYS: CourseSettingStageKey[] = COURSE_SETTING_STAGES.map((s) => s.key);
 
 const TEACHER_TAB_PARAM = 'tab';
 const TEACHER_CLASS_PARAM = 'classId';
 const TEACHER_SUB_PARAM = 'sub';
+const TEACHER_TEAM_PARAM = 'teamId';
+const TEACHER_STAGE_PARAM = 'stage';
+const TEACHER_SUBMISSION_PARAM = 'submissionId';
 
-const CLASS_CONTEXT_TABS: TabKey[] = ['guidance', 'teamReview', 'studentManagement'];
+const CLASS_CONTEXT_TABS: TabKey[] = ['guidance', 'teamReview', 'studentManagement', 'teamWorkspace'];
 
 function earliestClass(list: TeacherPersonalClassRow[]): TeacherPersonalClassRow | null {
   if (!list.length) return null;
@@ -115,6 +125,7 @@ function earliestClass(list: TeacherPersonalClassRow[]): TeacherPersonalClassRow
 
 const ALL_TAB_KEYS: TabKey[] = [
   'monitor',
+  'teamWorkspace',
   'analysis',
   'guidance',
   'evaluation',
@@ -144,13 +155,20 @@ export default function TeacherDashboard() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [aiTutorOpen, setAiTutorOpen] = useState(false);
   const activeTab = tabFromSearchParams(searchParams);
   const teamReviewSubPage: 'main' | 'questions' =
     searchParams.get(TEACHER_SUB_PARAM) === 'questions' ? 'questions' : 'main';
 
   const setTeacherTab = (
     tab: TabKey,
-    opts?: { classId?: string | null; sub?: 'main' | 'questions' | null }
+    opts?: {
+      classId?: string | null;
+      sub?: 'main' | 'questions' | null;
+      teamId?: string | number | null;
+      stage?: string | null;
+      submissionId?: string | null;
+    }
   ) => {
     setSearchParams(
       (prev) => {
@@ -159,6 +177,9 @@ export default function TeacherDashboard() {
           next.delete(TEACHER_TAB_PARAM);
           next.delete(TEACHER_CLASS_PARAM);
           next.delete(TEACHER_SUB_PARAM);
+          next.delete(TEACHER_TEAM_PARAM);
+          next.delete(TEACHER_STAGE_PARAM);
+          next.delete(TEACHER_SUBMISSION_PARAM);
         } else {
           next.set(TEACHER_TAB_PARAM, tab);
         }
@@ -175,12 +196,38 @@ export default function TeacherDashboard() {
         } else if (tab !== 'teamReview') {
           next.delete(TEACHER_SUB_PARAM);
         }
+        // 团队实训详情页：保留 teamId / stage；离开该页时清理
+        if (tab === 'teamWorkspace') {
+          if (opts && 'teamId' in opts) {
+            if (opts.teamId != null && opts.teamId !== '') next.set(TEACHER_TEAM_PARAM, String(opts.teamId));
+            else next.delete(TEACHER_TEAM_PARAM);
+          }
+          if (opts && 'stage' in opts) {
+            if (opts.stage) next.set(TEACHER_STAGE_PARAM, opts.stage);
+            else next.delete(TEACHER_STAGE_PARAM);
+          }
+        } else {
+          next.delete(TEACHER_TEAM_PARAM);
+          next.delete(TEACHER_STAGE_PARAM);
+        }
+        // 商业计划书详情：仅显式传入 submissionId 时进入详情，否则回列表
+        if (tab === 'businessPlanReview') {
+          if (opts && 'submissionId' in opts && opts.submissionId) {
+            next.set(TEACHER_SUBMISSION_PARAM, String(opts.submissionId));
+          } else {
+            next.delete(TEACHER_SUBMISSION_PARAM);
+          }
+        } else {
+          next.delete(TEACHER_SUBMISSION_PARAM);
+        }
         return next;
       },
       { replace: true }
     );
   };
-  const [selectedTeam, setSelectedTeam] = useState<TeamProject | null>(null);
+  const workspaceTeamId = Number(searchParams.get(TEACHER_TEAM_PARAM) || 0) || 0;
+  const workspaceStage = searchParams.get(TEACHER_STAGE_PARAM) || '';
+  const businessPlanSubmissionId = String(searchParams.get(TEACHER_SUBMISSION_PARAM) || '').trim();
   const [guidancePresetTeamId, setGuidancePresetTeamId] = useState<number | null>(null);
   const [showBatchScoring, setShowBatchScoring] = useState(false);
   const [filterStatus, setFilterStatus] = useState<'all' | 'on-track' | 'at-risk' | 'delayed'>('all');
@@ -193,7 +240,28 @@ export default function TeacherDashboard() {
   const [monitorTeams, setMonitorTeams] = useState<TeamProject[]>([]);
   const [monitorTeamsLoading, setMonitorTeamsLoading] = useState(false);
   const [teamQuestionsSavedTick, setTeamQuestionsSavedTick] = useState(0);
+  /** 当前班级启用的实训环节（含 team）；略过后影响菜单/监控节点 */
+  const [enabledModuleKeys, setEnabledModuleKeys] = useState<CourseSettingStageKey[]>(DEFAULT_ENABLED_MODULE_KEYS);
   const { labelByValue: semesterLabel } = usePublicDictOptions('semester', true);
+
+  const ideationEnabled = enabledModuleKeys.includes('ideation');
+  const planEnabled = enabledModuleKeys.includes('plan');
+
+  const sidebarGroups = useMemo(() => {
+    return SIDEBAR_GROUPS_BASE.map((group) => {
+      if (group.groupLabel !== '任务与审核') return group;
+      return {
+        ...group,
+        items: group.items.filter((item) => {
+          if (item.key === 'topicReview') return ideationEnabled;
+          if (item.key === 'businessPlanReview') return planEnabled;
+          return true;
+        }),
+      };
+    });
+  }, [ideationEnabled, planEnabled]);
+
+  const sidebarItems = useMemo(() => sidebarGroups.flatMap((g) => g.items), [sidebarGroups]);
 
   const leaveTeamQuestionsPreset = () => {
     setTeacherTab('teamReview', { sub: 'main' });
@@ -224,9 +292,18 @@ export default function TeacherDashboard() {
   };
 
   const openGuidanceForTeam = (team: TeamProject) => {
-    setSelectedTeam(null);
     setGuidancePresetTeamId(team.id);
     setTeacherTab('guidance', { classId: selectedPersonalClass?.id ?? null });
+  };
+
+  const openTeamWorkspace = (team: TeamProject) => {
+    const classId = selectedPersonalClass?.id;
+    if (!classId) {
+      antdMessage.warning('请先选择班级');
+      return;
+    }
+    // 进入团队实训详情时清空 stage，由页面按启用链路首环回填
+    setTeacherTab('teamWorkspace', { classId, teamId: team.id, stage: null });
   };
 
   const refreshPersonalClasses = useCallback(
@@ -312,6 +389,43 @@ export default function TeacherDashboard() {
     void loadMonitorTeams(selectedPersonalClass.id);
   }, [activeTab, selectedPersonalClass?.id, loadMonitorTeams]);
 
+  // 加载班级实训略过配置，驱动审核菜单与监控阶段过滤
+  useEffect(() => {
+    const classId = selectedPersonalClass?.id;
+    if (!classId) {
+      setEnabledModuleKeys(DEFAULT_ENABLED_MODULE_KEYS);
+      return;
+    }
+    let cancelled = false;
+    fetchCourseSettings(classId)
+      .then((data) => {
+        if (cancelled) return;
+        const skipped = new Set(
+          (data.settings || [])
+            .filter((s) => s.moduleKey !== 'team' && s.skipped)
+            .map((s) => s.moduleKey)
+        );
+        setEnabledModuleKeys(
+          DEFAULT_ENABLED_MODULE_KEYS.filter((k) => k === 'team' || !skipped.has(k))
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setEnabledModuleKeys(DEFAULT_ENABLED_MODULE_KEYS);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedPersonalClass?.id, activeTab]);
+
+  // 略过后若仍停留在已隐藏审核页，跳回监控
+  useEffect(() => {
+    if (activeTab === 'topicReview' && !ideationEnabled) {
+      setTeacherTab('monitor');
+    } else if (activeTab === 'businessPlanReview' && !planEnabled) {
+      setTeacherTab('monitor');
+    }
+  }, [activeTab, ideationEnabled, planEnabled]);
+
   const filteredTeams = monitorTeams.filter((t) => {
     const matchStatus = filterStatus === 'all' || t.status === filterStatus;
     const matchSearch = t.teamName.includes(searchQuery) || t.leader.includes(searchQuery);
@@ -381,8 +495,9 @@ export default function TeacherDashboard() {
                     <TeamCard
                       key={team.id}
                       team={team}
-                      onViewDetail={setSelectedTeam}
+                      onViewDetail={openTeamWorkspace}
                       onIntervene={openGuidanceForTeam}
+                      enabledModuleKeys={enabledModuleKeys}
                     />
                   ))
                 ) : (
@@ -423,6 +538,7 @@ export default function TeacherDashboard() {
             teams={monitorTeams}
             presetTeamId={guidancePresetTeamId}
             onPresetTeamApplied={() => setGuidancePresetTeamId(null)}
+            enabledModuleKeys={enabledModuleKeys}
           />
         );
 
@@ -495,7 +611,21 @@ export default function TeacherDashboard() {
             </div>
           );
         }
-        return <BusinessPlanReview personalClass={selectedPersonalClass} />;
+        if (businessPlanSubmissionId) {
+          return (
+            <BusinessPlanDetailPage
+              classId={selectedPersonalClass.id}
+              submissionId={businessPlanSubmissionId}
+              onBack={() => setTeacherTab('businessPlanReview', { submissionId: null })}
+            />
+          );
+        }
+        return (
+          <BusinessPlanReview
+            personalClass={selectedPersonalClass}
+            onOpenDetail={(id) => setTeacherTab('businessPlanReview', { submissionId: id })}
+          />
+        );
 
       case 'classProjectOverview':
         return <ClassProjectOverview />;
@@ -509,12 +639,60 @@ export default function TeacherDashboard() {
       case 'evaluation':
         return <EvaluationPanel />;
 
+      case 'teamWorkspace': {
+        const classId = selectedPersonalClass?.id || searchParams.get(TEACHER_CLASS_PARAM) || '';
+        if (!classId || !workspaceTeamId) {
+          return (
+            <div className="bg-white rounded-xl border border-dashed border-gray-200 py-16 text-center text-gray-500 text-sm">
+              缺少班级或团队参数，请从监控页进入
+              <div className="mt-4">
+                <button
+                  type="button"
+                  className="px-4 py-2 text-sm rounded-xl bg-teal-500 text-white cursor-pointer"
+                  onClick={() => setTeacherTab('monitor')}
+                >
+                  返回监控
+                </button>
+              </div>
+            </div>
+          );
+        }
+        return (
+          <TeamWorkspacePage
+            classId={classId}
+            teamId={workspaceTeamId}
+            stage={workspaceStage}
+            onStageChange={(moduleKey) =>
+              setTeacherTab('teamWorkspace', {
+                classId,
+                teamId: workspaceTeamId,
+                stage: moduleKey,
+              })
+            }
+            onBack={() => setTeacherTab('monitor')}
+            onIntervene={() => {
+              const team = monitorTeams.find((t) => t.id === workspaceTeamId);
+              if (team) openGuidanceForTeam(team);
+              else {
+                setGuidancePresetTeamId(workspaceTeamId);
+                setTeacherTab('guidance', { classId });
+              }
+            }}
+          />
+        );
+      }
+
       default:
         return null;
     }
   };
 
-  const sidebarHighlightKey = activeTab === 'studentManagement' ? 'classManagement' : activeTab;
+  const sidebarHighlightKey =
+    activeTab === 'studentManagement'
+      ? 'classManagement'
+      : activeTab === 'teamWorkspace'
+        ? 'monitor'
+        : activeTab;
   const activeItem = sidebarItems.find(
     (item) => item.type === 'tab' && item.key === sidebarHighlightKey
   );
@@ -632,16 +810,21 @@ export default function TeacherDashboard() {
             </button>
             <div className="min-w-0">
             <h1 className="text-base font-bold text-gray-900 truncate">
-              {activeTab === 'studentManagement' && selectedPersonalClass
-                ? `学生管理 — ${selectedPersonalClass.name}`
-                : activeTab === 'teamReview' && selectedPersonalClass
-                  ? teamReviewSubPage === 'questions'
-                    ? `组队问题预设 — ${selectedPersonalClass.name}`
-                    : `组队管理 — ${selectedPersonalClass.name}`
-                  : (activeItem?.label ?? '教师工作台')}
+              {activeTab === 'teamWorkspace'
+                ? '团队实训详情'
+                : activeTab === 'studentManagement' && selectedPersonalClass
+                  ? `学生管理 — ${selectedPersonalClass.name}`
+                  : activeTab === 'teamReview' && selectedPersonalClass
+                    ? teamReviewSubPage === 'questions'
+                      ? `组队问题预设 — ${selectedPersonalClass.name}`
+                      : `组队管理 — ${selectedPersonalClass.name}`
+                    : activeTab === 'businessPlanReview' && businessPlanSubmissionId
+                      ? '计划书详情'
+                      : (activeItem?.label ?? '教师工作台')}
             </h1>
             <p className="hidden md:block text-xs text-gray-400 mt-0.5">
               {activeTab === 'monitor' && `共 ${monitorTeams.length} 个团队 · ${monitorTeams.filter(t => t.status !== 'on-track').length} 个需关注`}
+              {activeTab === 'teamWorkspace' && '查看各环节过程记录与提交内容（只读）'}
               {activeTab === 'analysis' && '智能分析学生学习数据'}
               {activeTab === 'guidance' && selectedPersonalClass && '发送引导与管理实训任务'}
               {activeTab === 'guidance' && !selectedPersonalClass && '动态引导工具'}
@@ -655,7 +838,8 @@ export default function TeacherDashboard() {
                     : `班级「${selectedPersonalClass.name}」组队管理`
                   : '组队管理')}
               {activeTab === 'topicReview' && '审核学生选题方案'}
-              {activeTab === 'businessPlanReview' && '审核商业计划书提交'}
+              {activeTab === 'businessPlanReview' &&
+                (businessPlanSubmissionId ? '查看提交正文与附件（只读）' : '审核商业计划书提交')}
               {activeTab === 'classProjectOverview' && '多维度查看全班项目进度'}
               {activeTab === 'teacherGuide' && '掌握监控、分析、引导、评价的完整教学流程'}
               {activeTab === 'courseSettings' && '配置实训任务截止时间与评分标准'}
@@ -690,10 +874,16 @@ export default function TeacherDashboard() {
                 </button>
               </Dropdown>
             )}
-            {/* <button className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors cursor-pointer relative">
-              <i className="ri-notification-3-line text-base"></i>
-              <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>
-            </button> */}
+            <button
+              type="button"
+              onClick={() => setAiTutorOpen((v) => !v)}
+              className={`w-8 h-8 flex items-center justify-center rounded-lg transition-colors cursor-pointer ${
+                aiTutorOpen ? 'text-teal-700 bg-teal-50' : 'text-teal-600 hover:bg-teal-50'
+              }`}
+              title="实训助教"
+            >
+              <i className="ri-robot-2-line text-base"></i>
+            </button>
             <button
               type="button"
               onClick={() => setProfileModalOpen(true)}
@@ -768,20 +958,18 @@ export default function TeacherDashboard() {
         </Drawer>
 
         {/* 主内容 */}
-        <main className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden py-4 px-4 md:py-6 md:px-6">
+        <main
+          className={`flex-1 min-w-0 overflow-y-auto overflow-x-hidden md:py-6 md:px-6 ${
+            activeTab === 'teamWorkspace' ? 'py-3 px-3' : 'py-4 px-4'
+          }`}
+        >
           {renderContent()}
         </main>
       </div>
 
+      <AiTutorPanel role="teacher" open={aiTutorOpen} onClose={() => setAiTutorOpen(false)} />
+
       {/* 弹窗 */}
-      {selectedTeam && (
-        <TeamDetailModal
-          classId={selectedPersonalClass?.id || ''}
-          team={selectedTeam}
-          onClose={() => setSelectedTeam(null)}
-          onIntervene={openGuidanceForTeam}
-        />
-      )}
       {showBatchScoring && (
         <BatchScoringModal
           classId={selectedPersonalClass?.id || ''}

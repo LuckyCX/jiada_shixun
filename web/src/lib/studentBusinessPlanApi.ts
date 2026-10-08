@@ -1,9 +1,11 @@
 import { portalAuthenticatedFetch } from './authApi';
+import type { BusinessPlanCover } from './businessPlanTemplate';
 
 export type BusinessPlanSection = {
   key: string;
   title: string;
   content: string;
+  guide?: string;
 };
 
 export type BusinessPlanVersionSummary = {
@@ -24,6 +26,8 @@ export type BusinessPlanSubmission = {
   submittedAt: string;
   reviewComment: string;
   reviewedAt: string;
+  scores?: Record<string, number>;
+  totalScore?: number | null;
 };
 
 export type BusinessPlanSectionLock = {
@@ -34,8 +38,27 @@ export type BusinessPlanSectionLock = {
   heartbeatAt: string;
 };
 
+export type BusinessPlanTeamMember = {
+  id: string;
+  name: string;
+  studentNo: string;
+  isLeader: boolean;
+};
+
+export type BusinessPlanClassMeta = {
+  collegeClass: string;
+  advisor: string;
+};
+
 export type BusinessPlanWorkspace = {
   sections: BusinessPlanSection[];
+  cover: BusinessPlanCover;
+  classMeta?: BusinessPlanClassMeta;
+  teamMembers?: BusinessPlanTeamMember[];
+  isSolo?: boolean;
+  /** 第二步选题项目名称（有则封面项目名锁定） */
+  topicProjectName?: string;
+  projectNameLocked?: boolean;
   fullText: string;
   completedSectionCount: number;
   totalSectionCount: number;
@@ -84,10 +107,11 @@ export async function fetchBusinessPlanWorkspace(classId: string): Promise<Busin
 export async function saveBusinessPlanWorkspace(
   classId: string,
   body: {
-    sections: BusinessPlanSection[];
+    sections?: BusinessPlanSection[];
     revision: number;
     activeSectionKey?: string;
     replaceAll?: boolean;
+    cover?: BusinessPlanCover;
   }
 ): Promise<BusinessPlanWorkspace> {
   return studentFetchAllowConflict(`/api/student/personal-classes/${classId}/business-plan/workspace`, {

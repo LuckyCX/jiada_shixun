@@ -19,8 +19,15 @@ export type CourseStageSetting = {
   durationDays: number;
   reminderDays: number;
   reminderEnabled: boolean;
+  skipped: boolean;
   lastRemindedAt: string;
   lastRemindedDeadline: string;
+};
+
+export type CourseWorkflowPayload = {
+  activeOrder: CourseSettingStageKey[];
+  activeLabels: string[];
+  chainText: string;
 };
 
 export type CourseSettingsPayload = {
@@ -28,7 +35,28 @@ export type CourseSettingsPayload = {
   className: string;
   studentCount: number;
   settings: CourseStageSetting[];
+  workflow?: CourseWorkflowPayload;
 };
+
+/** 除组队外可略过的环节 */
+export const SKIPPABLE_COURSE_STAGE_KEYS: CourseSettingStageKey[] = [
+  'ideation',
+  'market',
+  'product',
+  'business',
+  'simulation',
+  'plan',
+];
+
+export function buildWorkflowChainText(
+  stages: CourseSettingStage[],
+  skippedByKey: Record<string, boolean>
+): string {
+  return stages
+    .filter((s) => s.key === 'team' || !skippedByKey[s.key])
+    .map((s) => s.shortName)
+    .join(' - ');
+}
 
 export const COURSE_SETTING_STAGES: CourseSettingStage[] = [
   { key: 'team', name: '团队组建与分工', shortName: '团队组建', taskName: '完成团队组建、角色分工与团队协议', icon: 'ri-team-line', color: 'from-teal-500 to-cyan-500' },
@@ -54,4 +82,24 @@ export async function saveCourseStageSetting(
     body: JSON.stringify(body),
   }) as { setting: CourseStageSetting };
   return data.setting;
+}
+
+export async function saveCourseWorkflow(
+  classId: string,
+  skipped: Partial<Record<CourseSettingStageKey, boolean>>
+): Promise<{
+  settings: CourseStageSetting[];
+  workflow: CourseWorkflowPayload;
+  restoredModules: string[];
+  message?: string;
+}> {
+  const data = (await teacherFetch(`/api/teacher/personal-classes/${classId}/course-settings/workflow`, {
+    method: 'PUT',
+    body: JSON.stringify({ skipped }),
+  })) as {
+    settings: CourseStageSetting[];
+    workflow: CourseWorkflowPayload;
+    restoredModules: string[];
+  };
+  return data;
 }

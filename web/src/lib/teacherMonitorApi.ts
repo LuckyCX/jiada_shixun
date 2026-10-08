@@ -128,3 +128,71 @@ export async function submitTeacherMonitorBatchScoring(
   }) as Promise<{ saved: boolean }>;
 }
 
+export type TeacherWorkspaceMember = {
+  studentId: string;
+  name: string;
+  avatarUrl: string;
+  aiMatchedRole: string;
+  /** 中文角色名，如「财务负责人」 */
+  aiMatchedRoleLabel?: string;
+  dimensionProfile: Record<string, unknown>;
+};
+
+export type TeacherWorkspaceSummary = {
+  team: {
+    id: string;
+    name: string;
+    groupingStatus: string;
+    introduction: string;
+    leaderStudentId: string;
+    leaderName: string;
+    isSolo: boolean;
+  };
+  members: TeacherWorkspaceMember[];
+  enabledOrder: string[];
+  stages: {
+    key: string;
+    name: string;
+    monitorKey: string;
+    progress: number;
+    /** 阶段完成时间（未完成为空） */
+    completedAt?: string;
+  }[];
+  stageProgress: Record<string, number>;
+  overallProgress: number;
+  currentStage: string;
+  status: 'on-track' | 'at-risk' | 'delayed';
+  warnings: string[];
+};
+
+export async function fetchTeacherTeamWorkspaceSummary(
+  classId: string,
+  teamId: number | string
+): Promise<TeacherWorkspaceSummary> {
+  return teacherFetch(
+    `/api/teacher/personal-classes/${encodeURIComponent(classId)}/monitor/teams/${teamId}/workspace-summary`
+  ) as Promise<TeacherWorkspaceSummary>;
+}
+
+export type TeacherStageWorkspace = {
+  team: TeacherWorkspaceSummary['team'];
+  members: TeacherWorkspaceMember[];
+  enabledOrder: string[];
+  stage: {
+    moduleKey: string;
+    name: string;
+    team: any;
+    members: any[];
+  };
+};
+
+export async function fetchTeacherTeamStageWorkspace(
+  classId: string,
+  teamId: number | string,
+  moduleKey: string
+): Promise<TeacherStageWorkspace> {
+  return teacherFetch(
+    `/api/teacher/personal-classes/${encodeURIComponent(classId)}/monitor/teams/${teamId}/stages/${encodeURIComponent(moduleKey)}`
+  ) as Promise<TeacherStageWorkspace>;
+}
+

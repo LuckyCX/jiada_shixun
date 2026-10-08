@@ -3,6 +3,12 @@ import { getPool } from '../lib/db.js';
 import { logError } from '../lib/logError.js';
 import { requireAuth, requireTeacher } from '../middleware/auth.js';
 import { formatCalendarDateFromPg } from '../lib/calendarDate.js';
+import {
+  SKIPPABLE_MODULE_KEYS,
+  activeTrainingOrder,
+  loadSkippedModuleKeys,
+  wipeClassModuleData,
+} from '../lib/courseWorkflow.js';
 
 const router = Router();
 
@@ -17,6 +23,7 @@ export const COURSE_SETTING_STAGES = [
 ];
 
 const STAGE_KEYS = new Set(COURSE_SETTING_STAGES.map((stage) => stage.key));
+const STAGE_SHORT_BY_KEY = new Map(COURSE_SETTING_STAGES.map((s) => [s.key, s.shortName]));
 
 function ok(req, res, data, message = 'OK') {
   return res.json({ code: 0, message, data, traceId: req.traceId });
@@ -71,8 +78,21 @@ function mapSetting(row) {
     durationDays: Number(row.duration_days || 0),
     reminderDays: Number(row.reminder_days ?? 3),
     reminderEnabled: Boolean(row.reminder_enabled),
+    skipped: row.module_key === 'team' ? false : Boolean(row.skipped),
     lastRemindedAt: row.last_reminded_at ? new Date(row.last_reminded_at).toISOString() : '',
     lastRemindedDeadline: dateOnly(row.last_reminded_deadline),
+  };
+}
+
+function buildWorkflowPayload(settings) {
+  const skipped = new Set(
+    settings.filter((s) => s.moduleKey !== 'team' && s.skipped).map((s) => s.moduleKey)
+  );
+  const order = activeTrainingOrder(skipped);
+  return {
+    activeOrder: order,
+    activeLabels: order.map((k) => STAGE_SHORT_BY_KEY.get(k) || k),
+    chainText: order.map((k) => STAGE_SHORT_BY_KEY.get(k) || k).join(' - '),
   };
 }
 
@@ -90,7 +110,7 @@ router.get('/teacher/personal-classes/:classId/course-settings', requireAuth(), 
       `SELECT module_key,
               to_char(start_date, 'YYYY-MM-DD') AS start_date,
               to_char(deadline_date, 'YYYY-MM-DD') AS deadline_date,
-              duration_days, reminder_days, reminder_enabled,
+              duration_days, reminder_days, reminder_enabled, skipped,
               last_reminded_at,
               to_char(last_reminded_deadline, 'YYYY-MM-DD') AS last_reminded_deadline
        FROM teacher_personal_class_course_settings
@@ -98,25 +118,135 @@ router.get('/teacher/personal-classes/:classId/course-settings', requireAuth(), 
       [classId, teacherId]
     );
     const byKey = new Map(rows.map((row) => [row.module_key, mapSetting(row)]));
+    const settings = COURSE_SETTING_STAGES.map((stage) => ({
+      moduleKey: stage.key,
+      startDate: '',
+      deadlineDate: '',
+      durationDays: 0,
+      reminderDays: 3,
+      reminderEnabled: true,
+      skipped: false,
+      lastRemindedAt: '',
+      lastRemindedDeadline: '',
+      ...(byKey.get(stage.key) || {}),
+      ...(stage.key === 'team' ? { skipped: false } : {}),
+    }));
     return ok(req, res, {
       classId: String(classId),
       className: classRow.name || '',
       studentCount: classRow.studentCount ?? 0,
-      settings: COURSE_SETTING_STAGES.map((stage) => ({
-        moduleKey: stage.key,
-        startDate: '',
-        deadlineDate: '',
-        durationDays: 0,
-        reminderDays: 3,
-        reminderEnabled: true,
-        lastRemindedAt: '',
-        lastRemindedDeadline: '',
-        ...(byKey.get(stage.key) || {}),
-      })),
+      settings,
+      workflow: buildWorkflowPayload(settings),
     });
   } catch (e) {
     logError(`GET /api/teacher/personal-classes/:classId/course-settings traceId=${req.traceId}`, e);
     return bad(req, res, 500, 50000, e.message);
+  }
+});
+
+/** 批量保存实训流程略过配置；恢复环节时硬清空该环全班数据 */
+router.put('/teacher/personal-classes/:classId/course-settings/workflow', requireAuth(), requireTeacher(), async (req, res) => {
+  const client = await getPool().connect();
+  try {
+    const teacherId = teacherIdFromReq(req);
+    const classId = parseId(req.params.classId);
+    if (!teacherId || !classId) return bad(req, res, 400, 40001, '无效班级');
+
+    const classRow = await ownsPersonalClass(client, teacherId, classId);
+    if (!classRow) return bad(req, res, 404, 40401, '班级不存在');
+
+    const rawSkipped = req.body?.skipped && typeof req.body.skipped === 'object' ? req.body.skipped : null;
+    if (!rawSkipped) return bad(req, res, 400, 40002, '请提交略过配置');
+
+    const nextSkipped = {};
+    for (const key of SKIPPABLE_MODULE_KEYS) {
+      nextSkipped[key] = Boolean(rawSkipped[key]);
+    }
+    if (rawSkipped.team) {
+      return bad(req, res, 400, 40003, '团队组建不可略过');
+    }
+    const enabledCount = SKIPPABLE_MODULE_KEYS.filter((k) => !nextSkipped[k]).length;
+    if (enabledCount < 1) {
+      return bad(req, res, 400, 40004, '至少保留一个实训阶段');
+    }
+
+    const prevSkipped = await loadSkippedModuleKeys(client, classId);
+    const restored = SKIPPABLE_MODULE_KEYS.filter((k) => prevSkipped.has(k) && !nextSkipped[k]);
+
+    await client.query('BEGIN');
+    for (const key of SKIPPABLE_MODULE_KEYS) {
+      await client.query(
+        `INSERT INTO teacher_personal_class_course_settings
+          (teacher_personal_class_id, teacher_id, module_key, skipped)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (teacher_personal_class_id, module_key) DO UPDATE SET
+           skipped = EXCLUDED.skipped,
+           updated_at = now()`,
+        [classId, teacherId, key, nextSkipped[key]]
+      );
+    }
+    await client.query(
+      `INSERT INTO teacher_personal_class_course_settings
+        (teacher_personal_class_id, teacher_id, module_key, skipped)
+       VALUES ($1, $2, 'team', false)
+       ON CONFLICT (teacher_personal_class_id, module_key) DO UPDATE SET
+         skipped = false,
+         updated_at = now()`,
+      [classId, teacherId]
+    );
+    for (const key of restored) {
+      await wipeClassModuleData(client, classId, key);
+      // 恢复后若从未配置开始日，默认当天开放，避免学生端按「未配置开始日」永久锁定
+      await client.query(
+        `UPDATE teacher_personal_class_course_settings
+         SET start_date = COALESCE(start_date, CURRENT_DATE),
+             updated_at = now()
+         WHERE teacher_personal_class_id = $1 AND module_key = $2`,
+        [classId, key]
+      );
+    }
+    await client.query('COMMIT');
+
+    const { rows } = await client.query(
+      `SELECT module_key,
+              to_char(start_date, 'YYYY-MM-DD') AS start_date,
+              to_char(deadline_date, 'YYYY-MM-DD') AS deadline_date,
+              duration_days, reminder_days, reminder_enabled, skipped,
+              last_reminded_at,
+              to_char(last_reminded_deadline, 'YYYY-MM-DD') AS last_reminded_deadline
+       FROM teacher_personal_class_course_settings
+       WHERE teacher_personal_class_id = $1 AND teacher_id = $2`,
+      [classId, teacherId]
+    );
+    const byKey = new Map(rows.map((row) => [row.module_key, mapSetting(row)]));
+    const settings = COURSE_SETTING_STAGES.map((stage) => ({
+      moduleKey: stage.key,
+      startDate: '',
+      deadlineDate: '',
+      durationDays: 0,
+      reminderDays: 3,
+      reminderEnabled: true,
+      skipped: false,
+      lastRemindedAt: '',
+      lastRemindedDeadline: '',
+      ...(byKey.get(stage.key) || {}),
+      ...(stage.key === 'team' ? { skipped: false } : {}),
+    }));
+    return ok(req, res, {
+      settings,
+      workflow: buildWorkflowPayload(settings),
+      restoredModules: restored,
+    }, restored.length ? '实训流程已保存，已清空恢复环节的历史数据' : '实训流程已保存');
+  } catch (e) {
+    try {
+      await client.query('ROLLBACK');
+    } catch {
+      /* ignore */
+    }
+    logError(`PUT course-settings/workflow traceId=${req.traceId}`, e);
+    return bad(req, res, 500, 50000, e.message);
+  } finally {
+    client.release();
   }
 });
 
@@ -174,7 +304,7 @@ router.put('/teacher/personal-classes/:classId/course-settings/:moduleKey', requ
        RETURNING module_key,
                  to_char(start_date, 'YYYY-MM-DD') AS start_date,
                  to_char(deadline_date, 'YYYY-MM-DD') AS deadline_date,
-                 duration_days, reminder_days, reminder_enabled,
+                 duration_days, reminder_days, reminder_enabled, skipped,
                  last_reminded_at,
                  to_char(last_reminded_deadline, 'YYYY-MM-DD') AS last_reminded_deadline`,
       [classId, teacherId, moduleKey, startDate, deadlineDate, duration, reminderDays, reminderEnabled]

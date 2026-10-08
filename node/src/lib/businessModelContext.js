@@ -3,6 +3,7 @@ import {
   formatContextForPrompt,
   projectTopicTextFromRow,
 } from './marketResearchContext.js';
+import { loadSkippedModuleKeysByTeamId } from './courseWorkflow.js';
 
 const MAX_BUNDLE_CHARS = 14000;
 
@@ -29,42 +30,44 @@ function productSuggestionToText(payload) {
  * @param {string} uploadRoot
  */
 export async function assembleBusinessModelAiBundle(pool, teamId, uploadRoot) {
-  const { rows: topicRows } = await pool.query(
-    `SELECT project_name, project_direction, project_description, target_users, core_value,
-            core_problem, solution_overview, market_size, competitive_advantage
-     FROM teacher_personal_class_team_project_topics WHERE team_id = $1 LIMIT 1`,
-    [teamId]
-  );
-  const projectTopicText = projectTopicTextFromRow(topicRows[0] || null);
+  const { skipped } = await loadSkippedModuleKeysByTeamId(pool, teamId);
+  const parts = [];
 
-  const mrCtx = await buildMarketResearchContext(pool, teamId, uploadRoot);
-  let researchText = formatContextForPrompt(mrCtx);
-  researchText = truncateMiddle(researchText, 10000);
+  if (!skipped.has('ideation')) {
+    const { rows: topicRows } = await pool.query(
+      `SELECT project_name, project_direction, project_description, target_users, core_value,
+              core_problem, solution_overview, market_size, competitive_advantage
+       FROM teacher_personal_class_team_project_topics WHERE team_id = $1 LIMIT 1`,
+      [teamId]
+    );
+    parts.push('【项目主题 / 选题信息】', projectTopicTextFromRow(topicRows[0] || null));
+  }
 
-  const { rows: ctxRows } = await pool.query(
-    `SELECT context_text FROM teacher_personal_class_team_product_context WHERE team_id = $1`,
-    [teamId]
-  );
-  const backgroundText = truncateMiddle(String(ctxRows[0]?.context_text || '').trim() || '（尚未填写产品设计项目背景）', 2000);
+  if (!skipped.has('product')) {
+    const { rows: ctxRows } = await pool.query(
+      `SELECT context_text FROM teacher_personal_class_team_product_context WHERE team_id = $1`,
+      [teamId]
+    );
+    const backgroundText = truncateMiddle(
+      String(ctxRows[0]?.context_text || '').trim() || '（尚未填写产品设计项目背景）',
+      2000
+    );
+    const { rows: sugRows } = await pool.query(
+      `SELECT payload FROM teacher_personal_class_team_product_ai_suggestions
+       WHERE team_id = $1 ORDER BY created_at DESC LIMIT 1`,
+      [teamId]
+    );
+    const suggestionBlock = sugRows.length
+      ? productSuggestionToText(sugRows[0].payload)
+      : '（本队尚无产品设计 AI 建议记录）';
+    parts.push('\n【产品设计 · 项目背景】', backgroundText, '\n【产品设计 · AI 建议（全队最新一条）】', suggestionBlock);
+  }
 
-  const { rows: sugRows } = await pool.query(
-    `SELECT payload FROM teacher_personal_class_team_product_ai_suggestions
-     WHERE team_id = $1 ORDER BY created_at DESC LIMIT 1`,
-    [teamId]
-  );
-  const suggestionBlock = sugRows.length ? productSuggestionToText(sugRows[0].payload) : '（本队尚无产品设计 AI 建议记录）';
+  if (!skipped.has('market')) {
+    const mrCtx = await buildMarketResearchContext(pool, teamId, uploadRoot);
+    parts.push('\n【市场调研与材料汇编】', truncateMiddle(formatContextForPrompt(mrCtx), 10000));
+  }
 
-  const parts = [
-    '【项目主题 / 选题信息】',
-    projectTopicText,
-    '\n【产品设计 · 项目背景】',
-    backgroundText,
-    '\n【产品设计 · AI 建议（全队最新一条）】',
-    suggestionBlock,
-    '\n【市场调研与材料汇编】',
-    researchText,
-  ];
-  let bundle = parts.join('\n');
-  bundle = truncateMiddle(bundle, MAX_BUNDLE_CHARS);
-  return bundle;
+  if (!parts.length) return '（前期实训环节均已略过或暂无资料）';
+  return truncateMiddle(parts.join('\n'), MAX_BUNDLE_CHARS);
 }

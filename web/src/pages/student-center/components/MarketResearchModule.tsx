@@ -262,17 +262,20 @@ function AIGeneratePersonaModal({
   const [generating, setGenerating] = useState(false);
   const [streamStatus, setStreamStatus] = useState('');
   const [streamThinking, setStreamThinking] = useState('');
+  const [streamContent, setStreamContent] = useState('');
   const [generatedPersonas, setGeneratedPersonas] = useState<MarketPersona[]>([]);
   const [done, setDone] = useState(false);
 
   const handleGenerate = () => {
     setGenerating(true);
     setStreamThinking('');
-    setStreamStatus('');
+    setStreamContent('');
+    setStreamStatus('准备生成…');
     setGeneratedPersonas([]);
     void streamGeneratePersonas(classId, surveyIds, {
       onStatus: setStreamStatus,
       onThinking: (t) => setStreamThinking((s) => s + t),
+      onContent: (t) => setStreamContent((s) => s + t),
       onDone: (list) => {
         setGeneratedPersonas(list);
         setDone(true);
@@ -321,12 +324,14 @@ function AIGeneratePersonaModal({
                 <i className="ri-database-2-line"></i>
                 <span>问卷回收：<strong>{totalCollected}</strong> 份</span>
               </div>
-              <MarketAnalysisStreamPanel
-                visible={generating}
-                status={streamStatus}
-                thinking={streamThinking}
-                content=""
-              />
+              <div className="mb-6 text-left">
+                <MarketAnalysisStreamPanel
+                  visible={generating}
+                  status={streamStatus}
+                  thinking={streamThinking}
+                  content={streamContent}
+                />
+              </div>
               <button
                 onClick={handleGenerate}
                 disabled={generating}
@@ -680,6 +685,7 @@ export default function MarketResearchModule({
   const [analysisExpanded, setAnalysisExpanded] = useState(true);
   const [analysisStreamStatus, setAnalysisStreamStatus] = useState('');
   const [analysisStreamThinking, setAnalysisStreamThinking] = useState('');
+  const [analysisStreamContent, setAnalysisStreamContent] = useState('');
   const [isAiAnalyzing, setIsAiAnalyzing] = useState(false);
 
   const [challengeRecordsOpen, setChallengeRecordsOpen] = useState(false);
@@ -784,6 +790,12 @@ export default function MarketResearchModule({
   useEffect(() => {
     void loadSurveys();
   }, [loadSurveys]);
+
+  // 切到依赖回收数的页签时重拉问卷，避免答卷后仍显示「已回收 0 份」
+  useEffect(() => {
+    if (activeTab !== 'persona' && activeTab !== 'analysis' && activeTab !== 'survey') return;
+    void loadSurveys();
+  }, [activeTab, loadSurveys]);
 
   const loadPersonas = useCallback(async () => {
     if (!classId || !hasConfirmedTeam) {
@@ -1217,11 +1229,14 @@ export default function MarketResearchModule({
     if (!classId) return;
     setIsAiAnalyzing(true);
     setAnalysisStreamThinking('');
-    setAnalysisStreamStatus('');
+    setAnalysisStreamContent('');
+    setAnalysisStreamStatus('准备分析…');
     try {
       await streamMarketAnalysis(classId, surveyIds, {
         onStatus: setAnalysisStreamStatus,
         onThinking: (t) => setAnalysisStreamThinking((s) => s + t),
+        // 多数模型以 content 事件推送正文；此前未接入导致页面无流式展示
+        onContent: (t) => setAnalysisStreamContent((s) => s + t),
         onDone: (result) => {
           setAnalysisResult(result);
           showToast('分析完成');
@@ -1839,9 +1854,11 @@ export default function MarketResearchModule({
           {/* ══ 数据分析 ══ */}
           {activeTab === 'analysis' && (
             <div className="space-y-8">
-              <div className="flex justify-end">
+              <div className="flex flex-wrap items-center justify-end gap-3">
                 <button
-                  onClick={() => setSurveySelectMode('analysis')}
+                  onClick={() => {
+                    void loadSurveys().then(() => setSurveySelectMode('analysis'));
+                  }}
                   disabled={trainingEnded || isAiAnalyzing}
                   className="px-6 py-3 bg-gradient-to-r from-green-500 to-teal-500 text-white text-sm font-medium rounded-xl hover:opacity-90 transition-all shadow-lg cursor-pointer disabled:opacity-60 flex items-center gap-2 whitespace-nowrap"
                 >
@@ -1851,13 +1868,31 @@ export default function MarketResearchModule({
                     <><i className="ri-sparkling-fill"></i>一键AI分析</>
                   )}
                 </button>
+                {canEditPlan ? (
+                  teamReportUploaded ? (
+                    <span className="text-sm text-green-600 font-medium whitespace-nowrap px-2">
+                      <i className="ri-checkbox-circle-fill mr-1" />
+                      调研报告已上传
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={!analysisResult || trainingEnded || isAiAnalyzing}
+                      onClick={() => void handleOpenReportUpload()}
+                      className="px-6 py-3 bg-white border border-green-500 text-green-700 text-sm font-medium rounded-xl hover:bg-green-50 transition-all shadow-sm cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                    >
+                      <i className="ri-upload-cloud-2-line mr-1" />
+                      上传调研报告
+                    </button>
+                  )
+                ) : null}
               </div>
 
               <MarketAnalysisStreamPanel
                 visible={isAiAnalyzing}
                 status={analysisStreamStatus}
                 thinking={analysisStreamThinking}
-                content=""
+                content={analysisStreamContent}
               />
 
               {!analysisResult && !isAiAnalyzing && (
@@ -2001,25 +2036,6 @@ export default function MarketResearchModule({
                 )}
               </div>
 
-              {canEditPlan && (
-                <div className="flex flex-wrap items-center justify-end gap-3 pt-2">
-                  {teamReportUploaded ? (
-                    <span className="text-sm text-green-600 font-medium">
-                      <i className="ri-checkbox-circle-fill mr-1" />
-                      调研报告已上传
-                    </span>
-                  ) : (
-                    <button
-                      type="button"
-                      disabled={!analysisResult}
-                      onClick={() => void handleOpenReportUpload()}
-                      className="px-6 py-3 bg-gradient-to-r from-green-500 to-teal-500 text-white text-sm font-medium rounded-xl hover:opacity-90 transition-all shadow-lg cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      上传调研报告
-                    </button>
-                  )}
-                </div>
-              )}
                 </>
               )}
             </div>
@@ -2121,7 +2137,7 @@ export default function MarketResearchModule({
                   type="button"
                   onClick={() => {
                     if (personaLocked) return;
-                    setSurveySelectMode('persona');
+                    void loadSurveys().then(() => setSurveySelectMode('persona'));
                   }}
                   disabled={personaLocked}
                   className="flex-1 px-6 py-3 bg-gradient-to-r from-purple-600 to-blue-600 text-white text-sm font-medium rounded-xl hover:from-purple-700 hover:to-blue-700 transition-all shadow-lg cursor-pointer flex items-center justify-center gap-2 whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:from-purple-600 disabled:hover:to-blue-600"

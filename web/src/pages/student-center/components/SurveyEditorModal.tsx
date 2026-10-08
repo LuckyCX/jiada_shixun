@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Button, DatePicker, Input, Modal, Select, Space, message } from 'antd';
+import { Alert, Button, DatePicker, Input, Modal, Select, Space, message } from 'antd';
 import dayjs, { type Dayjs } from 'dayjs';
 import {
   SURVEY_QUESTION_TYPES,
@@ -27,12 +27,16 @@ type Props = {
   onSave?: (payload: SurveyEditorPayload) => void | Promise<void>;
 };
 
-function defaultClosesAt(stageDeadlineDate: string | null): Dayjs {
+/** 生成合法默认截止时间；若实训截止已过则返回 null */
+function defaultClosesAt(stageDeadlineDate: string | null): Dayjs | null {
   const now = dayjs();
   const stageEnd = stageDeadlineDate ? dayjs(stageDeadlineDate).endOf('day') : null;
+  if (stageEnd && !stageEnd.isAfter(now)) {
+    return null;
+  }
   let candidate = now.add(7, 'day');
-  if (stageEnd) {
-    candidate = candidate.isAfter(stageEnd) ? stageEnd : candidate;
+  if (stageEnd && candidate.isAfter(stageEnd)) {
+    candidate = stageEnd;
   }
   if (!candidate.isAfter(now)) {
     candidate = now.add(1, 'hour');
@@ -41,7 +45,7 @@ function defaultClosesAt(stageDeadlineDate: string | null): Dayjs {
     }
   }
   if (!candidate.isAfter(now)) {
-    candidate = now.add(30, 'minute');
+    return null;
   }
   return candidate;
 }
@@ -77,6 +81,9 @@ export default function SurveyEditorModal({
     [stageDeadlineDate]
   );
 
+  // 实训截止已过则无法再选合法截止时间
+  const closesAtWindowClosed = Boolean(maxClosesAt && !maxClosesAt.isAfter(dayjs()));
+
   useEffect(() => {
     if (!open) return;
     setSurveyTitle(initialTitle);
@@ -87,11 +94,15 @@ export default function SurveyEditorModal({
     );
     if (initialClosesAt) {
       const parsed = dayjs(initialClosesAt);
-      setClosesAt(parsed.isValid() ? parsed : defaultClosesAt(stageDeadlineDate));
+      if (parsed.isValid() && parsed.isAfter(dayjs()) && (!maxClosesAt || !parsed.isAfter(maxClosesAt))) {
+        setClosesAt(parsed);
+      } else {
+        setClosesAt(defaultClosesAt(stageDeadlineDate));
+      }
     } else {
       setClosesAt(defaultClosesAt(stageDeadlineDate));
     }
-  }, [open, initialTitle, initialQuestions, initialClosesAt, stageDeadlineDate]);
+  }, [open, initialTitle, initialQuestions, initialClosesAt, stageDeadlineDate, maxClosesAt]);
 
   const updateQuestion = (id: string, patch: Partial<MarketSurveyQuestion>) => {
     setQuestions((prev) =>
@@ -112,6 +123,10 @@ export default function SurveyEditorModal({
     const t = surveyTitle.trim();
     if (!t) {
       message.warning('请填写问卷标题');
+      return;
+    }
+    if (closesAtWindowClosed) {
+      message.warning(`实训环节已截止（${stageDeadlineDate}），无法再创建/保存问卷，请联系教师调整截止日`);
       return;
     }
     if (!closesAt) {
@@ -156,20 +171,33 @@ export default function SurveyEditorModal({
     return false;
   };
 
+  /** 禁用「此刻之前」以及「超过实训截止日当天剩余时刻」 */
   const disabledTime = (current: Dayjs | null) => {
-    if (!current || !current.isSame(dayjs(), 'day')) {
-      return {};
-    }
+    if (!current) return {};
     const now = dayjs();
-    const h = now.hour();
-    const m = now.minute();
-    const s = now.second();
+    const isToday = current.isSame(now, 'day');
+    const isMaxDay = Boolean(maxClosesAt && current.isSame(maxClosesAt, 'day'));
+    const minH = isToday ? now.hour() : 0;
+    const minM = isToday ? now.minute() : 0;
+    const maxH = isMaxDay && maxClosesAt ? maxClosesAt.hour() : 23;
+    const maxM = isMaxDay && maxClosesAt ? maxClosesAt.minute() : 59;
+
     return {
-      disabledHours: () => Array.from({ length: h }, (_, i) => i),
-      disabledMinutes: (selectedHour: number) =>
-        selectedHour === h ? Array.from({ length: m }, (_, i) => i) : [],
-      disabledSeconds: (selectedHour: number, selectedMinute: number) =>
-        selectedHour === h && selectedMinute === m ? Array.from({ length: s + 1 }, (_, i) => i) : [],
+      disabledHours: () => {
+        const hours: number[] = [];
+        for (let i = 0; i < 24; i++) {
+          if (i < minH || i > maxH) hours.push(i);
+        }
+        return hours;
+      },
+      disabledMinutes: (selectedHour: number) => {
+        const minutes: number[] = [];
+        for (let i = 0; i < 60; i++) {
+          if (selectedHour === minH && i < minM) minutes.push(i);
+          if (selectedHour === maxH && i > maxM) minutes.push(i);
+        }
+        return minutes;
+      },
     };
   };
 
@@ -190,14 +218,27 @@ export default function SurveyEditorModal({
               <Button key="cancel" onClick={onCancel}>
                 取消
               </Button>,
-              <Button key="save" type="primary" loading={saving} onClick={() => void handleSave()}>
+              <Button
+                key="save"
+                type="primary"
+                loading={saving}
+                disabled={closesAtWindowClosed}
+                onClick={() => void handleSave()}
+              >
                 {saveButtonLabel}
               </Button>,
             ]
       }
-      destroyOnClose
+      destroyOnHidden
     >
       <div className="space-y-4 max-h-[60vh] overflow-y-auto py-1">
+        {closesAtWindowClosed && (
+          <Alert
+            type="error"
+            showIcon
+            message={`实训环节已截止（${stageDeadlineDate}），当前无法设置问卷截止时间，请联系教师延长「市场调研」截止日后再创建`}
+          />
+        )}
         <div>
           <div className="text-sm font-medium text-gray-900 mb-1">问卷标题</div>
           <Input
@@ -211,15 +252,19 @@ export default function SurveyEditorModal({
           <div className="text-sm font-medium text-gray-900 mb-1">问卷截止时间</div>
           <DatePicker
             showTime={{ format: 'HH:mm' }}
+            // 避免 antd 带时间面板时「确定」偶发禁用、无法改时间
+            needConfirm={false}
+            showNow={!closesAtWindowClosed}
             className="w-full"
             value={closesAt}
             onChange={(v) => setClosesAt(v)}
-            disabled={readOnly}
+            disabled={readOnly || closesAtWindowClosed}
             disabledDate={disabledDate}
             disabledTime={disabledTime}
             format="YYYY-MM-DD HH:mm"
+            allowClear={false}
           />
-          {stageDeadlineDate && (
+          {stageDeadlineDate && !closesAtWindowClosed && (
             <p className="text-xs text-gray-500 mt-1 mb-0">
               须晚于当前时间，且不晚于实训截止日 {stageDeadlineDate}
             </p>

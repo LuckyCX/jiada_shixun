@@ -45,6 +45,7 @@ export async function runCourseSettingReminderScan() {
        FROM teacher_personal_class_course_settings cs
        JOIN teacher_personal_classes tpc ON tpc.id = cs.teacher_personal_class_id
        WHERE cs.reminder_enabled = true
+         AND COALESCE(cs.skipped, false) = false
          AND cs.deadline_date IS NOT NULL
          AND CURRENT_DATE BETWEEN (cs.deadline_date - cs.reminder_days::int) AND cs.deadline_date
          AND cs.last_reminded_deadline IS DISTINCT FROM cs.deadline_date

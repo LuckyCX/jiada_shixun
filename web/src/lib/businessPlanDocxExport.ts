@@ -1,4 +1,6 @@
 /** 最小无依赖 ZIP（仅 Store，不压缩），用于拼装 docx */
+import type { BusinessPlanCover } from './businessPlanTemplate';
+import { BUSINESS_PLAN_SECTION_GROUPS } from './businessPlanTemplate';
 
 function crc32(buf: Uint8Array): number {
   let c = ~0;
@@ -50,7 +52,7 @@ function buildZip(entries: ZipEntry[]): Blob {
       u32(0x04034b50),
       u16(20),
       u16(0),
-      u16(0), // store
+      u16(0),
       u16(0),
       u16(0),
       u32(crc),
@@ -128,37 +130,74 @@ function htmlToPlainParagraphs(html: string): string[] {
     .filter(Boolean);
 }
 
-function paragraphXml(text: string, opts?: { bold?: boolean; size?: number }) {
-  const size = opts?.size ?? 21; // half-points, 21=10.5pt
+function paragraphXml(text: string, opts?: { bold?: boolean; size?: number; center?: boolean }) {
+  const size = opts?.size ?? 21;
   const bold = opts?.bold ? '<w:b/>' : '';
-  return `<w:p><w:r><w:rPr>${bold}<w:sz w:val="${size}"/><w:szCs w:val="${size}"/></w:rPr><w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r></w:p>`;
+  const jc = opts?.center ? '<w:jc w:val="center"/>' : '';
+  return `<w:p><w:pPr>${jc}</w:pPr><w:r><w:rPr>${bold}<w:sz w:val="${size}"/><w:szCs w:val="${size}"/></w:rPr><w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r></w:p>`;
 }
 
 export type BusinessPlanExportSection = {
+  key?: string;
   title: string;
   content: string;
+  groupKey?: string;
 };
 
-/** 将商业计划书章节导出为 .docx 并触发下载 */
+function sectionsInGroup(sections: BusinessPlanExportSection[], groupKey: string) {
+  const byGroup = sections.filter((s) => s.groupKey === groupKey);
+  if (byGroup.length) return byGroup;
+  const prefix = groupKey === 'g1' ? '1.' : groupKey === 'g2' ? '2.' : groupKey === 'g3' ? '3.' : '4.';
+  return sections.filter((s) => String(s.title || '').startsWith(prefix));
+}
+
+/** 将商业计划书（封面 + 学生填写小节）导出为 .docx，不含评分标准 */
 export function downloadBusinessPlanDocx(
   sections: BusinessPlanExportSection[],
-  fileName = '商业计划书要点.docx'
+  fileName = '商业计划书.docx',
+  cover?: BusinessPlanCover | null
 ) {
+  const c = cover || {
+    projectName: '',
+    leader: '',
+    members: [],
+    collegeClass: '',
+    advisor: '',
+    dateYear: '',
+    dateMonth: '',
+    dateDay: '',
+  };
+
   const bodyParts: string[] = [
-    paragraphXml('商业计划书要点', { bold: true, size: 32 }),
-    paragraphXml(`导出时间：${new Date().toLocaleString('zh-CN')}`, { size: 18 }),
+    paragraphXml('商业计划书', { bold: true, size: 36, center: true }),
+    paragraphXml(''),
+    paragraphXml(`小组项目名称：${c.projectName || '____________________'}`),
+    paragraphXml(`组长（姓名学号）：${c.leader || '____________________'}`),
+    // 按实际成员人数输出；单人公司无成员行
+    ...(Array.isArray(c.members) && c.members.length
+      ? c.members.map((m, i) =>
+          paragraphXml(`成员（姓名学号）${i + 1}：${m || '____________________'}`)
+        )
+      : []),
+    paragraphXml(`学院班级：${c.collegeClass || '____________________'}`),
+    paragraphXml(`指导教师：${c.advisor || '____________________'}`),
+    paragraphXml(''),
+    paragraphXml(
+      `${c.dateYear || '____'}年 ${c.dateMonth || '____'}月 ${c.dateDay || '____'}日`,
+      { center: true }
+    ),
+    paragraphXml(''),
   ];
 
-  (sections || []).forEach((sec, i) => {
-    const title = String(sec.title || `章节${i + 1}`).trim() || `章节${i + 1}`;
-    bodyParts.push(paragraphXml(`${i + 1}. ${title}`, { bold: true, size: 26 }));
-    const lines = htmlToPlainParagraphs(sec.content || '');
-    if (!lines.length) {
-      bodyParts.push(paragraphXml('（本章节暂无内容）'));
-    } else {
-      for (const line of lines) bodyParts.push(paragraphXml(line));
+  for (const group of BUSINESS_PLAN_SECTION_GROUPS) {
+    bodyParts.push(paragraphXml(group.title, { bold: true, size: 26 }));
+    for (const sec of sectionsInGroup(sections || [], group.key)) {
+      bodyParts.push(paragraphXml(String(sec.title || '').trim() || '未命名小节', { bold: true, size: 24 }));
+      const lines = htmlToPlainParagraphs(sec.content || '');
+      if (!lines.length) bodyParts.push(paragraphXml('（本节暂无内容）'));
+      else for (const line of lines) bodyParts.push(paragraphXml(line));
     }
-  });
+  }
 
   const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">

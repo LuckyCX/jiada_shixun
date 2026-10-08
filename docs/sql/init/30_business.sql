@@ -334,7 +334,7 @@ CREATE TABLE teacher_personal_class_team_ideas (
   id          bigserial PRIMARY KEY,
   team_id     bigint NOT NULL REFERENCES teacher_personal_class_teams (id) ON DELETE CASCADE,
   method_key  varchar(32) NOT NULL
-    CHECK (method_key IN ('brainstorm', 'scamper', 'triz', 'ai')),
+    CHECK (method_key IN ('brainstorm', 'scamper', 'triz', 'ai', 'six_hats')),
   method_name varchar(64) NOT NULL,
   title       varchar(256) NOT NULL,
   description text NOT NULL DEFAULT '',
@@ -362,6 +362,18 @@ CREATE TABLE teacher_personal_class_team_idea_likes (
 CREATE INDEX idx_tpctil_student
   ON teacher_personal_class_team_idea_likes (student_id);
 
+-- 六帽创想室：按组员独立讨论稿与工作区
+CREATE TABLE teacher_personal_class_team_hat_studio_member (
+  team_id         bigint NOT NULL REFERENCES teacher_personal_class_teams (id) ON DELETE CASCADE,
+  student_id      bigint NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  draft_json      jsonb NOT NULL DEFAULT '{}'::jsonb,
+  transcript_json jsonb NOT NULL DEFAULT '{"messages":[],"roundCount":0}'::jsonb,
+  updated_at      timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (team_id, student_id)
+);
+
+CREATE INDEX idx_tpcths_team ON teacher_personal_class_team_hat_studio_member (team_id);
+
 CREATE TABLE teacher_personal_class_team_discussions (
   id         bigserial PRIMARY KEY,
   team_id    bigint NOT NULL REFERENCES teacher_personal_class_teams (id) ON DELETE CASCADE,
@@ -386,6 +398,7 @@ CREATE TABLE teacher_personal_class_course_settings (
   duration_days              int NOT NULL DEFAULT 0,
   reminder_days              int NOT NULL DEFAULT 3,
   reminder_enabled           boolean NOT NULL DEFAULT true,
+  skipped                    boolean NOT NULL DEFAULT false,
   last_reminded_at           timestamptz,
   last_reminded_deadline     date,
   created_at                 timestamptz NOT NULL DEFAULT now(),
@@ -718,6 +731,7 @@ CREATE TABLE teacher_personal_class_team_business_plan_workspace (
   team_id                      bigint PRIMARY KEY REFERENCES teacher_personal_class_teams (id) ON DELETE CASCADE,
   teacher_personal_class_id    bigint NOT NULL REFERENCES teacher_personal_classes (id) ON DELETE CASCADE,
   sections_json                jsonb NOT NULL DEFAULT '[]'::jsonb,
+  cover_json                   jsonb NOT NULL DEFAULT '{}'::jsonb,
   revision                     int NOT NULL DEFAULT 1,
   updated_at                   timestamptz NOT NULL DEFAULT now(),
   updated_by                   bigint REFERENCES users (id) ON DELETE SET NULL
@@ -746,6 +760,7 @@ CREATE TABLE teacher_personal_class_team_business_plan_versions (
   version_no   int NOT NULL,
   summary      varchar(500) NOT NULL DEFAULT '',
   sections_json jsonb NOT NULL DEFAULT '[]'::jsonb,
+  cover_json   jsonb NOT NULL DEFAULT '{}'::jsonb,
   saved_by     bigint REFERENCES users (id) ON DELETE SET NULL,
   saved_at     timestamptz NOT NULL DEFAULT now(),
   UNIQUE (team_id, version_no)
@@ -773,6 +788,8 @@ CREATE TABLE teacher_personal_class_team_business_plan_submissions (
   submitted_by bigint REFERENCES users (id) ON DELETE SET NULL,
   submitted_at timestamptz NOT NULL DEFAULT now(),
   review_comment text NOT NULL DEFAULT '',
+  score_json   jsonb NOT NULL DEFAULT '{}'::jsonb,
+  total_score  int,
   reviewed_by  bigint REFERENCES users (id) ON DELETE SET NULL,
   reviewed_at  timestamptz
 );
@@ -891,4 +908,33 @@ CREATE TABLE IF NOT EXISTS econoverse_class_rooms (
 
 CREATE INDEX IF NOT EXISTS idx_econoverse_class_rooms_teacher
   ON econoverse_class_rooms (teacher_id);
+
+-- 实训助教知识库与对话（预设数据见 migrations/0054_ai_tutor_kb.sql）
+CREATE TABLE IF NOT EXISTS ai_tutor_kb_entries (
+  id          bigserial PRIMARY KEY,
+  category    varchar(64) NOT NULL DEFAULT '',
+  audience    varchar(16) NOT NULL DEFAULT 'both'
+    CHECK (audience IN ('student', 'teacher', 'both')),
+  question    text NOT NULL,
+  answer      text NOT NULL,
+  is_preset   boolean NOT NULL DEFAULT false,
+  sort_order  int NOT NULL DEFAULT 0,
+  enabled     boolean NOT NULL DEFAULT true,
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  updated_at  timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_tutor_kb_audience
+  ON ai_tutor_kb_entries (audience, enabled, sort_order);
+
+CREATE TABLE IF NOT EXISTS ai_tutor_messages (
+  id          bigserial PRIMARY KEY,
+  user_id     bigint NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  role        varchar(16) NOT NULL CHECK (role IN ('user', 'assistant')),
+  content     text NOT NULL,
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_tutor_messages_user
+  ON ai_tutor_messages (user_id, id DESC);
 

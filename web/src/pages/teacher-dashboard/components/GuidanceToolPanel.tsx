@@ -34,6 +34,8 @@ interface GuidanceToolPanelProps {
   /** 从监控页「立即干预」跳入时预选小组 */
   presetTeamId?: number | null;
   onPresetTeamApplied?: () => void;
+  /** 启用的实训 moduleKey，用于过滤任务模块选项 */
+  enabledModuleKeys?: string[];
 }
 
 type GuidanceType = 'broadcast' | 'oneOnOne' | 'resource' | 'urge';
@@ -308,6 +310,7 @@ export default function GuidanceToolPanel({
   teams = [],
   presetTeamId,
   onPresetTeamApplied,
+  enabledModuleKeys,
 }: GuidanceToolPanelProps) {
   const classId = personalClass.id;
   const [activeType, setActiveType] = useState<ComposeMode>('broadcast');
@@ -738,6 +741,7 @@ export default function GuidanceToolPanel({
                 personalClass={personalClass}
                 embedded
                 embeddedEditTaskId={editingTaskId}
+                enabledModuleKeys={enabledModuleKeys}
                 onTasksChanged={() => {
                   setEditingTaskId(undefined);
                   void loadHistory();

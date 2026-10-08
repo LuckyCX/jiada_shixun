@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import mammoth from 'mammoth';
 import { loadSurveyQuestions } from './marketResearchSurveyDb.js';
+import { loadSkippedModuleKeysByTeamId } from './courseWorkflow.js';
 
 const UPLOAD_METHODS = ['用户访谈', '竞品分析', '行业报告', '数据爬取', '实地观察'];
 const MAX_FILE_CHARS = 6000;
@@ -163,6 +164,19 @@ export function projectTopicTextFromRow(row) {
   if (row.market_size) lines.push(`市场规模：${row.market_size}`);
   if (row.competitive_advantage) lines.push(`竞争优势：${row.competitive_advantage}`);
   return lines.join('\n');
+}
+
+/** 读取选题文本；班级略过 ideation 时返回占位说明，避免 AI 注入略过环节数据 */
+export async function loadProjectTopicTextForTeam(pool, teamId) {
+  const { skipped } = await loadSkippedModuleKeysByTeamId(pool, teamId);
+  if (skipped.has('ideation')) return '（本班已略过创新思维与选题环节）';
+  const { rows } = await pool.query(
+    `SELECT project_name, project_direction, project_description, target_users, core_value,
+            core_problem, solution_overview, market_size, competitive_advantage
+     FROM teacher_personal_class_team_project_topics WHERE team_id = $1 LIMIT 1`,
+    [teamId]
+  );
+  return projectTopicTextFromRow(rows[0] || null);
 }
 
 export async function buildMarketResearchContext(pool, teamId, uploadRoot) {

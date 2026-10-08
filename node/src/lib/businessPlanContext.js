@@ -2,6 +2,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { assembleBusinessModelAiBundle } from './businessModelContext.js';
 import { sectionsToFullText } from './businessPlanSections.js';
+import { loadSkippedModuleKeysByTeamId } from './courseWorkflow.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UPLOAD_ROOT = path.join(__dirname, '../../uploads/market-research');
@@ -83,18 +84,14 @@ async function loadRoleSimulationSummary(pool, teamId) {
  * @param {string} uploadRoot
  */
 export async function assembleBusinessPlanBundle(pool, teamId, uploadRoot = UPLOAD_ROOT) {
-  const priorBundle = await assembleBusinessModelAiBundle(pool, teamId, uploadRoot);
-  const bmText = await loadBusinessModelWorkspaceText(pool, teamId);
-  const simText = await loadRoleSimulationSummary(pool, teamId);
-
-  const parts = [
-    '【前期实训汇编（选题 / 产品 / 市场调研）】',
-    priorBundle,
-    '\n【商业模式设计（本队已保存）】',
-    bmText,
-    '\n【AI 仿真模拟（近期记录）】',
-    simText,
-  ];
+  const { skipped } = await loadSkippedModuleKeysByTeamId(pool, teamId);
+  const parts = ['【前期实训汇编】', await assembleBusinessModelAiBundle(pool, teamId, uploadRoot)];
+  if (!skipped.has('business')) {
+    parts.push('\n【商业模式设计（本队已保存）】', await loadBusinessModelWorkspaceText(pool, teamId));
+  }
+  if (!skipped.has('simulation')) {
+    parts.push('\n【AI 仿真模拟（近期记录）】', await loadRoleSimulationSummary(pool, teamId));
+  }
   return truncateMiddle(parts.join('\n'), 16000);
 }
 

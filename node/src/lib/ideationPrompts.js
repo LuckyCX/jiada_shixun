@@ -36,6 +36,7 @@ export const IDEATION_METHOD_LABELS = {
   scamper: 'SCAMPER',
   triz: 'TRIZ',
   ai: 'AI创意',
+  six_hats: '六帽创想室',
 };
 
 export const IDEATION_METHOD_PROMPTS = {
@@ -54,6 +55,16 @@ export const IDEATION_METHOD_PROMPTS = {
   ai: methodPrompt(
     '你是创业实训课程的 AI 创意生成与评估专家。',
     '基于目标领域、目标用户和核心需求生成高质量创业创意并完成结构化评估。title 与 description 必须是你生成的创意内容，不得照抄空泛占位。'
+  ),
+  six_hats: methodPrompt(
+    '你是创业实训课程的六顶思考帽创新教练。学生工作区里是六帽讨论中摘录的原始笔记（可能冗长、口语化、字段错位），你必须先做汇总再评估。',
+    [
+      '禁止把工作区原文整段复制为 title 或 description。',
+      'title：凝练成 8–24 字的创业创意名称（产品/方案名），不得是用户感想长文。',
+      'description：用 120–280 字结构化概述，建议包含「问题—用户—方案—差异/风险」四句，语言简洁专业。',
+      '评估重点：问题洞察是否扎实、用户价值是否清晰、方案是否可落地、风险与差异是否被认真审视。',
+      '评分与 strengths/weaknesses/suggestions/tags 须基于你汇总后的创意，而非照搬笔记。',
+    ].join('')
   ),
 };
 

@@ -37,16 +37,18 @@ interface TeamCardProps {
   team: TeamProject;
   onViewDetail: (team: TeamProject) => void;
   onIntervene: (team: TeamProject) => void;
+  /** 启用的实训 moduleKey（team/ideation/...）；缺省显示全部 */
+  enabledModuleKeys?: string[];
 }
 
 const stages = [
-  { id: 'teamFormation', name: '组队', icon: 'ri-team-line' },
-  { id: 'ideation', name: '创新', icon: 'ri-lightbulb-line' },
-  { id: 'marketResearch', name: '调研', icon: 'ri-search-line' },
-  { id: 'productDesign', name: '设计', icon: 'ri-pencil-ruler-2-line' },
-  { id: 'businessModel', name: '商模', icon: 'ri-bar-chart-box-line' },
-  { id: 'roleSimulation', name: '角色', icon: 'ri-user-star-line' },
-  { id: 'businessPlan', name: '计划', icon: 'ri-file-text-line' },
+  { id: 'teamFormation', moduleKey: 'team', name: '组队', icon: 'ri-team-line' },
+  { id: 'ideation', moduleKey: 'ideation', name: '创新', icon: 'ri-lightbulb-line' },
+  { id: 'marketResearch', moduleKey: 'market', name: '调研', icon: 'ri-search-line' },
+  { id: 'productDesign', moduleKey: 'product', name: '设计', icon: 'ri-pencil-ruler-2-line' },
+  { id: 'businessModel', moduleKey: 'business', name: '商模', icon: 'ri-bar-chart-box-line' },
+  { id: 'roleSimulation', moduleKey: 'simulation', name: '角色', icon: 'ri-user-star-line' },
+  { id: 'businessPlan', moduleKey: 'plan', name: '计划', icon: 'ri-file-text-line' },
 ];
 
 const statusConfig = {
@@ -86,11 +88,15 @@ export default function TeamCard({
   team,
   onViewDetail,
   onIntervene,
+  enabledModuleKeys,
 }: TeamCardProps) {
   const [hovered, setHovered] = useState(false);
 
   const cfg = statusConfig[team.status];
   const evalCfg = evalConfig[team.evaluationStatus];
+  const visibleStages = enabledModuleKeys?.length
+    ? stages.filter((s) => enabledModuleKeys.includes(s.moduleKey))
+    : stages;
 
   return (
     <div
@@ -199,9 +205,9 @@ export default function TeamCard({
           </div>
         </div>
 
-        {/* 阶段节点 */}
+        {/* 阶段节点（仅展示启用环节） */}
         <div className="flex items-center gap-0.5 mb-3">
-          {stages.map((stage, idx) => {
+          {visibleStages.map((stage, idx) => {
             const prog = team.stageProgress[stage.id as keyof StageProgress] ?? 0;
             const isActive = prog > 0 && prog < 100;
             const isDone = prog === 100;
@@ -222,7 +228,7 @@ export default function TeamCard({
                     <span className="w-1.5 h-1.5 rounded-full bg-gray-400" />
                   )}
                 </div>
-                {idx < stages.length - 1 && (
+                {idx < visibleStages.length - 1 && (
                   <div className={`flex-1 h-0.5 ${isDone ? 'bg-teal-300' : 'bg-gray-200'}`} />
                 )}
               </div>

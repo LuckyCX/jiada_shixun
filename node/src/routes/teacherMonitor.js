@@ -8,6 +8,15 @@ import { normalizeUploadFileName } from '../lib/uploadFileName.js';
 import { requireAuth, requireTeacher } from '../middleware/auth.js';
 import { coerceSections, sectionsToFullText } from '../lib/businessPlanSections.js';
 import { loadSurveyQuestions, mapSurveyRow } from '../lib/marketResearchSurveyDb.js';
+import { loadSkippedModuleKeys } from '../lib/courseWorkflow.js';
+import {
+  loadTeamMembers,
+  loadEnabledOrder,
+  loadStageCompletionTimes,
+  loadStageWorkspace,
+  STAGE_META,
+  MARKET_UPLOAD_ROOT,
+} from '../lib/teacherTeamWorkspace.js';
 
 const router = Router();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -111,30 +120,34 @@ function moduleKeyForStage(stageKey) {
   return null;
 }
 
-function computeOverallProgress(stageProgress) {
-  const keys = [
-    'teamFormation',
-    'ideation',
-    'marketResearch',
-    'productDesign',
-    'businessModel',
-    'roleSimulation',
-    'businessPlan',
-  ];
+const ALL_MONITOR_STAGE_KEYS = [
+  'teamFormation',
+  'ideation',
+  'marketResearch',
+  'productDesign',
+  'businessModel',
+  'roleSimulation',
+  'businessPlan',
+];
+
+/** 按启用链路过滤监控阶段 key（略过环节不计入进度分母） */
+function monitorStageKeys(skipped) {
+  const set = skipped instanceof Set ? skipped : new Set(skipped || []);
+  return ALL_MONITOR_STAGE_KEYS.filter((k) => {
+    if (k === 'teamFormation') return true;
+    const mk = moduleKeyForStage(k);
+    return mk ? !set.has(mk) : true;
+  });
+}
+
+function computeOverallProgress(stageProgress, skipped) {
+  const keys = monitorStageKeys(skipped);
   const sum = keys.reduce((s, k) => s + clampPct(stageProgress?.[k] ?? 0), 0);
   return keys.length ? Math.round(sum / keys.length) : 0;
 }
 
-function currentStageFromStageProgress(stageProgress) {
-  const keys = [
-    'teamFormation',
-    'ideation',
-    'marketResearch',
-    'productDesign',
-    'businessModel',
-    'roleSimulation',
-    'businessPlan',
-  ];
+function currentStageFromStageProgress(stageProgress, skipped) {
+  const keys = monitorStageKeys(skipped);
   if (keys.every((k) => clampPct(stageProgress?.[k] ?? 0) >= 100)) return '已完成';
   for (const k of keys) {
     const v = clampPct(stageProgress?.[k] ?? 0);
@@ -291,18 +304,20 @@ async function stageProgressForTeam(pool, classId, teamId, memberIds) {
     })();
   stageProgress.businessModel = bm?.bmc_canvas_saved_at || bmDone >= 5 ? 100 : 0;
 
-  // 角色推荐：对齐学生端 teamQualified（全员有效轮次 >= 3，有效轮次 = max run_index）
+  // 角色仿真：有效轮次 = max(run_index)；达标阈值 = 3
+  // 进度按全员「已完成有效轮次 / (人数×3)」比例计算，避免做了 1～2 轮仍显示 0%
+  const SIM_QUALIFY_ROUNDS = 3;
   const byStudent = new Map((simRunRows || []).map((r) => [String(r.student_id), Number(r.max_run || 0)]));
-  let simAllQualified = memberIds.length > 0;
-  for (const sid of memberIds) {
-    const maxRun = byStudent.get(String(sid)) || 0;
-    const effective = Math.max(0, maxRun);
-    if (effective < 3) {
-      simAllQualified = false;
-      break;
+  if (!memberIds.length) {
+    stageProgress.roleSimulation = 0;
+  } else {
+    let earned = 0;
+    for (const sid of memberIds) {
+      const effective = Math.max(0, byStudent.get(String(sid)) || 0);
+      earned += Math.min(SIM_QUALIFY_ROUNDS, effective);
     }
+    stageProgress.roleSimulation = Math.round((earned / (memberIds.length * SIM_QUALIFY_ROUNDS)) * 100);
   }
-  stageProgress.roleSimulation = simAllQualified ? 100 : 0;
 
   // AI验证：以“市场调研报告已提交”为进入 AI 验证的门槛（有提交则 100，否则 0）
   stageProgress.aiValidation = marketReportCount ? 100 : 0;
@@ -310,13 +325,13 @@ async function stageProgressForTeam(pool, classId, teamId, memberIds) {
   return stageProgress;
 }
 
-async function warningsForTeam(pool, teamId, stageProgress) {
+async function warningsForTeam(pool, teamId, stageProgress, skipped) {
   const warnings = [];
   const now = Date.now();
-  const prog = clampPct(computeOverallProgress(stageProgress));
+  const prog = clampPct(computeOverallProgress(stageProgress, skipped));
   if (prog < 20) warnings.push('整体进度偏低');
-  // 预警应跟随“当前应推进阶段”，避免阶段未开始却提示后续阶段
-  const warnKeys = ['ideation', 'marketResearch', 'productDesign', 'businessModel', 'roleSimulation', 'businessPlan'];
+  // 预警应跟随“当前应推进阶段”，避免阶段未开始却提示后续阶段；略过环节不预警
+  const warnKeys = monitorStageKeys(skipped).filter((k) => k !== 'teamFormation');
   const nextKey = warnKeys.find((k) => clampPct(stageProgress?.[k] ?? 0) < 100) || null;
   if (nextKey) {
     const nextPct = clampPct(stageProgress?.[nextKey] ?? 0);
@@ -336,8 +351,8 @@ async function warningsForTeam(pool, teamId, stageProgress) {
   return warnings;
 }
 
-function statusFromTeam(stageProgress, warnings) {
-  const prog = clampPct(computeOverallProgress(stageProgress));
+function statusFromTeam(stageProgress, warnings, skipped) {
+  const prog = clampPct(computeOverallProgress(stageProgress, skipped));
   if (warnings.length >= 2 || prog < 20) return 'delayed';
   if (warnings.length >= 1 || prog < 50) return 'at-risk';
   return 'on-track';
@@ -438,13 +453,14 @@ router.get(
       }
 
       const teams = await loadTeamsForClass(pool, classId);
+      const skipped = await loadSkippedModuleKeys(pool, classId);
       const out = [];
       for (const t of teams) {
         const memberIds = (t.members || []).map((m) => m.id).filter(Boolean);
         const stageProgress = await stageProgressForTeam(pool, classId, Number(t.id), memberIds);
-        const warnings = await warningsForTeam(pool, Number(t.id), stageProgress);
-        const status = statusFromTeam(stageProgress, warnings);
-        const overallProgress = computeOverallProgress(stageProgress);
+        const warnings = await warningsForTeam(pool, Number(t.id), stageProgress, skipped);
+        const status = statusFromTeam(stageProgress, warnings, skipped);
+        const overallProgress = computeOverallProgress(stageProgress, skipped);
         const submissionCount = await countSubmissions(pool, Number(t.id));
         out.push({
           id: Number(t.id),
@@ -452,7 +468,7 @@ router.get(
           course: '',
           members: t.members.map((m) => ({ name: m.name, avatarUrl: m.avatarUrl || '' })),
           leader: t.leader,
-          currentStage: currentStageFromStageProgress(stageProgress),
+          currentStage: currentStageFromStageProgress(stageProgress, skipped),
           overallProgress,
           stageProgress,
           knowledgeProgress: 0,
@@ -849,6 +865,138 @@ router.get(
       return res.download(abs, normalizeUploadFileName(r.origin_name || 'prototype.zip'));
     } catch (e) {
       logError(`GET product-prototype download traceId=${req.traceId}`, e);
+      return bad(req, res, 500, 50000, e.message);
+    }
+  }
+);
+
+/** 团队上帝视角：概览摘要 */
+router.get(
+  '/teacher/personal-classes/:classId/monitor/teams/:teamId/workspace-summary',
+  requireAuth(),
+  requireTeacher(),
+  async (req, res) => {
+    try {
+      const tid = teacherIdFromReq(req);
+      const classId = parseId(req.params.classId);
+      const teamId = parseId(req.params.teamId);
+      if (!tid || !classId || !teamId) return bad(req, res, 400, 40003, '参数无效');
+      const pool = getPool();
+      if (!(await ownsPersonalClass(pool, tid, classId))) {
+        return bad(req, res, 404, 40402, '班级不存在或无权操作');
+      }
+      const base = await loadTeamMembers(pool, classId, teamId);
+      if (!base) return bad(req, res, 404, 40403, '团队不存在');
+
+      const skipped = await loadSkippedModuleKeys(pool, classId);
+      const enabledOrder = await loadEnabledOrder(pool, classId);
+      const memberIds = base.members.map((m) => m.studentId).filter(Boolean);
+      const stageProgress = await stageProgressForTeam(pool, classId, teamId, memberIds);
+      const warnings = await warningsForTeam(pool, teamId, stageProgress, skipped);
+      const status = statusFromTeam(stageProgress, warnings, skipped);
+      const overallProgress = computeOverallProgress(stageProgress, skipped);
+      const completedAtMap = await loadStageCompletionTimes(pool, classId, teamId, memberIds);
+      const stages = enabledOrder.map((k) => {
+        const progress = clampPct(stageProgress?.[STAGE_META[k]?.monitorKey] ?? 0);
+        return {
+          key: k,
+          name: STAGE_META[k]?.name || k,
+          monitorKey: STAGE_META[k]?.monitorKey || '',
+          progress,
+          // 仅在阶段已完成时回传完成时间
+          completedAt: progress >= 100 ? completedAtMap[k] || '' : '',
+        };
+      });
+
+      return ok(req, res, {
+        team: base.team,
+        members: base.members,
+        enabledOrder,
+        stages,
+        stageProgress,
+        overallProgress,
+        currentStage: currentStageFromStageProgress(stageProgress, skipped),
+        status,
+        warnings,
+      });
+    } catch (e) {
+      logError(`GET workspace-summary traceId=${req.traceId}`, e);
+      return bad(req, res, 500, 50000, e.message);
+    }
+  }
+);
+
+/** 团队上帝视角：单环节全量只读 */
+router.get(
+  '/teacher/personal-classes/:classId/monitor/teams/:teamId/stages/:moduleKey',
+  requireAuth(),
+  requireTeacher(),
+  async (req, res) => {
+    try {
+      const tid = teacherIdFromReq(req);
+      const classId = parseId(req.params.classId);
+      const teamId = parseId(req.params.teamId);
+      const moduleKey = String(req.params.moduleKey || '').trim();
+      if (!tid || !classId || !teamId || !moduleKey) return bad(req, res, 400, 40003, '参数无效');
+      const pool = getPool();
+      if (!(await ownsPersonalClass(pool, tid, classId))) {
+        return bad(req, res, 404, 40402, '班级不存在或无权操作');
+      }
+      if (!(await teamInPersonalClass(pool, classId, teamId))) {
+        return bad(req, res, 404, 40403, '团队不存在');
+      }
+
+      const result = await loadStageWorkspace(pool, classId, teamId, moduleKey);
+      if (result.error === 'not_found') return bad(req, res, 404, 40403, '团队不存在');
+      if (result.error === 'skipped') return bad(req, res, 404, 40406, '该环节已略过或未启用');
+      if (result.error === 'invalid') return bad(req, res, 400, 40003, '环节无效');
+
+      return ok(req, res, {
+        team: result.team,
+        members: result.members,
+        enabledOrder: result.enabledOrder,
+        stage: result.data,
+      });
+    } catch (e) {
+      logError(`GET stage workspace traceId=${req.traceId}`, e);
+      return bad(req, res, 500, 50000, e.message);
+    }
+  }
+);
+
+/** 市场调研过程材料：教师下载 */
+router.get(
+  '/teacher/personal-classes/:classId/monitor/teams/:teamId/market-uploads/:uploadId/download',
+  requireAuth(),
+  requireTeacher(),
+  async (req, res) => {
+    try {
+      const tid = teacherIdFromReq(req);
+      const classId = parseId(req.params.classId);
+      const teamId = parseId(req.params.teamId);
+      const uploadId = parseId(req.params.uploadId);
+      if (!tid || !classId || !teamId || !uploadId) return bad(req, res, 400, 40003, '参数无效');
+      const pool = getPool();
+      if (!(await ownsPersonalClass(pool, tid, classId))) {
+        return bad(req, res, 404, 40402, '班级不存在或无权操作');
+      }
+      if (!(await teamInPersonalClass(pool, classId, teamId))) {
+        return bad(req, res, 404, 40403, '团队不存在');
+      }
+      const { rows } = await pool.query(
+        `SELECT original_filename, storage_key
+         FROM teacher_personal_class_team_market_research_uploads
+         WHERE id = $1 AND team_id = $2`,
+        [uploadId, teamId]
+      );
+      if (!rows.length) return bad(req, res, 404, 40404, '文件不存在');
+      const abs = path.join(MARKET_UPLOAD_ROOT, String(rows[0].storage_key || ''));
+      if (!fs.existsSync(abs)) return bad(req, res, 404, 40405, '文件不存在');
+      const filename = normalizeUploadFileName(rows[0].original_filename || 'download');
+      res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`);
+      return res.sendFile(abs);
+    } catch (e) {
+      logError(`GET market-upload download traceId=${req.traceId}`, e);
       return bad(req, res, 500, 50000, e.message);
     }
   }

@@ -4,6 +4,7 @@ import type { TeacherPersonalClassRow } from '../../teacherPortalApi';
 import type { PersonalClassTask } from '../../../../lib/personalClassTaskApi';
 import {
   TASK_MODULES,
+  TASK_MODULE_TO_TRAINING_ID,
   TASK_PRIORITY_OPTIONS,
   listPersonalClassTasks,
   deletePersonalClassTask,
@@ -30,6 +31,8 @@ type Props = {
   onTasksChanged?: () => void;
   /** 嵌入模式下编辑已有任务 */
   embeddedEditTaskId?: string;
+  /** 启用的实训 moduleKey，过滤模块筛选项与创建选项 */
+  enabledModuleKeys?: string[];
 };
 
 const priorityLabel = (p: string) =>
@@ -41,8 +44,15 @@ export default function TaskManagement({
   embedded = false,
   onTasksChanged,
   embeddedEditTaskId,
+  enabledModuleKeys,
 }: Props) {
   const classId = personalClass.id;
+  const availableModules = enabledModuleKeys?.length
+    ? TASK_MODULES.filter((m) => {
+        const key = TASK_MODULE_TO_TRAINING_ID[m];
+        return key ? enabledModuleKeys.includes(key) : true;
+      })
+    : [...TASK_MODULES];
   const [tasks, setTasks] = useState<PersonalClassTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -78,6 +88,7 @@ export default function TaskManagement({
         open
         classId={classId}
         taskId={embeddedEditTaskId}
+        availableModules={availableModules}
         onClose={() => {}}
         onSuccess={() => onTasksChanged?.()}
       />
@@ -254,7 +265,7 @@ export default function TaskManagement({
               value={filterModule}
               onChange={setFilterModule}
               className="min-w-[180px]"
-              options={[{ value: 'all', label: '全部模块' }, ...TASK_MODULES.map((m) => ({ value: m, label: m }))]}
+              options={[{ value: 'all', label: '全部模块' }, ...availableModules.map((m) => ({ value: m, label: m }))]}
             />
           </div>
           <button
@@ -400,6 +411,7 @@ export default function TaskManagement({
         open={showModal}
         classId={classId}
         taskId={editTaskId}
+        availableModules={availableModules}
         onClose={() => setShowModal(false)}
         onSuccess={() => void loadTasks()}
       />

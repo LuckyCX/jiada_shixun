@@ -29,6 +29,7 @@ import {
 } from '../../lib/teamFormationApi';
 import { downloadStudentGuidanceAttachment } from '../../lib/teacherGuidanceApi';
 import StudentClassSwitcher from './components/StudentClassSwitcher';
+import AiTutorPanel from '../../components/AiTutorPanel';
 import { appAlert } from '../../lib/appDialog';
 import { UserGuideContent } from '../user-guide/UserGuideContent';
 import TeamFormationModule from './components/TeamFormationModule';
@@ -78,6 +79,7 @@ import {
 import { fetchStudentIdeationProjectTopic, fetchStudentIdeationTeamPrerequisites } from '../../lib/studentIdeationApi';
 
 const TRAINING_MODULE_ORDER = ['team', 'ideation', 'market', 'product', 'business', 'simulation', 'plan'] as const;
+const SKIPPABLE_TRAINING_MODULES = ['ideation', 'market', 'product', 'business', 'simulation', 'plan'] as const;
 
 const MODULE_COMPLETE_THRESHOLD: Record<string, number> = {
   team: 4,
@@ -85,7 +87,8 @@ const MODULE_COMPLETE_THRESHOLD: Record<string, number> = {
   market: 6,
   product: 7,
   business: 5,
-  simulation: 4,
+  // 个人有效轮次上限 3；全员达标后进度条记满（完成判定另看 simTeamQualified）
+  simulation: 3,
   plan: 4,
 };
 
@@ -380,6 +383,7 @@ export default function StudentCenterPage() {
   const [logoutModalOpen, setLogoutModalOpen] = useState(false);
   const [studentProfile, setStudentProfile] = useState<StudentProfile | null>(null);
   const [profileModalOpen, setProfileModalOpen] = useState(false);
+  const [aiTutorOpen, setAiTutorOpen] = useState(false);
   const [enrollments, setEnrollments] = useState<StudentPersonalEnrollment[]>([]);
   const [selectedClassId, setSelectedClassId] = useState<string>('');
   const [studentTodoTasks, setStudentTodoTasks] = useState<StudentTodoTask[]>([]);
@@ -395,6 +399,8 @@ export default function StudentCenterPage() {
   const [teamMarketReportUploaded, setTeamMarketReportUploaded] = useState(false);
   const [teamProductPrototypeUploaded, setTeamProductPrototypeUploaded] = useState(false);
   const [teamBmcCanvasUploaded, setTeamBmcCanvasUploaded] = useState(false);
+  /** 仿真：全员有效轮次 ≥ 3 才算环节完成（与进度条分子解耦） */
+  const [simTeamQualified, setSimTeamQualified] = useState(false);
   const [teamPlanApproved, setTeamPlanApproved] = useState(false);
   const [trainingEnded, setTrainingEnded] = useState(false);
   const [archiveLoading, setArchiveLoading] = useState(false);
@@ -507,15 +513,18 @@ export default function StudentCenterPage() {
         }
 
         if (simRecords && studentId) {
-          const threshold = MODULE_COMPLETE_THRESHOLD.simulation ?? 4;
+          const threshold = MODULE_COMPLETE_THRESHOLD.simulation ?? 3;
           // studentId 统一字符串比较，避免 JWT sub 与接口类型不一致导致进度取不到
           const my = (simRecords.progress || []).find(
             (p: any) => String(p.studentId || '') === String(studentId)
           );
           const myEffective = Math.max(0, Number(my?.effectiveRounds || 0));
-          const done = simRecords.teamQualified ? threshold : Math.min(threshold - 1, myEffective);
+          // 进度条按个人有效轮次 / 3；全员达标时记满
+          const done = simRecords.teamQualified ? threshold : Math.min(threshold, myEffective);
+          setSimTeamQualified(Boolean(simRecords.teamQualified));
           setModuleProgressState((s) => (s.simulation === done ? s : { ...s, simulation: done }));
         } else {
+          setSimTeamQualified(false);
           setModuleProgressState((s) => (s.simulation === 0 ? s : { ...s, simulation: 0 }));
         }
 
@@ -774,6 +783,8 @@ export default function StudentCenterPage() {
     if (moduleId === 'market') return teamMarketReportUploaded;
     if (moduleId === 'product') return teamProductPrototypeUploaded;
     if (moduleId === 'business') return teamBmcCanvasUploaded;
+    // 仿真完成：必须以全员达标为准，不能仅看个人轮次满 3
+    if (moduleId === 'simulation') return simTeamQualified;
     if (moduleId === 'plan') return teamPlanApproved || (moduleProgressState.plan || 0) >= (MODULE_COMPLETE_THRESHOLD.plan ?? 99);
     const val = moduleProgressState[moduleId] || 0;
     return val >= (MODULE_COMPLETE_THRESHOLD[moduleId] ?? 99);
@@ -782,13 +793,73 @@ export default function StudentCenterPage() {
   const getStageDateSetting = (moduleId: string) =>
     selectedEnrollment?.courseSettings?.find((setting) => setting.moduleKey === moduleId) || null;
 
+  const isModuleSkipped = (moduleId: string) => {
+    if (moduleId === 'team') return false;
+    return Boolean(getStageDateSetting(moduleId)?.skipped);
+  };
+
+  /** 当前班级实际启用的实训链路（组队 + 未略过环节） */
+  const activeTrainingOrder = useMemo(() => {
+    const skipped = new Set(
+      (selectedEnrollment?.courseSettings || [])
+        .filter((s) => s.moduleKey !== 'team' && s.skipped)
+        .map((s) => s.moduleKey)
+    );
+    return TRAINING_MODULE_ORDER.filter((id) => id === 'team' || !skipped.has(id));
+  }, [selectedEnrollment?.courseSettings]);
+
+  /**
+   * 计划书已通过才可能冻结；若启用链路里仍有未完成环节（如略过恢复后的 2/4/6），
+   * 不冻结前序模块，否则市场调研上传等会全部禁用。
+   */
+  const trainingFrozen = useMemo(() => {
+    if (!trainingEnded && !teamPlanApproved) return false;
+    if (!teamPlanApproved) return false;
+    return activeTrainingOrder
+      .filter((id) => id !== 'plan')
+      .every((id) => isModuleCompletedByProgress(id));
+  }, [
+    trainingEnded,
+    teamPlanApproved,
+    activeTrainingOrder,
+    teamFormationComplete,
+    ideationTopicApproved,
+    teamMarketReportUploaded,
+    teamProductPrototypeUploaded,
+    teamBmcCanvasUploaded,
+    simTeamQualified,
+    moduleProgressState,
+  ]);
+
+  // 当前 Tab 对应环节已略过时，跳回概览，避免直链残留
+  useEffect(() => {
+    if (!activeTab.startsWith('module-')) return;
+    const moduleId = TAB_TO_MODULE_ID[activeTab];
+    if (!moduleId || moduleId === 'team') return;
+    if (!isModuleSkipped(moduleId)) return;
+    setActiveTab('overview');
+    const params = new URLSearchParams(searchParams);
+    params.set('tab', 'overview');
+    navigate({ pathname: '/student-center', search: `?${params.toString()}` }, { replace: true });
+  }, [activeTab, selectedEnrollment?.courseSettings, searchParams, navigate]);
+
   const isBeforeStageStart = (moduleId: string) => {
     const startDate = getStageDateSetting(moduleId)?.startDate;
-    if (!startDate) return true;
+    // 未配置开始日：不按日期锁定（略过恢复后常见），仍受前序完成约束
+    if (!startDate) return false;
     const start = new Date(`${startDate}T00:00:00`);
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     return start.getTime() > today.getTime();
+  };
+
+  /** 本环是否已有进度（用于恢复前序环节后仍可继续已进入的后续环） */
+  const hasModuleEnteredProgress = (moduleId: string) => {
+    if (isModuleCompletedByProgress(moduleId)) return true;
+    if (moduleId === 'market' && teamMarketReportUploaded) return true;
+    if (moduleId === 'product' && teamProductPrototypeUploaded) return true;
+    if (moduleId === 'business' && teamBmcCanvasUploaded) return true;
+    return (moduleProgressState[moduleId] || 0) > 0;
   };
 
   const getStageStartLockedHint = (moduleId: string) => {
@@ -807,43 +878,47 @@ export default function StudentCenterPage() {
   const getModuleProgressPercent = (moduleId: string): number => {
     if (moduleId === 'business' && teamBmcCanvasUploaded) return 100;
     if (moduleId === 'product' && teamProductPrototypeUploaded) return 100;
+    if (moduleId === 'simulation' && simTeamQualified) return 100;
     const val = moduleProgressState[moduleId as keyof typeof moduleProgressState] ?? 0;
     const th = MODULE_COMPLETE_THRESHOLD[moduleId] ?? 99;
     return Math.min(100, Math.round((val / th) * 100));
   };
 
   const getSidebarModuleUi = (moduleId: string) => {
-    const idx = TRAINING_MODULE_ORDER.indexOf(moduleId as (typeof TRAINING_MODULE_ORDER)[number]);
+    if (isModuleSkipped(moduleId)) {
+      return { locked: true, status: 'locked' as const, displayPercent: 0, isTeam: false, hidden: true };
+    }
+    const idx = activeTrainingOrder.indexOf(moduleId as (typeof TRAINING_MODULE_ORDER)[number]);
     if (idx < 0) {
-      return { locked: true, status: 'locked' as const, displayPercent: 0, isTeam: false };
+      return { locked: true, status: 'locked' as const, displayPercent: 0, isTeam: false, hidden: true };
     }
     const isTeam = moduleId === 'team';
     if (isBeforeStageStart(moduleId)) {
-      return { locked: true, status: 'locked' as const, displayPercent: 0, isTeam };
+      return { locked: true, status: 'locked' as const, displayPercent: 0, isTeam, hidden: false };
     }
     if (isTeam) {
       if (teamFormationComplete) {
-        return { locked: false, status: 'completed' as const, displayPercent: null, isTeam: true };
+        return { locked: false, status: 'completed' as const, displayPercent: null, isTeam: true, hidden: false };
       }
-      return { locked: false, status: 'in_progress' as const, displayPercent: null, isTeam: true };
+      return { locked: false, status: 'in_progress' as const, displayPercent: null, isTeam: true, hidden: false };
     }
     if (!teamFormationComplete) {
-      return { locked: true, status: 'locked' as const, displayPercent: 0, isTeam: false };
+      return { locked: true, status: 'locked' as const, displayPercent: 0, isTeam: false, hidden: false };
     }
-    if (idx > 0) {
-      const prevId = TRAINING_MODULE_ORDER[idx - 1];
-      if (!isModuleCompletedByProgress(prevId)) {
-        return { locked: true, status: 'locked' as const, displayPercent: 0, isTeam: false };
-      }
+    const priorsDone = activeTrainingOrder.slice(0, idx).every((prevId) => isModuleCompletedByProgress(prevId));
+    // 2B：前序未齐时，若本环已进入/完成则仍可继续；新阶段仍锁定
+    if (!priorsDone && !hasModuleEnteredProgress(moduleId)) {
+      return { locked: true, status: 'locked' as const, displayPercent: 0, isTeam: false, hidden: false };
     }
     if (isModuleCompletedByProgress(moduleId)) {
-      return { locked: false, status: 'completed' as const, displayPercent: 100, isTeam: false };
+      return { locked: false, status: 'completed' as const, displayPercent: 100, isTeam: false, hidden: false };
     }
     return {
       locked: false,
       status: 'in_progress' as const,
       displayPercent: getModuleProgressPercent(moduleId),
       isTeam: false,
+      hidden: false,
     };
   };
 
@@ -851,15 +926,17 @@ export default function StudentCenterPage() {
     return getSidebarModuleUi(moduleId).status;
   };
 
-  const trainingModuleMenuItems = [
-    { key: 'module-team' as TabType, label: '组队与团队管理', icon: 'ri-team-line' },
-    { key: 'module-ideation' as TabType, label: '创新思维与创意生成', icon: 'ri-lightbulb-line' },
-    { key: 'module-market' as TabType, label: '市场调研与用户画像', icon: 'ri-search-line' },
-    { key: 'module-product' as TabType, label: '产品设计与迭代', icon: 'ri-pencil-ruler-line' },
-    { key: 'module-business' as TabType, label: '商业模式设计', icon: 'ri-pie-chart-line' },
-    { key: 'module-simulation' as TabType, label: 'AI仿真模拟', icon: 'ri-robot-line' },
-    { key: 'module-plan' as TabType, label: '商业计划书要点', icon: 'ri-file-text-line' },
-  ];
+  const trainingModuleMenuItems = (
+    [
+      { key: 'module-team' as TabType, label: '组队与团队管理', icon: 'ri-team-line', moduleId: 'team' },
+      { key: 'module-ideation' as TabType, label: '创新思维与创意生成', icon: 'ri-lightbulb-line', moduleId: 'ideation' },
+      { key: 'module-market' as TabType, label: '市场调研与用户画像', icon: 'ri-search-line', moduleId: 'market' },
+      { key: 'module-product' as TabType, label: '产品设计与迭代', icon: 'ri-pencil-ruler-line', moduleId: 'product' },
+      { key: 'module-business' as TabType, label: '商业模式设计', icon: 'ri-pie-chart-line', moduleId: 'business' },
+      { key: 'module-simulation' as TabType, label: 'AI仿真模拟', icon: 'ri-robot-line', moduleId: 'simulation' },
+      { key: 'module-plan' as TabType, label: '商业计划书要点', icon: 'ri-file-text-line', moduleId: 'plan' },
+    ] as const
+  ).filter((item) => !isModuleSkipped(item.moduleId));
 
   const moduleProgress = [
     { moduleId: 'team', moduleName: '组队与团队管理', totalKnowledge: 4, completedKnowledge: moduleProgressState.team, totalTasks: 3, completedTasks: 3, status: getModuleUnlockStatus('team'), color: 'from-purple-500 to-purple-600' },
@@ -867,13 +944,14 @@ export default function StudentCenterPage() {
     { moduleId: 'market', moduleName: '市场调研与用户画像', totalKnowledge: 8, completedKnowledge: moduleProgressState.market, totalTasks: 5, completedTasks: 4, status: getModuleUnlockStatus('market'), color: 'from-green-500 to-green-600' },
     { moduleId: 'product', moduleName: '产品设计与迭代', totalKnowledge: 7, completedKnowledge: moduleProgressState.product, totalTasks: 4, completedTasks: 1, status: getModuleUnlockStatus('product'), color: 'from-orange-500 to-orange-600' },
     { moduleId: 'business', moduleName: '商业模式设计', totalKnowledge: 5, completedKnowledge: moduleProgressState.business, totalTasks: 6, completedTasks: 0, status: getModuleUnlockStatus('business'), color: 'from-pink-500 to-pink-600' },
-    { moduleId: 'simulation', moduleName: 'AI仿真模拟', totalKnowledge: 4, completedKnowledge: moduleProgressState.simulation, totalTasks: 3, completedTasks: 0, status: getModuleUnlockStatus('simulation'), color: 'from-indigo-500 to-indigo-600' },
+    { moduleId: 'simulation', moduleName: 'AI仿真模拟', totalKnowledge: 3, completedKnowledge: moduleProgressState.simulation, totalTasks: 3, completedTasks: 0, status: getModuleUnlockStatus('simulation'), color: 'from-indigo-500 to-indigo-600' },
     { moduleId: 'plan', moduleName: '商业计划书要点', totalKnowledge: 4, completedKnowledge: moduleProgressState.plan, totalTasks: 2, completedTasks: 0, status: getModuleUnlockStatus('plan'), color: 'from-teal-500 to-teal-600' },
-  ];
+  ].filter((m) => !isModuleSkipped(m.moduleId));
 
-  /** 未解锁时提示需先完成的实训阶段（与侧边栏解锁规则一致） */
+  /** 未解锁时提示需先完成的实训阶段（按实际启用链路） */
   const getPrerequisiteStageHint = (targetModuleId: string): string | null => {
-    const idx = TRAINING_MODULE_ORDER.indexOf(targetModuleId as (typeof TRAINING_MODULE_ORDER)[number]);
+    if (isModuleSkipped(targetModuleId)) return '该实训阶段已略过';
+    const idx = activeTrainingOrder.indexOf(targetModuleId as (typeof TRAINING_MODULE_ORDER)[number]);
     if (idx < 0) return null;
     if (getSidebarModuleUi(targetModuleId).locked) {
       if (isBeforeStageStart(targetModuleId)) {
@@ -881,14 +959,13 @@ export default function StudentCenterPage() {
       }
       if (!teamFormationComplete) {
         const teamName = moduleProgress.find((m) => m.moduleId === 'team')?.moduleName ?? '组队与团队管理';
-        return `请完成实训模块第1阶段任务：${teamName}`;
+        return `请先完成：${teamName}`;
       }
       for (let i = 0; i < idx; i++) {
-        const prevId = TRAINING_MODULE_ORDER[i];
+        const prevId = activeTrainingOrder[i];
         if (!isModuleCompletedByProgress(prevId)) {
-          const stage = i + 1;
           const name = moduleProgress.find((m) => m.moduleId === prevId)?.moduleName ?? prevId;
-          return `请完成实训模块第${stage}阶段任务：${name}`;
+          return `请先完成：${name}`;
         }
       }
     }
@@ -1668,7 +1745,7 @@ export default function StudentCenterPage() {
 
   const completedStagesCount = useMemo(() => {
     let n = 0;
-    for (const id of TRAINING_MODULE_ORDER) {
+    for (const id of activeTrainingOrder) {
       if (id === 'team') {
         if (teamFormationComplete) n += 1;
       } else if (isModuleCompletedByProgress(id)) {
@@ -1676,9 +1753,20 @@ export default function StudentCenterPage() {
       }
     }
     return n;
-  }, [ideationTopicApproved, teamFormationComplete, moduleProgressState, teamMarketReportUploaded, teamProductPrototypeUploaded, teamPlanApproved]);
+  }, [
+    activeTrainingOrder,
+    ideationTopicApproved,
+    teamFormationComplete,
+    moduleProgressState,
+    teamMarketReportUploaded,
+    teamProductPrototypeUploaded,
+    teamPlanApproved,
+    teamBmcCanvasUploaded,
+  ]);
 
-  const overallProgressPercent = Math.round((completedStagesCount / TRAINING_MODULE_ORDER.length) * 100);
+  const overallProgressPercent = Math.round(
+    (completedStagesCount / Math.max(activeTrainingOrder.length, 1)) * 100
+  );
 
   const currentStageLabel = useMemo(() => {
     if (!teamFormationComplete) {
@@ -1957,7 +2045,7 @@ export default function StudentCenterPage() {
             key={selectedClassId}
             classId={selectedClassId}
             isTeamLeader={isCurrentStudentTeamLeader}
-            trainingEnded={trainingEnded}
+            trainingEnded={trainingFrozen}
             stagePeriod={
               getStageDateSetting('market')?.startDate && getStageDateSetting('market')?.deadlineDate
                 ? {
@@ -1989,7 +2077,7 @@ export default function StudentCenterPage() {
             key={selectedClassId}
             classId={selectedClassId}
             isTeamLeader={isCurrentStudentTeamLeader}
-            trainingEnded={trainingEnded}
+            trainingEnded={trainingFrozen}
             onProductTabProgress={handleProductTabProgress}
             onTeamPrototypeUploaded={() => {
               setTeamProductPrototypeUploaded(true);
@@ -2004,7 +2092,7 @@ export default function StudentCenterPage() {
             classId={selectedClassId}
             studentDisplayName={studentDisplayName}
             isTeamLeader={isCurrentStudentTeamLeader}
-            trainingEnded={trainingEnded}
+            trainingEnded={trainingFrozen}
             onBusinessTabProgress={handleBusinessTabProgress}
             onBmcCanvasUploaded={() => setTeamBmcCanvasUploaded(true)}
             onTaskComplete={() => completeActiveTrainingTask('business')}
@@ -2015,7 +2103,7 @@ export default function StudentCenterPage() {
           <RoleSimulationModule
             key={selectedClassId}
             classId={selectedClassId}
-            trainingEnded={trainingEnded}
+            trainingEnded={trainingFrozen}
             onTaskComplete={() => {
               // 无待办任务时 completeActive 会直接 return，仍需刷新阶段进度以解锁商业计划书
               completeActiveTrainingTask('simulation');
@@ -2040,8 +2128,9 @@ export default function StudentCenterPage() {
     }
   };
 
+  // 与教师端一致：整页锁定视口高度，中间主区内部滚动，避免 AI 侧栏被内容撑高导致整页滚动
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-white flex">
+    <div className="flex h-screen bg-gradient-to-br from-gray-50 to-white overflow-hidden">
       {mobileNavOpen ? (
         <button
           type="button"
@@ -2195,9 +2284,9 @@ export default function StudentCenterPage() {
         </div>
       </aside>
 
-      {/* 右侧主内容区 */}
-      <div className="flex-1 min-w-0 flex flex-col">
-        <header className="bg-white border-b border-gray-100 shadow-sm sticky top-0 z-20">
+      {/* 右侧主内容区：overflow 约束在本列，main 内部滚动 */}
+      <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
+        <header className="bg-white border-b border-gray-100 shadow-sm shrink-0 z-20">
           <div className="px-3 md:px-6 py-3 flex items-center justify-between gap-2 !flex-nowrap">
             <div className="flex items-center gap-2 text-sm min-w-0 flex-1">
               <button
@@ -2219,6 +2308,16 @@ export default function StudentCenterPage() {
                 selectedClassId={selectedClassId}
                 onClassChange={handleClassChange}
               />
+              <button
+                type="button"
+                onClick={() => setAiTutorOpen((v) => !v)}
+                className={`w-9 h-9 flex items-center justify-center rounded-lg transition-colors cursor-pointer ${
+                  aiTutorOpen ? 'text-teal-700 bg-teal-50' : 'text-teal-600 hover:bg-teal-50'
+                }`}
+                title="实训助教"
+              >
+                <i className="ri-robot-2-line text-base" />
+              </button>
               <button
                 type="button"
                 onClick={() => setProfileModalOpen(true)}
@@ -2311,7 +2410,7 @@ export default function StudentCenterPage() {
           </div>
         </Drawer>
 
-        <main key={selectedClassId || 'student-no-class'} className="flex-1 p-4 md:p-6 min-w-0">
+        <main key={selectedClassId || 'student-no-class'} className="flex-1 p-4 md:p-6 min-w-0 overflow-y-auto overflow-x-hidden">
 
           {/* 进度看板 */}
           {activeTab === 'overview' && (
@@ -2353,7 +2452,7 @@ export default function StudentCenterPage() {
                     </div>
                     <div className="bg-white/15 backdrop-blur-md rounded-2xl px-3 py-3 border border-white/20">
                       <div className="text-2xl font-bold text-white leading-none">
-                        {completedStagesCount}/{TRAINING_MODULE_ORDER.length}
+                        {completedStagesCount}/{activeTrainingOrder.length}
                       </div>
                       <div className="text-xs text-white/75 mt-1">已完成阶段</div>
                     </div>
@@ -2387,7 +2486,7 @@ export default function StudentCenterPage() {
                   </div>
                   <div className="flex-shrink-0 bg-white/10 backdrop-blur-md rounded-2xl px-6 py-4 border border-white/20 text-center">
                     <div className="text-3xl font-bold text-white mb-1">
-                      {completedStagesCount}/{TRAINING_MODULE_ORDER.length}
+                      {completedStagesCount}/{activeTrainingOrder.length}
                     </div>
                     <div className="text-xs text-white/70">已完成阶段</div>
                   </div>
@@ -3288,6 +3387,8 @@ export default function StudentCenterPage() {
         </main>
       </div>
 
+      <AiTutorPanel role="student" open={aiTutorOpen} onClose={() => setAiTutorOpen(false)} />
+
       {/* 检测弹窗 */}
       {activeQuizId && activeQuizConfig && (
         <QuizModal
@@ -3469,10 +3570,9 @@ export default function StudentCenterPage() {
         onClose={() => setUnlockStageModalModuleId(null)}
         getStartDateLabel={getStartDateLabelForUnlock}
         teamFormationComplete={teamFormationComplete}
-        ideationTopicApproved={ideationTopicApproved}
-        teamMarketReportUploaded={teamMarketReportUploaded}
         isBeforeStageStart={isBeforeStageStart}
         isStageCompleted={isModuleCompletedByProgress}
+        activeTrainingOrder={[...activeTrainingOrder]}
       />
 
       <Modal

@@ -1,9 +1,24 @@
+import type { ReactNode } from 'react';
 import AppModalPortal from '../../../../components/AppModalPortal';
 import type { TopicSubmission } from './types';
 
 interface TopicDetailModalProps {
   topic: TopicSubmission;
   onClose: () => void;
+}
+
+function Field({ icon, title, children }: { icon: string; title: string; children: ReactNode }) {
+  return (
+    <div className="mb-3">
+      <h3 className="text-xs font-semibold text-gray-600 mb-1.5 flex items-center gap-1.5">
+        <i className={`${icon} text-teal-600`} />
+        {title}
+      </h3>
+      <div className="p-2.5 bg-gray-50 rounded-lg border border-gray-100 text-sm text-gray-700 leading-relaxed whitespace-pre-wrap break-all">
+        {children}
+      </div>
+    </div>
+  );
 }
 
 export default function TopicDetailModal({ topic, onClose }: TopicDetailModalProps) {
@@ -19,7 +34,7 @@ export default function TopicDetailModal({ topic, onClose }: TopicDetailModalPro
       rejected: '已退回',
     };
     return (
-      <span className={`px-3 py-1 rounded-full text-sm font-medium border ${styles[status as keyof typeof styles]}`}>
+      <span className={`px-2 py-0.5 rounded-full text-xs font-medium border ${styles[status as keyof typeof styles]}`}>
         {labels[status as keyof typeof labels]}
       </span>
     );
@@ -28,174 +43,100 @@ export default function TopicDetailModal({ topic, onClose }: TopicDetailModalPro
   return (
     <AppModalPortal open onMaskClick={onClose} zIndex={1100}>
       <div
-        className="bg-white rounded-2xl shadow-2xl max-w-3xl w-full max-h-[90vh] overflow-y-auto"
+        className="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[85vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Header */}
-        <div className="sticky top-0 bg-gradient-to-r from-purple-600 to-pink-600 text-white px-6 py-4 rounded-t-2xl">
-          <div className="flex items-center justify-between">
-            <div className="flex-1">
-              <div className="flex items-center gap-3 mb-2">
-                <h2 className="text-xl font-bold">{topic.projectName}</h2>
+        <div className="sticky top-0 bg-white border-b border-gray-100 px-4 py-3 rounded-t-xl z-10">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2 flex-wrap mb-0.5">
+                <h2 className="text-base font-semibold text-gray-900">{topic.projectName}</h2>
                 {getStatusBadge(topic.status)}
               </div>
-              <p className="text-sm text-purple-100">选题详情</p>
+              <p className="text-xs text-gray-400">选题详情</p>
             </div>
             <button
+              type="button"
               onClick={onClose}
-              className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-white/20 transition-colors"
+              className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-gray-100 cursor-pointer"
             >
-              <i className="ri-close-line text-xl"></i>
+              <i className="ri-close-line text-lg text-gray-500" />
             </button>
           </div>
         </div>
 
-        {/* Content */}
-        <div className="p-6">
-          {/* Team Info Card */}
-          <div className="bg-gradient-to-br from-purple-50 to-pink-50 rounded-xl p-5 mb-6 border border-purple-100">
-            <h3 className="text-sm font-bold text-gray-700 mb-3 flex items-center gap-2">
-              <i className="ri-team-line text-purple-600"></i>
-              团队信息
-            </h3>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-purple-600 rounded-full flex items-center justify-center text-white font-bold">
-                  {topic.teamName.charAt(0)}
-                </div>
-                <div>
-                  <div className="text-xs text-gray-500">团队名称</div>
-                  <div className="font-medium text-gray-900">{topic.teamName}</div>
-                </div>
+        <div className="p-4">
+          <div className="bg-teal-50/60 rounded-lg p-3 mb-3 border border-teal-100">
+            <h3 className="text-xs font-semibold text-gray-600 mb-2">团队信息</h3>
+            <div className="grid grid-cols-2 gap-2 text-sm">
+              <div>
+                <div className="text-[11px] text-gray-400">团队</div>
+                <div className="font-medium text-gray-900 text-sm">{topic.teamName}</div>
               </div>
               <div>
-                <div className="text-xs text-gray-500 mb-1">队长</div>
-                <div className="font-medium text-gray-900">{topic.leaderName}</div>
+                <div className="text-[11px] text-gray-400">队长</div>
+                <div className="font-medium text-gray-900 text-sm">{topic.leaderName}</div>
               </div>
               <div>
-                <div className="text-xs text-gray-500 mb-1">成员人数</div>
-                <div className="font-medium text-gray-900">{topic.memberCount} 人</div>
+                <div className="text-[11px] text-gray-400">成员</div>
+                <div className="font-medium text-gray-900 text-sm">{topic.memberCount} 人</div>
               </div>
               <div>
-                <div className="text-xs text-gray-500 mb-1">提交时间</div>
-                <div className="font-medium text-gray-900">
+                <div className="text-[11px] text-gray-400">提交时间</div>
+                <div className="font-medium text-gray-900 text-sm">
                   {new Date(topic.submitTime).toLocaleString('zh-CN')}
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Project Direction */}
-          <div className="mb-6">
-            <h3 className="text-sm font-bold text-gray-700 mb-3 flex items-center gap-2">
-              <i className="ri-compass-line text-purple-600"></i>
-              项目方向
-            </h3>
-            <div className="px-4 py-2 bg-purple-50 border border-purple-200 rounded-lg text-purple-700 font-medium inline-block whitespace-pre-wrap break-all">
-              {topic.direction}
-            </div>
-          </div>
+          <Field icon="ri-compass-line" title="项目方向">
+            {topic.direction || '—'}
+          </Field>
+          <Field icon="ri-file-text-line" title="项目描述">
+            {topic.description || '—'}
+          </Field>
+          <Field icon="ri-user-heart-line" title="目标用户">
+            {topic.targetUsers || '—'}
+          </Field>
+          <Field icon="ri-star-line" title="核心价值">
+            {topic.coreValue || '—'}
+          </Field>
+          <Field icon="ri-question-line" title="核心问题">
+            {topic.coreProblem || '—'}
+          </Field>
+          <Field icon="ri-lightbulb-line" title="解决方案概述">
+            {topic.solutionOverview || '—'}
+          </Field>
+          <Field icon="ri-pie-chart-line" title="市场规模">
+            {topic.marketSize || '—'}
+          </Field>
+          <Field icon="ri-trophy-line" title="竞争优势">
+            {topic.competitiveAdvantage || '—'}
+          </Field>
 
-          {/* Project Description */}
-          <div className="mb-6">
-            <h3 className="text-sm font-bold text-gray-700 mb-3 flex items-center gap-2">
-              <i className="ri-file-text-line text-purple-600"></i>
-              项目描述
-            </h3>
-            <div className="p-4 bg-gray-50 rounded-xl border border-gray-200 text-sm text-gray-700 leading-relaxed whitespace-pre-wrap break-all">
-              {topic.description}
-            </div>
-          </div>
-
-          {/* Target Users */}
-          <div className="mb-6">
-            <h3 className="text-sm font-bold text-gray-700 mb-3 flex items-center gap-2">
-              <i className="ri-user-heart-line text-purple-600"></i>
-              目标用户
-            </h3>
-            <div className="p-4 bg-gray-50 rounded-xl border border-gray-200 text-sm text-gray-700 leading-relaxed whitespace-pre-wrap break-all">
-              {topic.targetUsers}
-            </div>
-          </div>
-
-          {/* Core Value */}
-          <div className="mb-6">
-            <h3 className="text-sm font-bold text-gray-700 mb-3 flex items-center gap-2">
-              <i className="ri-star-line text-purple-600"></i>
-              核心价值
-            </h3>
-            <div className="p-4 bg-gray-50 rounded-xl border border-gray-200 text-sm text-gray-700 leading-relaxed whitespace-pre-wrap break-all">
-              {topic.coreValue}
-            </div>
-          </div>
-
-          <div className="mb-6">
-            <h3 className="text-sm font-bold text-gray-700 mb-3 flex items-center gap-2">
-              <i className="ri-question-line text-purple-600"></i>
-              核心问题
-            </h3>
-            <div className="p-4 bg-gray-50 rounded-xl border border-gray-200 text-sm text-gray-700 leading-relaxed whitespace-pre-wrap break-all">
-              {topic.coreProblem}
-            </div>
-          </div>
-
-          <div className="mb-6">
-            <h3 className="text-sm font-bold text-gray-700 mb-3 flex items-center gap-2">
-              <i className="ri-lightbulb-line text-purple-600"></i>
-              解决方案概述
-            </h3>
-            <div className="p-4 bg-gray-50 rounded-xl border border-gray-200 text-sm text-gray-700 leading-relaxed whitespace-pre-wrap break-all">
-              {topic.solutionOverview}
-            </div>
-          </div>
-
-          {/* Market Size */}
-          <div className="mb-6">
-            <h3 className="text-sm font-bold text-gray-700 mb-3 flex items-center gap-2">
-              <i className="ri-pie-chart-line text-purple-600"></i>
-              市场规模
-            </h3>
-            <div className="p-4 bg-gray-50 rounded-xl border border-gray-200 text-sm text-gray-700 leading-relaxed whitespace-pre-wrap break-all">
-              {topic.marketSize}
-            </div>
-          </div>
-
-          {/* Competitive Advantage */}
-          <div className="mb-6">
-            <h3 className="text-sm font-bold text-gray-700 mb-3 flex items-center gap-2">
-              <i className="ri-trophy-line text-purple-600"></i>
-              竞争优势
-            </h3>
-            <div className="p-4 bg-gray-50 rounded-xl border border-gray-200 text-sm text-gray-700 leading-relaxed whitespace-pre-wrap break-all">
-              {topic.competitiveAdvantage}
-            </div>
-          </div>
-
-          {/* Review Comment */}
-          {topic.reviewComment && (
-            <div className="border-t border-gray-200 pt-6">
-              <h3 className="text-sm font-bold text-gray-700 mb-3 flex items-center gap-2">
-                <i className="ri-message-3-line text-purple-600"></i>
-                审核意见
-              </h3>
-              <div className="p-4 bg-gradient-to-br from-purple-50 to-pink-50 rounded-xl border border-purple-200">
-                <p className="text-sm text-gray-700 leading-relaxed mb-2 whitespace-pre-wrap break-all">{topic.reviewComment}</p>
-                {topic.reviewTime && (
-                  <div className="text-xs text-gray-500 flex items-center gap-1">
-                    <i className="ri-time-line"></i>
+          {topic.reviewComment ? (
+            <div className="border-t border-gray-100 pt-3">
+              <h3 className="text-xs font-semibold text-gray-600 mb-1.5">审核意见</h3>
+              <div className="p-2.5 bg-teal-50 rounded-lg border border-teal-100">
+                <p className="text-sm text-gray-700 leading-relaxed m-0 whitespace-pre-wrap break-all">
+                  {topic.reviewComment}
+                </p>
+                {topic.reviewTime ? (
+                  <div className="text-[11px] text-gray-400 mt-1.5">
                     {new Date(topic.reviewTime).toLocaleString('zh-CN')}
                   </div>
-                )}
+                ) : null}
               </div>
             </div>
-          )}
+          ) : null}
         </div>
 
-        {/* Footer */}
-        <div className="sticky bottom-0 bg-gray-50 px-6 py-4 rounded-b-2xl">
+        <div className="sticky bottom-0 bg-gray-50 px-4 py-3 rounded-b-xl border-t border-gray-100">
           <button
+            type="button"
             onClick={onClose}
-            className="w-full px-6 py-3 bg-gradient-to-r from-purple-600 to-pink-600 text-white rounded-xl font-medium hover:shadow-lg transition-all"
+            className="w-full px-4 py-2 bg-teal-500 text-white rounded-lg text-sm font-medium hover:bg-teal-600 cursor-pointer"
           >
             关闭
           </button>

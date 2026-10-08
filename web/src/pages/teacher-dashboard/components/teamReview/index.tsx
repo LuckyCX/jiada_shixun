@@ -541,7 +541,7 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
   const editableTeams = teams.filter((t) => !t.isSolo && t.members.length < MAX_TEAM_SIZE);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-3">
       {questionsChecked && !questionsReady && !presetAlertClosed && (
         <Alert
           type="warning"
@@ -565,19 +565,19 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
       )}
 
       {/* 头部统计 */}
-      <div className="bg-gradient-to-br from-teal-500 to-cyan-600 rounded-2xl p-6 text-white">
-        <div className="flex items-center justify-between mb-5">
+      <div className="bg-gradient-to-br from-teal-500 to-cyan-600 rounded-xl p-4 text-white">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
           <div>
-            <h2 className="text-2xl font-bold mb-2">组队审核管理</h2>
-            <p className="text-white/80 text-sm">所有学生已完成能力画像测评，可以开始组队</p>
+            <h2 className="text-lg font-semibold mb-0.5">组队审核管理</h2>
+            <p className="text-white/80 text-xs">所有学生已完成能力画像测评，可以开始组队</p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 flex-wrap">
             <button
               type="button"
               onClick={onOpenQuestionsPreset}
-              className="px-5 py-2.5 bg-white/90 text-teal-700 text-sm font-bold rounded-xl hover:shadow-lg transition-all whitespace-nowrap cursor-pointer flex items-center gap-2"
+              className="px-3 py-1.5 bg-white/90 text-teal-700 text-xs font-semibold rounded-lg hover:shadow transition-all whitespace-nowrap cursor-pointer flex items-center gap-1.5"
             >
-              <i className="ri-questionnaire-line text-base"></i>
+              <i className="ri-questionnaire-line text-sm"></i>
               组队问题预设
             </button>
             {teams.length === 0 ? (
@@ -585,11 +585,11 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
                 type="button"
                 disabled={pendingCount < minPendingForAiClick || aiGrouping}
                 onClick={() => void handleAutoGroup()}
-                className={`px-5 py-2.5 bg-white text-teal-700 text-sm font-bold rounded-xl whitespace-nowrap flex items-center gap-2 cursor-pointer ${
-                  pendingCount < minPendingForAiClick || aiGrouping ? 'opacity-50 cursor-not-allowed' : 'hover:shadow-lg'
+                className={`px-3 py-1.5 bg-white text-teal-700 text-xs font-semibold rounded-lg whitespace-nowrap flex items-center gap-1.5 cursor-pointer ${
+                  pendingCount < minPendingForAiClick || aiGrouping ? 'opacity-50 cursor-not-allowed' : 'hover:shadow'
                 }`}
               >
-                {aiGrouping ? <Spin size="small" /> : <i className="ri-magic-line text-base" />}
+                {aiGrouping ? <Spin size="small" /> : <i className="ri-magic-line text-sm" />}
                 AI 智能组队
               </button>
             ) : (
@@ -599,11 +599,11 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
                     type="button"
                     disabled={aiGrouping}
                     onClick={() => void handleAutoGroup()}
-                    className={`px-5 py-2.5 bg-white text-teal-700 text-sm font-bold rounded-xl whitespace-nowrap flex items-center gap-2 cursor-pointer ${
-                      aiGrouping ? 'opacity-50 cursor-not-allowed' : 'hover:shadow-lg'
+                    className={`px-3 py-1.5 bg-white text-teal-700 text-xs font-semibold rounded-lg whitespace-nowrap flex items-center gap-1.5 cursor-pointer ${
+                      aiGrouping ? 'opacity-50 cursor-not-allowed' : 'hover:shadow'
                     }`}
                   >
-                    {aiGrouping ? <Spin size="small" /> : <i className="ri-magic-line text-base" />}
+                    {aiGrouping ? <Spin size="small" /> : <i className="ri-magic-line text-sm" />}
                     AI 智能组队
                   </button>
                 ) : null}
@@ -611,11 +611,11 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
                   type="button"
                   disabled={inTeamCount < 1}
                   onClick={() => void handleNotifyStudents()}
-                  className={`px-5 py-2.5 bg-white/90 text-teal-800 text-sm font-bold rounded-xl whitespace-nowrap flex items-center gap-2 cursor-pointer border border-white/60 ${
-                    inTeamCount < 1 ? 'opacity-50 cursor-not-allowed' : 'hover:shadow-lg'
+                  className={`px-3 py-1.5 bg-white/90 text-teal-800 text-xs font-semibold rounded-lg whitespace-nowrap flex items-center gap-1.5 cursor-pointer border border-white/60 ${
+                    inTeamCount < 1 ? 'opacity-50 cursor-not-allowed' : 'hover:shadow'
                   }`}
                 >
-                  <i className="ri-send-plane-line text-base"></i>
+                  <i className="ri-send-plane-line text-sm"></i>
                   通知学生
                 </button>
               </>
@@ -623,33 +623,32 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
           </div>
         </div>
 
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-3 gap-2">
           {[
             { label: '总学生数', value: students.length, icon: 'ri-user-line', color: 'bg-white/20' },
             { label: '待组队', value: pendingCount, icon: 'ri-time-line', color: 'bg-amber-500/30' },
             { label: '已入队', value: inTeamCount, icon: 'ri-team-line', color: 'bg-green-500/30' },
           ].map((stat, i) => (
-            <div key={i} className={`${stat.color} backdrop-blur-sm border border-white/30 rounded-xl p-4`}>
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-sm text-white/80">{stat.label}</span>
-                <i className={`${stat.icon} text-xl text-white`}></i>
+            <div key={i} className={`${stat.color} backdrop-blur-sm border border-white/30 rounded-lg px-3 py-2`}>
+              <div className="flex items-center justify-between mb-0.5">
+                <span className="text-[11px] text-white/80">{stat.label}</span>
+                <i className={`${stat.icon} text-sm text-white`}></i>
               </div>
-              <div className="text-3xl font-bold">{stat.value}</div>
+              <div className="text-xl font-semibold">{stat.value}</div>
             </div>
           ))}
         </div>
       </div>
- 
 
       {aiGrouping && (
-        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 shadow-sm">
-          <div className="flex items-center gap-2 mb-2">
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
+          <div className="flex items-center gap-2 mb-1.5">
             <Spin size="small" />
-            <span className="text-sm font-bold text-amber-900">{aiGroupStep || 'AI 正在智能分组…'}</span>
+            <span className="text-xs font-semibold text-amber-900">{aiGroupStep || 'AI 正在智能分组…'}</span>
           </div>
           {aiThinkingLines.length > 0 ? (
-            <div className="border border-amber-100 bg-white/60 rounded-xl p-3">
-              <div className="text-[10px] font-semibold text-amber-800 mb-1.5">思考过程</div>
+            <div className="border border-amber-100 bg-white/60 rounded-lg p-2.5">
+              <div className="text-[10px] font-semibold text-amber-800 mb-1">思考过程</div>
               <div className="max-h-28 overflow-y-auto text-xs text-amber-950/90 whitespace-pre-wrap leading-relaxed space-y-1">
                 {aiThinkingLines.map((line, i) => (
                   <p key={i}>{line}</p>
@@ -662,15 +661,15 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
         </div>
       )}
 
-      <div className="grid lg:grid-cols-3 gap-6">
+      <div className="grid lg:grid-cols-3 gap-3 md:gap-4">
         {/* 左侧：待组队学生池 */}
         <div className="lg:col-span-1">
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden sticky top-6">
-            <div className="bg-gray-50 border-b border-gray-100 px-5 py-4">
-              <h3 className="text-base font-bold text-gray-900 flex items-center gap-2">
+          <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden sticky top-6">
+            <div className="bg-gray-50 border-b border-gray-100 px-3 py-2.5">
+              <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-1.5">
                 <i className="ri-user-add-line text-teal-600"></i>
                 待组队学生池
-                <span className="px-2 py-0.5 bg-teal-100 text-teal-700 text-xs font-bold rounded-full whitespace-nowrap">
+                <span className="px-1.5 py-0.5 bg-teal-100 text-teal-700 text-[11px] font-semibold rounded-full whitespace-nowrap">
                   {filteredStudents.filter(s => s.status === 'pending').length}
                 </span>
               </h3>
@@ -681,11 +680,11 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
                 </p>
               ) : null}
             </div>
-            <div className="p-4 max-h-[calc(100vh-300px)] overflow-y-auto space-y-2">
+            <div className="p-2.5 max-h-[calc(100vh-280px)] overflow-y-auto space-y-1.5">
               {filteredStudents.filter(s => s.status === 'pending').length === 0 ? (
-                <div className="text-center py-8">
-                  <i className="ri-checkbox-circle-line text-4xl text-gray-300 block mb-2"></i>
-                  <p className="text-sm text-gray-400">所有学生已分组</p>
+                <div className="text-center py-6">
+                  <i className="ri-checkbox-circle-line text-2xl text-gray-300 block mb-1"></i>
+                  <p className="text-xs text-gray-400">所有学生已分组</p>
                 </div>
               ) : (
                 filteredStudents.filter(s => s.status === 'pending').map(student => (
@@ -693,7 +692,7 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
                     key={student.id}
                     draggable
                     onDragStart={() => handleDragStart(student)}
-                    className="relative bg-gray-50 border border-gray-200 rounded-xl p-3 hover:border-teal-300 hover:bg-teal-50/30 transition-all cursor-move"
+                    className="relative bg-gray-50 border border-gray-200 rounded-lg p-2.5 hover:border-teal-300 hover:bg-teal-50/30 transition-all cursor-move"
                   >
                     <div className="absolute top-2 right-2 z-10 flex items-center gap-1">
                       {student.hasIntroVideo ? (
@@ -781,10 +780,10 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
                         </button>
                       )}
                     </div>
-                    <div className="flex items-start gap-3">
-                      <UserAvatar name={student.name || '?'} avatarUrl={student.avatarUrl} size="lg" />
+                    <div className="flex items-start gap-2">
+                      <UserAvatar name={student.name || '?'} avatarUrl={student.avatarUrl} size="md" />
                       <div className="flex-1 min-w-0">
-                        <h4 className="text-sm font-bold text-gray-900 leading-snug mb-1">{student.name}</h4>
+                        <h4 className="text-xs font-semibold text-gray-900 leading-snug mb-0.5">{student.name}</h4>
                         <div className="flex gap-1 mb-1.5">
                           <span className="self-start px-1.5 py-0.5 bg-gray-200 text-gray-600 text-xs rounded-full">
                             {student.studentId}
@@ -822,31 +821,31 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
 
         {/* 右侧：已组队团队 */}
         <div className="lg:col-span-2">
-          <div className="space-y-4">
+          <div className="space-y-3">
             {teams.length === 0 ? (
-              <div className="bg-white rounded-2xl border-2 border-dashed border-gray-200 p-12 text-center">
-                <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                  <i className="ri-team-line text-4xl text-gray-400"></i>
+              <div className="bg-white rounded-xl border border-dashed border-gray-200 p-8 text-center">
+                <div className="w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-3">
+                  <i className="ri-team-line text-2xl text-gray-400"></i>
                 </div>
-                <h3 className="text-lg font-bold text-gray-900 mb-2">还没有组建团队</h3>
-                <p className="text-sm text-gray-500 mb-2">可手动拖拽学生入队，或使用「AI 智能组队」自动分组</p>
+                <h3 className="text-sm font-semibold text-gray-900 mb-1">还没有组建团队</h3>
+                <p className="text-xs text-gray-500 mb-2">可手动拖拽学生入队，或使用「AI 智能组队」自动分组</p>
                 {showUnderFiveAiHint ? (
-                  <p className="text-sm text-amber-700 mb-4 leading-relaxed max-w-md mx-auto">
+                  <p className="text-xs text-amber-700 mb-3 leading-relaxed max-w-md mx-auto">
                     当前人数未满 {MIN_PENDING_FOR_AI} 人，不满足 AI 智能组队要求，您可以手动为学生指定队伍，或等待超过{' '}
                     {MIN_PENDING_FOR_AI} 人后点击 AI 智能组队按钮进行自动分组
                   </p>
                 ) : (
-                  <p className="mb-4" />
+                  <p className="mb-3" />
                 )}
                 <button
                   type="button"
                   onClick={() => void handleAutoGroup()}
                   disabled={pendingCount < minPendingForAiClick || aiGrouping}
-                  className={`px-6 py-3 bg-gradient-to-r from-teal-500 to-cyan-500 text-white text-sm font-bold rounded-xl hover:shadow-lg transition-all whitespace-nowrap cursor-pointer ${
+                  className={`px-4 py-2 bg-gradient-to-r from-teal-500 to-cyan-500 text-white text-xs font-semibold rounded-lg hover:shadow transition-all whitespace-nowrap cursor-pointer ${
                     pendingCount < minPendingForAiClick || aiGrouping ? 'opacity-50 cursor-not-allowed' : ''
                   }`}
                 >
-                  {aiGrouping ? <Spin size="small" className="mr-2" /> : <i className="ri-magic-line mr-2" />}
+                  {aiGrouping ? <Spin size="small" className="mr-2" /> : <i className="ri-magic-line mr-1" />}
                   AI 智能组队
                 </button>
               </div>
@@ -866,33 +865,33 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
                     }
                     handleDropToTeam(team.id);
                   }}
-                  className={`bg-white rounded-2xl border-2 transition-all overflow-hidden ${
+                  className={`bg-white rounded-xl border transition-all overflow-hidden ${
                     team.isSolo
                       ? 'border-indigo-100'
                       : 'border-gray-100 hover:border-teal-200'
                   }`}
                 >
-                  <div className="bg-gradient-to-r from-teal-500 to-cyan-500 px-5 py-4 text-white">
+                  <div className="bg-gradient-to-r from-teal-500 to-cyan-500 px-3 py-2.5 text-white">
                     <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center font-bold text-lg">
+                      <div className="flex items-center gap-2">
+                        <div className="w-8 h-8 bg-white/20 rounded-lg flex items-center justify-center font-semibold text-sm">
                           {index + 1}
                         </div>
                         <div>
-                          <h3 className="text-base font-bold flex items-center gap-2 flex-wrap">
+                          <h3 className="text-sm font-semibold flex items-center gap-1.5 flex-wrap">
                             {team.name}
                             {team.isSolo ? (
-                              <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-white/25 border border-white/30">
+                              <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-white/25 border border-white/30">
                                 单人公司
                               </span>
                             ) : null}
                           </h3>
-                          <p className="text-xs text-white/80">{team.members.length} 名成员</p>
+                          <p className="text-[11px] text-white/80">{team.members.length} 名成员</p>
                         </div>
                       </div>
                       <div className="text-right">
-                        <div className="text-xs text-white/80 mb-1">互补得分</div>
-                        <div className="text-2xl font-bold">
+                        <div className="text-[11px] text-white/80">互补得分</div>
+                        <div className="text-lg font-semibold">
                           {team.isSolo ? '—' : team.complementScore ?? 0}
                         </div>
                         {team.isSolo ? (
@@ -902,36 +901,36 @@ export default function TeamReview({ personalClass, onOpenQuestionsPreset, quest
                     </div>
                   </div>
 
-                  <div className="p-5">
+                  <div className="p-3">
                     {/* 团队平均能力 */}
-                    <div className="bg-gray-50 rounded-xl p-4 mb-4">
-                      <h4 className="text-xs font-bold text-gray-700 mb-3">团队平均能力</h4>
-                      <div className="space-y-2">
+                    <div className="bg-gray-50 rounded-lg p-2.5 mb-2.5">
+                      <h4 className="text-[11px] font-semibold text-gray-700 mb-2">团队平均能力</h4>
+                      <div className="space-y-1.5">
                         {[
                           { label: '战略统筹', value: team.avgProfile.strategic, color: 'from-violet-500 to-purple-500' },
                           { label: '市场运营', value: team.avgProfile.market, color: 'from-orange-400 to-amber-400' },
                           { label: '技术风控', value: team.avgProfile.techRisk, color: 'from-teal-500 to-cyan-500' },
                         ].map(item => (
-                          <div key={item.label} className="flex items-center gap-3">
-                            <span className="text-xs text-gray-600 w-16">{item.label}</span>
-                            <div className="flex-1 h-2 bg-gray-200 rounded-full overflow-hidden">
+                          <div key={item.label} className="flex items-center gap-2">
+                            <span className="text-[11px] text-gray-600 w-14">{item.label}</span>
+                            <div className="flex-1 h-1.5 bg-gray-200 rounded-full overflow-hidden">
                               <div className={`h-full bg-gradient-to-r ${item.color} rounded-full`} style={{ width: `${item.value}%` }}></div>
                             </div>
-                            <span className="text-xs font-bold text-gray-900 w-10 text-right">{item.value}</span>
+                            <span className="text-[11px] font-semibold text-gray-900 w-8 text-right">{item.value}</span>
                           </div>
                         ))}
                       </div>
                     </div>
 
                     {/* 成员列表 */}
-                    <div className="space-y-2">
+                    <div className="space-y-1.5">
                       {team.members.map(member => (
-                        <div key={member.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl hover:bg-teal-50/30 transition-colors">
-                          <div className="flex items-center gap-3">
-                            <UserAvatar name={member.name || '?'} avatarUrl={member.avatarUrl} size="md" />
+                        <div key={member.id} className="flex items-center justify-between p-2 bg-gray-50 rounded-lg hover:bg-teal-50/30 transition-colors">
+                          <div className="flex items-center gap-2">
+                            <UserAvatar name={member.name || '?'} avatarUrl={member.avatarUrl} size="sm" />
                             <div>
-                              <div className="flex items-center gap-2 mb-0.5 flex-wrap">
-                                <span className="text-sm font-bold text-gray-900">{member.name}</span>
+                              <div className="flex items-center gap-1.5 mb-0.5 flex-wrap">
+                                <span className="text-xs font-semibold text-gray-900">{member.name}</span>
                                 <span className="px-1.5 py-0.5 bg-gray-200 text-gray-600 text-xs rounded-full whitespace-nowrap">
                                   {member.studentId}
                                 </span>

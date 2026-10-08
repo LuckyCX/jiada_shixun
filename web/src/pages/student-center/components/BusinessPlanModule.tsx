@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Button, Modal, Spin, Upload, message } from 'antd';
 import type { UploadFile } from 'antd';
 import RichTextEditor from '../../../components/RichTextEditor';
@@ -13,12 +13,112 @@ import {
   releaseBusinessPlanSectionLock,
   saveBusinessPlanWorkspace,
   submitBusinessPlan,
+  type BusinessPlanClassMeta,
   type BusinessPlanSection,
   type BusinessPlanSectionLock,
+  type BusinessPlanTeamMember,
   type BusinessPlanWorkspace,
 } from '../../../lib/studentBusinessPlanApi';
 import { downloadBusinessPlanDocx } from '../../../lib/businessPlanDocxExport';
 import { getPortalToken, parseJwtPayload, rewriteUnsafeHttpMethod } from '../../../lib/authApi';
+import {
+  BUSINESS_PLAN_RUBRIC_DIMENSIONS,
+  BUSINESS_PLAN_SECTION_DEFS,
+  BUSINESS_PLAN_SECTION_GROUPS,
+  SHOW_BP_AI_FILL,
+  SHOW_BP_STRUCTURE_TOOLS,
+  defaultCover,
+  guideForSectionKey,
+  type BusinessPlanCover,
+} from '../../../lib/businessPlanTemplate';
+
+function withClassMetaCover(cover: BusinessPlanCover, classMeta?: BusinessPlanClassMeta | null): BusinessPlanCover {
+  const now = new Date();
+  return {
+    ...cover,
+    collegeClass: String(classMeta?.collegeClass || cover.collegeClass || '').trim(),
+    advisor: String(classMeta?.advisor || cover.advisor || '').trim(),
+    dateYear: String(now.getFullYear()),
+    dateMonth: String(now.getMonth() + 1),
+    dateDay: String(now.getDate()),
+  };
+}
+
+function formatCoverDate(cover: BusinessPlanCover) {
+  const y = cover.dateYear || String(new Date().getFullYear());
+  const m = cover.dateMonth || String(new Date().getMonth() + 1);
+  const d = cover.dateDay || String(new Date().getDate());
+  return `${y}年${m}月${d}日`;
+}
+
+function CoverFieldCard({
+  label,
+  value,
+  wide,
+  children,
+}: {
+  label: string;
+  value?: string;
+  wide?: boolean;
+  children?: ReactNode;
+}) {
+  return (
+    <div
+      className={`rounded-xl border border-violet-100 bg-white px-4 py-3 shadow-sm ${
+        wide ? 'md:col-span-2' : ''
+      }`}
+    >
+      <div className="text-xs text-gray-500 mb-1">{label}</div>
+      {children ?? (
+        <div className="text-sm font-semibold text-gray-900 break-words whitespace-pre-wrap">
+          {value?.trim() ? value : '—'}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** 教师审核后的分项得分展示 */
+function ReviewScorePanel({
+  scores,
+  totalScore,
+  reviewComment,
+}: {
+  scores?: Record<string, number> | null;
+  totalScore?: number | null;
+  reviewComment?: string;
+}) {
+  if (totalScore == null && !scores) return null;
+  return (
+    <div className="bg-white border border-indigo-100 rounded-2xl p-4 space-y-3">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <h3 className="text-sm font-bold text-gray-900 m-0">教师评分</h3>
+        {totalScore != null ? (
+          <span className="text-sm font-bold text-indigo-700">总分 {totalScore}</span>
+        ) : null}
+      </div>
+      <div className="grid sm:grid-cols-2 gap-2">
+        {BUSINESS_PLAN_RUBRIC_DIMENSIONS.map((d) => (
+          <div
+            key={d.key}
+            className="flex items-center justify-between gap-2 rounded-xl bg-gray-50 border border-gray-100 px-3 py-2 text-xs"
+          >
+            <span className="text-gray-600">{d.title}</span>
+            <span className="font-semibold text-gray-900 shrink-0">
+              {scores && scores[d.key] != null ? scores[d.key] : '—'}
+              <span className="text-gray-400 font-normal">/{d.max}</span>
+            </span>
+          </div>
+        ))}
+      </div>
+      {reviewComment ? (
+        <div className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap border-t border-gray-100 pt-3">
+          {reviewComment}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 type BusinessPlanModuleProps = {
   classId?: string;
@@ -29,16 +129,11 @@ type BusinessPlanModuleProps = {
   onTrainingEnded?: () => void;
 };
 
-const DEFAULT_SECTION_DEFS: { key: string; title: string }[] = [
-  { key: 'executive_summary', title: '执行摘要' },
-  { key: 'background', title: '项目背景' },
-  { key: 'market', title: '市场分析' },
-  { key: 'product', title: '产品与服务' },
-  { key: 'business_model', title: '商业模式' },
-  { key: 'marketing', title: '营销策略' },
-  { key: 'finance', title: '财务规划' },
-  { key: 'team', title: '团队介绍' },
-];
+const DEFAULT_SECTION_DEFS = BUSINESS_PLAN_SECTION_DEFS.map((d) => ({
+  key: d.key,
+  title: d.title,
+  guide: d.guide,
+}));
 
 const COLLAB_TICK_MS = 5000;
 
@@ -90,6 +185,13 @@ export default function BusinessPlanModule({
   const [loading, setLoading] = useState(true);
   const [workspace, setWorkspace] = useState<BusinessPlanWorkspace | null>(null);
   const [sections, setSections] = useState<BusinessPlanSection[]>([]);
+  const [cover, setCover] = useState<BusinessPlanCover>(() => defaultCover());
+  const [classMeta, setClassMeta] = useState<BusinessPlanClassMeta | null>(null);
+  const [teamMembers, setTeamMembers] = useState<BusinessPlanTeamMember[]>([]);
+  const [isSoloTeam, setIsSoloTeam] = useState(false);
+  const [projectNameLocked, setProjectNameLocked] = useState(false);
+  const [draftProjectName, setDraftProjectName] = useState('');
+  const [savingCover, setSavingCover] = useState(false);
   const [revision, setRevision] = useState(1);
   const [locks, setLocks] = useState<BusinessPlanSectionLock[]>([]);
   const [activeSectionKey, setActiveSectionKey] = useState('');
@@ -116,8 +218,16 @@ export default function BusinessPlanModule({
   const fillingRef = useRef(false);
   const blurReleaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const suppressBlurReleaseRef = useRef(false);
+  /** 切章时锁定窗口滚动，避免编辑器销毁/重建把页面顶下去 */
+  const pendingScrollYRef = useRef<number | null>(null);
 
   const readOnly = Boolean(workspace?.readOnly);
+
+  const restorePendingScroll = useCallback(() => {
+    const y = pendingScrollYRef.current;
+    if (y == null) return;
+    window.scrollTo({ top: y, left: 0, behavior: 'auto' });
+  }, []);
 
   useEffect(() => {
     holdingLockKeyRef.current = holdingLockKey;
@@ -141,6 +251,26 @@ export default function BusinessPlanModule({
       setWorkspace(ws);
       setRevision(nextRevision);
       setLocks(Array.isArray(ws.locks) ? ws.locks : []);
+      if (ws.classMeta) setClassMeta(ws.classMeta);
+      if (Array.isArray(ws.teamMembers)) setTeamMembers(ws.teamMembers);
+      setIsSoloTeam(Boolean(ws.isSolo) || (ws.teamMemberCount || 0) <= 1);
+      const locked = Boolean(ws.projectNameLocked || String(ws.topicProjectName || '').trim());
+      setProjectNameLocked(locked);
+      if (ws.cover) {
+        const nextCover = withClassMetaCover(
+          {
+            ...defaultCover(),
+            ...ws.cover,
+            members: Array.isArray(ws.cover.members) ? [...ws.cover.members] : [],
+            projectName: locked
+              ? String(ws.topicProjectName || ws.cover.projectName || '').trim()
+              : String(ws.cover.projectName || '').trim(),
+          },
+          ws.classMeta
+        );
+        setCover(nextCover);
+        setDraftProjectName(nextCover.projectName);
+      }
       const remoteSecs = ws.sections.length
         ? ws.sections
         : DEFAULT_SECTION_DEFS.map((d) => ({ ...d, content: '' }));
@@ -565,14 +695,50 @@ export default function BusinessPlanModule({
   const exportDocx = useCallback(
     (secs?: BusinessPlanSection[]) => {
       const snapshot = secs || getSectionsSnapshotWithDraft();
+      const byKey = new Map(BUSINESS_PLAN_SECTION_DEFS.map((d) => [d.key, d.groupKey]));
       downloadBusinessPlanDocx(
-        snapshot.map((s) => ({ title: s.title, content: s.content })),
-        '商业计划书要点.docx'
+        snapshot.map((s) => ({
+          key: s.key,
+          title: s.title,
+          content: s.content,
+          groupKey: byKey.get(s.key),
+        })),
+        '商业计划书.docx',
+        withClassMetaCover(cover, classMeta)
       );
       message.success('已导出 Word（docx）');
     },
-    [getSectionsSnapshotWithDraft]
+    [getSectionsSnapshotWithDraft, cover, classMeta]
   );
+
+  const saveCoverOnly = async () => {
+    if (!classId || readOnly || projectNameLocked) return;
+    const name = draftProjectName.trim();
+    if (!name) {
+      message.warning('请填写小组项目名称');
+      return;
+    }
+    setSavingCover(true);
+    try {
+      const payloadCover = withClassMetaCover({ ...cover, projectName: name }, classMeta);
+      const ws = await saveBusinessPlanWorkspace(classId, {
+        revision: revisionRef.current,
+        cover: payloadCover,
+      });
+      applyWorkspace(ws, { markSaved: true });
+      message.success('项目名称已保存');
+    } catch (e) {
+      if (!handleConflict(e)) message.error(e instanceof Error ? e.message : '保存失败');
+    } finally {
+      setSavingCover(false);
+    }
+  };
+
+  const memberSlotCount = useMemo(() => {
+    if (isSoloTeam) return 0;
+    if (teamMembers.length > 0) return teamMembers.filter((m) => !m.isLeader).length;
+    return Array.isArray(cover.members) ? cover.members.length : 0;
+  }, [isSoloTeam, teamMembers, cover.members]);
 
   const addSection = () => {
     if (holdingLockKey) {
@@ -610,6 +776,12 @@ export default function BusinessPlanModule({
 
   const switchSection = async (nextKey: string) => {
     if (nextKey === activeSectionKey) return;
+    // 侧栏切章时取消 blur 延迟放锁，避免与本次保存竞态
+    if (blurReleaseTimerRef.current) {
+      clearTimeout(blurReleaseTimerRef.current);
+      blurReleaseTimerRef.current = null;
+    }
+    pendingScrollYRef.current = window.scrollY;
     flushDraftToSections();
     const held = holdingLockKeyRef.current;
     if (held) {
@@ -617,7 +789,23 @@ export default function BusinessPlanModule({
     }
     setActiveSectionKey(nextKey);
     setLockBlockedHint('');
+    restorePendingScroll();
   };
+
+  // 切章后编辑器重建可能再次带动滚动，布局完成后多拍几次复位
+  useLayoutEffect(() => {
+    if (pendingScrollYRef.current == null) return;
+    restorePendingScroll();
+    const raf = requestAnimationFrame(() => restorePendingScroll());
+    const t = window.setTimeout(() => {
+      restorePendingScroll();
+      pendingScrollYRef.current = null;
+    }, 80);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.clearTimeout(t);
+    };
+  }, [activeSectionKey, holdingLockKey, restorePendingScroll]);
 
   const confirmGenerateOutline = async () => {
     if (!classId || readOnly) return;
@@ -788,9 +976,17 @@ export default function BusinessPlanModule({
       )}
       {submission?.status === 'rejected' && (
         <div className="bg-rose-50 border border-rose-200 rounded-xl px-4 py-3 text-sm text-rose-800">
-          审核未通过：{submission.reviewComment || '请修改后重新提交。'}
+          审核未通过，请修改后重新提交。
         </div>
       )}
+      {(submission?.status === 'approved' || submission?.status === 'rejected') &&
+      submission.totalScore != null ? (
+        <ReviewScorePanel
+          scores={submission.scores}
+          totalScore={submission.totalScore}
+          reviewComment={submission.reviewComment}
+        />
+      ) : null}
       {lockBlockedHint && !readOnly && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-800">
           {lockBlockedHint}
@@ -821,7 +1017,60 @@ export default function BusinessPlanModule({
 
         <div className="p-8">
           {activeTab === 'plan' && (
-            <div className={fullScreen ? 'space-y-0' : 'space-y-8'}>
+            <div className={fullScreen ? 'space-y-0' : 'space-y-6'}>
+              {!fullScreen && (
+                <>
+                  <div className="bg-violet-50/70 border border-violet-200 rounded-2xl p-4 space-y-3">
+                    <h3 className="text-sm font-bold text-violet-900 m-0">封面信息</h3>
+                    <div className="grid md:grid-cols-2 gap-3">
+                      <CoverFieldCard
+                        label="小组项目名称"
+                        value={cover.projectName}
+                        wide={!projectNameLocked}
+                      >
+                        {projectNameLocked || readOnly ? undefined : (
+                          <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
+                            <input
+                              className="flex-1 border border-violet-200 rounded-lg px-3 py-2 text-sm"
+                              value={draftProjectName}
+                              placeholder="请填写小组项目名称"
+                              onChange={(e) => setDraftProjectName(e.target.value)}
+                            />
+                            <Button
+                              type="primary"
+                              size="small"
+                              loading={savingCover}
+                              onClick={() => void saveCoverOnly()}
+                            >
+                              保存名称
+                            </Button>
+                          </div>
+                        )}
+                      </CoverFieldCard>
+                      <CoverFieldCard
+                        label={isSoloTeam ? '负责人（姓名学号）' : '组长（姓名学号）'}
+                        value={cover.leader}
+                      />
+                      {Array.from({ length: memberSlotCount }, (_, i) => (
+                        <CoverFieldCard
+                          key={i}
+                          label={`成员（姓名学号）${i + 1}`}
+                          value={cover.members[i] || ''}
+                        />
+                      ))}
+                      <CoverFieldCard
+                        label="学院班级"
+                        value={cover.collegeClass || classMeta?.collegeClass || ''}
+                      />
+                      <CoverFieldCard
+                        label="指导教师"
+                        value={cover.advisor || classMeta?.advisor || ''}
+                      />
+                      <CoverFieldCard label="日期" value={formatCoverDate(cover)} />
+                    </div>
+                  </div>
+                </>
+              )}
 
               <div
                 className={`bg-white border border-gray-200 rounded-xl p-6 ${
@@ -832,94 +1081,79 @@ export default function BusinessPlanModule({
                   <div className="col-span-12 md:col-span-4 lg:col-span-3">
                     <div className={`border border-gray-200 rounded-xl overflow-hidden ${fullScreen ? 'h-full flex flex-col min-h-0' : ''}`}>
                       <div className="bg-gray-50 px-3 py-2 flex items-center justify-between gap-2 shrink-0">
-                        <span className="text-xs font-semibold text-gray-600">章节列表</span>
-                        <div className="flex items-center gap-1">
-                          <button
-                            type="button"
-                            disabled={readOnly || generatingOutline}
-                            onClick={() => setOutlineModalOpen(true)}
-                            className="px-2 h-7 rounded-lg hover:bg-white text-violet-700 text-[11px] font-semibold disabled:opacity-50 cursor-pointer whitespace-nowrap"
-                            title="根据项目生成章节"
-                          >
-                            <i className="ri-sparkling-line mr-0.5" />
-                            生成章节
-                          </button>
-                          <button
-                            type="button"
-                            disabled={readOnly}
-                            onClick={addSection}
-                            className="w-7 h-7 rounded-lg hover:bg-white text-gray-600 disabled:opacity-50 cursor-pointer"
-                            title="新增章节"
-                          >
-                            <i className="ri-add-line" />
-                          </button>
-                        </div>
+                        <span className="text-xs font-semibold text-gray-600">章节</span>
+                        {SHOW_BP_STRUCTURE_TOOLS ? (
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              disabled={readOnly || generatingOutline}
+                              onClick={() => setOutlineModalOpen(true)}
+                              className="px-2 h-7 rounded-lg hover:bg-white text-violet-700 text-[11px] font-semibold disabled:opacity-50 cursor-pointer whitespace-nowrap"
+                              title="根据项目生成章节"
+                            >
+                              <i className="ri-sparkling-line mr-0.5" />
+                              生成章节
+                            </button>
+                            <button
+                              type="button"
+                              disabled={readOnly}
+                              onClick={addSection}
+                              className="w-7 h-7 rounded-lg hover:bg-white text-gray-600 disabled:opacity-50 cursor-pointer"
+                              title="新增章节"
+                            >
+                              <i className="ri-add-line" />
+                            </button>
+                          </div>
+                        ) : null}
                       </div>
                       <div className={`${fullScreen ? 'flex-1 min-h-0' : 'max-h-[520px]'} overflow-y-auto`}>
-                        {sections.length === 0 ? (
-                          <div className="p-4 text-sm text-gray-500 text-center">暂无章节</div>
-                        ) : (
-                          sections.map((sec, idx) => {
-                            const filled = stripHtml(sec.content).length > 0;
-                            const active = sec.key === activeSectionKey;
-                            const lock = lockOf(sec.key);
-                            const lockedByOther = Boolean(lock && String(lock.lockedById) !== String(studentId));
-                            const lockedByMe = Boolean(lock && String(lock.lockedById) === String(studentId));
-                            return (
-                              <div
-                                key={sec.key}
-                                onClick={() => void switchSection(sec.key)}
-                                className={`w-full text-left px-3 py-3 border-b border-gray-100 hover:bg-gray-50 cursor-pointer ${
-                                  active ? 'bg-violet-50' : ''
-                                }`}
-                                role="button"
-                                tabIndex={0}
-                                onKeyDown={(e) => {
-                                  if (e.key !== 'Enter' && e.key !== ' ') return;
-                                  e.preventDefault();
-                                  void switchSection(sec.key);
-                                }}
-                              >
-                                <div className="flex items-start justify-between gap-2">
-                                  <div className="min-w-0 flex-1">
-                                    <div className="flex items-center gap-2">
-                                      <span className="text-xs text-gray-400 flex-shrink-0">{idx + 1}</span>
-                                      {editingTitleKey === sec.key && !readOnly && canEditActive && sec.key === holdingLockKey ? (
-                                        <input
-                                          value={sec.title}
-                                          autoFocus
-                                          onBlur={() => setEditingTitleKey(null)}
-                                          onChange={(e) => {
-                                            const v = e.target.value;
-                                            setSections((prev) =>
-                                              prev.map((s) => (s.key === sec.key ? { ...s, title: v } : s))
-                                            );
-                                          }}
-                                          className="w-full text-sm font-bold text-gray-900 bg-white border border-gray-200 rounded px-2 py-1"
-                                        />
-                                      ) : (
-                                        <span
-                                          className="text-sm font-bold text-gray-900 truncate"
-                                          title={sec.title}
-                                          onDoubleClick={(e) => {
-                                            e.preventDefault();
-                                            e.stopPropagation();
-                                            if (!readOnly && canEditActive && sec.key === holdingLockKey) {
-                                              setEditingTitleKey(sec.key);
-                                            }
-                                          }}
-                                        >
-                                          {sec.title || '未命名章节'}
-                                        </span>
-                                      )}
+                        {BUSINESS_PLAN_SECTION_GROUPS.map((group) => {
+                          const groupSecs = sections.filter((s) => {
+                            const def = BUSINESS_PLAN_SECTION_DEFS.find((d) => d.key === s.key);
+                            return def?.groupKey === group.key;
+                          });
+                          return (
+                            <div key={group.key}>
+                              <div className="px-3 py-2 bg-gray-100 text-xs font-bold text-gray-700 sticky top-0 z-[1]">
+                                {group.title}
+                              </div>
+                              {groupSecs.map((sec) => {
+                                const filled = stripHtml(sec.content).length > 0;
+                                const active = sec.key === activeSectionKey;
+                                const lock = lockOf(sec.key);
+                                const lockedByOther = Boolean(lock && String(lock.lockedById) !== String(studentId));
+                                const lockedByMe = Boolean(lock && String(lock.lockedById) === String(studentId));
+                                return (
+                                  <div
+                                    key={sec.key}
+                                    onMouseDown={(e) => {
+                                      // 阻止编辑器先失焦再切章，减少滚动跳动
+                                      e.preventDefault();
+                                    }}
+                                    onClick={() => void switchSection(sec.key)}
+                                    className={`w-full text-left px-3 py-2.5 border-b border-gray-100 hover:bg-gray-50 cursor-pointer ${
+                                      active ? 'bg-violet-50' : ''
+                                    }`}
+                                    role="button"
+                                    tabIndex={0}
+                                    onKeyDown={(e) => {
+                                      if (e.key !== 'Enter' && e.key !== ' ') return;
+                                      e.preventDefault();
+                                      void switchSection(sec.key);
+                                    }}
+                                  >
+                                    <div className="flex items-start gap-2 min-w-0">
+                                      <span className="text-sm font-medium text-gray-900 whitespace-normal break-words leading-snug flex-1 min-w-0">
+                                        {sec.title}
+                                      </span>
                                       {lockedByOther ? (
-                                        <i className="ri-lock-line text-amber-500 text-sm" title={`${lock?.lockedByName} 编辑中`} />
+                                        <i className="ri-lock-line text-amber-500 text-sm shrink-0 mt-0.5" title={`${lock?.lockedByName} 编辑中`} />
                                       ) : null}
                                       {lockedByMe ? (
-                                        <i className="ri-edit-line text-violet-500 text-sm" title="你正在编辑" />
+                                        <i className="ri-edit-line text-violet-500 text-sm shrink-0 mt-0.5" title="你正在编辑" />
                                       ) : null}
                                     </div>
-                                    <div className="mt-1 flex items-center gap-2">
+                                    <div className="mt-0.5 flex items-center gap-2">
                                       <span className={`text-[11px] ${filled ? 'text-green-700' : 'text-gray-400'}`}>
                                         {filled ? '已填写' : '待填写'}
                                       </span>
@@ -927,71 +1161,22 @@ export default function BusinessPlanModule({
                                         <span className="text-[11px] text-amber-600">{lock?.lockedByName} 编辑中</span>
                                       ) : null}
                                     </div>
+                                    {SHOW_BP_STRUCTURE_TOOLS && !readOnly ? (
+                                      <div className="flex items-center gap-1 mt-1">
+                                        <button type="button" className="hidden" onClick={() => moveSection(sec.key, 'up')} />
+                                        <button type="button" className="hidden" onClick={() => deleteSection(sec.key)} />
+                                      </div>
+                                    ) : null}
                                   </div>
-                                  {!readOnly && (
-                                    <div className="flex items-center gap-1 flex-shrink-0">
-                                      <button
-                                        type="button"
-                                        onClick={(e) => {
-                                          e.preventDefault();
-                                          e.stopPropagation();
-                                          moveSection(sec.key, 'up');
-                                        }}
-                                        className="w-6 h-6 flex items-center justify-center text-gray-400 hover:text-gray-700 hover:bg-gray-50 rounded-md disabled:opacity-40"
-                                        title="上移"
-                                        disabled={idx === 0}
-                                      >
-                                        <i className="ri-arrow-up-line text-sm" />
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={(e) => {
-                                          e.preventDefault();
-                                          e.stopPropagation();
-                                          moveSection(sec.key, 'down');
-                                        }}
-                                        className="w-6 h-6 flex items-center justify-center text-gray-400 hover:text-gray-700 hover:bg-gray-50 rounded-md disabled:opacity-40"
-                                        title="下移"
-                                        disabled={idx === sections.length - 1}
-                                      >
-                                        <i className="ri-arrow-down-line text-sm" />
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={(e) => {
-                                          e.preventDefault();
-                                          e.stopPropagation();
-                                          if (sections.length <= 1) return;
-                                          Modal.confirm({
-                                            title: '删除章节',
-                                            content: `确认删除「${sec.title || '未命名章节'}」？`,
-                                            okText: '删除',
-                                            cancelText: '取消',
-                                            okButtonProps: { danger: true },
-                                            onOk: () => deleteSection(sec.key),
-                                          });
-                                        }}
-                                        className={`w-6 h-6 flex items-center justify-center rounded-md ${
-                                          sections.length <= 1
-                                            ? 'text-gray-300 cursor-not-allowed'
-                                            : 'text-gray-400 hover:text-red-500 hover:bg-red-50'
-                                        }`}
-                                        title="删除章节"
-                                        disabled={sections.length <= 1}
-                                      >
-                                        <i className="ri-delete-bin-line text-sm" />
-                                      </button>
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-                            );
-                          })
-                        )}
+                                );
+                              })}
+                            </div>
+                          );
+                        })}
                       </div>
                       {!readOnly && (
                         <div className="px-3 py-2 text-[11px] text-gray-400 bg-white border-t border-gray-100 shrink-0">
-                          点击编辑器锁定章节；双击标题可改名（需持锁）
+                          点击小节进入编辑并锁定；结构已按课程模板固定
                         </div>
                       )}
                     </div>
@@ -1040,7 +1225,7 @@ export default function BusinessPlanModule({
                     >
                       <div className="bg-gray-50 px-4 py-3 flex items-center justify-between shrink-0">
                         <div className="min-w-0">
-                          <div className="text-sm font-bold text-gray-900 truncate">
+                          <div className="text-sm font-bold text-gray-900 whitespace-normal break-words leading-snug">
                             {activeSection?.title || '未选择章节'}
                           </div>
                           {activeForeignLock ? (
@@ -1049,40 +1234,44 @@ export default function BusinessPlanModule({
                             </div>
                           ) : null}
                         </div>
-                        <button
-                          type="button"
-                          disabled={readOnly || fillingSection || !activeSection || Boolean(activeForeignLock)}
-                          onClick={() => void openFillModal()}
-                          className="px-3 py-1.5 bg-white border border-gray-200 text-gray-700 text-xs font-semibold rounded-lg hover:bg-gray-50 disabled:opacity-50 cursor-pointer whitespace-nowrap"
-                          title="AI 填充章节内容"
-                        >
-                          <i className="ri-magic-line mr-1.5" />
-                          AI 填充章节
-                        </button>
+                        {SHOW_BP_AI_FILL ? (
+                          <button
+                            type="button"
+                            disabled={readOnly || fillingSection || !activeSection || Boolean(activeForeignLock)}
+                            onClick={() => void openFillModal()}
+                            className="px-3 py-1.5 bg-white border border-gray-200 text-gray-700 text-xs font-semibold rounded-lg hover:bg-gray-50 disabled:opacity-50 cursor-pointer whitespace-nowrap"
+                            title="AI 填充章节内容"
+                          >
+                            <i className="ri-magic-line mr-1.5" />
+                            AI 填充章节
+                          </button>
+                        ) : null}
                       </div>
                       <div className={`p-4 ${fullScreen ? 'flex-1 min-h-0 overflow-y-auto' : ''}`}>
-                        {canEditActive && (
-                          <div className="mb-3 bg-violet-50 border border-violet-200 rounded-xl px-4 py-3 text-sm text-violet-800">
-                            你正在编辑本章节（已锁定）。每 5 秒自动保存；离开编辑器将保存并释放锁定。
-                          </div>
-                        )}
                         {activeSection ? (
-                          <RichTextEditor
-                            key={`${activeSection.key}-${editorContentEpoch}`}
-                            value={editorDraftHtml}
-                            disabled={readOnly || Boolean(activeForeignLock)}
-                            viewOnly={Boolean(activeForeignLock)}
-                            minRows={14}
-                            placeholder={
-                              activeForeignLock
-                                ? '同学正在编辑本章，只读同步中…'
-                                : '点击此处进入编辑态并锁定本章…'
-                            }
-                            onChange={handleEditorChange}
-                            onFocus={onEditorFocus}
-                            onBlur={onEditorBlur}
-                            fitHeight={fullScreen}
-                          />
+                          <div className="mb-3 bg-amber-50 border border-amber-100 rounded-xl px-4 py-3 text-xs text-amber-900 leading-relaxed">
+                            撰写提示：{guideForSectionKey(activeSection.key) || activeSection.guide || '请按模板要点完整填写本节内容。'}
+                          </div>
+                        ) : null}
+                        {activeSection ? (
+                          <div className="[overflow-anchor:none]">
+                            <RichTextEditor
+                              key={`${activeSection.key}-${editorContentEpoch}`}
+                              value={editorDraftHtml}
+                              disabled={readOnly || Boolean(activeForeignLock)}
+                              viewOnly={Boolean(activeForeignLock)}
+                              minRows={14}
+                              placeholder={
+                                activeForeignLock
+                                  ? '同学正在编辑本章，只读同步中…'
+                                  : '点击此处进入编辑态并锁定本章…'
+                              }
+                              onChange={handleEditorChange}
+                              onFocus={onEditorFocus}
+                              onBlur={onEditorBlur}
+                              fitHeight={fullScreen}
+                            />
+                          </div>
                         ) : (
                           <div className="py-16 text-center text-sm text-gray-500">请从左侧选择章节</div>
                         )}
@@ -1092,34 +1281,68 @@ export default function BusinessPlanModule({
                 </div>
               </div>
 
-              <div className="grid md:grid-cols-3 gap-6">
-                <div className="bg-gradient-to-br from-violet-500 to-purple-500 rounded-xl p-6 text-white">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-sm text-white/80">章节进度</span>
-                    <i className="ri-file-chart-line text-2xl text-white/80" />
+              {!fullScreen && (
+                <>
+                  <div className="grid md:grid-cols-3 gap-6">
+                    <div className="bg-gradient-to-br from-violet-500 to-purple-500 rounded-xl p-6 text-white">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-sm text-white/80">章节进度</span>
+                        <i className="ri-file-chart-line text-2xl text-white/80" />
+                      </div>
+                      <div className="text-3xl font-bold mb-1">{sectionProgressPercent}%</div>
+                      <div className="text-xs text-white/80">
+                        {sectionTotal} 个章节中已完成 {completedCount} 个
+                      </div>
+                    </div>
+                    <div className="bg-gradient-to-br from-blue-500 to-indigo-500 rounded-xl p-6 text-white">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-sm text-white/80">字数统计</span>
+                        <i className="ri-text text-2xl text-white/80" />
+                      </div>
+                      <div className="text-3xl font-bold mb-1">{totalChars}</div>
+                      <div className="text-xs text-white/80">当前正文总字数</div>
+                    </div>
+                    <div className="bg-gradient-to-br from-green-500 to-emerald-500 rounded-xl p-6 text-white">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-sm text-white/80">协作成员</span>
+                        <i className="ri-team-line text-2xl text-white/80" />
+                      </div>
+                      <div className="text-3xl font-bold mb-1">{memberCount}人</div>
+                      <div className="text-xs text-white/80">{isSoloTeam ? '单人公司' : '团队共享编辑'}</div>
+                    </div>
                   </div>
-                  <div className="text-3xl font-bold mb-1">{sectionProgressPercent}%</div>
-                  <div className="text-xs text-white/80">
-                    {sectionTotal} 个章节中已完成 {completedCount} 个
+
+                  <div className="space-y-3">
+                    <h3 className="text-base font-bold text-gray-900 m-0">评分标准</h3>
+                    <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">
+                      {BUSINESS_PLAN_RUBRIC_DIMENSIONS.map((dim) => (
+                        <div
+                          key={dim.key}
+                          className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm flex flex-col gap-2"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="text-sm font-bold text-gray-900">{dim.title}</div>
+                            <span className="shrink-0 text-xs font-semibold text-violet-700 bg-violet-50 border border-violet-100 rounded-full px-2 py-0.5">
+                              {dim.max} 分
+                            </span>
+                          </div>
+                          <p className="text-xs text-gray-600 leading-relaxed m-0 flex-1">{dim.description}</p>
+                          <div className="flex flex-wrap gap-1.5 pt-1">
+                            {dim.levels.map((l) => (
+                              <span
+                                key={l.label}
+                                className="text-[11px] text-gray-500 bg-gray-50 border border-gray-100 rounded-md px-2 py-0.5"
+                              >
+                                {l.label} {l.range}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                </div>
-                <div className="bg-gradient-to-br from-blue-500 to-indigo-500 rounded-xl p-6 text-white">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-sm text-white/80">字数统计</span>
-                    <i className="ri-text text-2xl text-white/80" />
-                  </div>
-                  <div className="text-3xl font-bold mb-1">{totalChars}</div>
-                  <div className="text-xs text-white/80">当前正文总字数</div>
-                </div>
-                <div className="bg-gradient-to-br from-green-500 to-emerald-500 rounded-xl p-6 text-white">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-sm text-white/80">协作成员</span>
-                    <i className="ri-team-line text-2xl text-white/80" />
-                  </div>
-                  <div className="text-3xl font-bold mb-1">{memberCount}人</div>
-                  <div className="text-xs text-white/80">团队共享编辑</div>
-                </div>
-              </div>
+                </>
+              )}
             </div>
           )}
 
@@ -1215,7 +1438,7 @@ export default function BusinessPlanModule({
 
       <Modal
         title="根据项目生成章节"
-        open={outlineModalOpen}
+        open={SHOW_BP_STRUCTURE_TOOLS && outlineModalOpen}
         maskClosable={false}
         keyboard={false}
         onCancel={() => !generatingOutline && setOutlineModalOpen(false)}
@@ -1245,7 +1468,7 @@ export default function BusinessPlanModule({
 
       <Modal
         title="AI 填充章节内容"
-        open={fillModalOpen}
+        open={SHOW_BP_AI_FILL && fillModalOpen}
         maskClosable={false}
         keyboard={false}
         onCancel={() => !fillingSection && setFillModalOpen(false)}

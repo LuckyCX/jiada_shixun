@@ -1,6 +1,57 @@
 import { portalAuthenticatedFetch } from './authApi';
 
-export type IdeationMethodKey = 'brainstorm' | 'scamper' | 'triz' | 'ai';
+export type IdeationMethodKey = 'brainstorm' | 'scamper' | 'triz' | 'ai' | 'six_hats';
+
+export type HatStudioHat = 'white' | 'red' | 'black' | 'yellow' | 'green' | 'blue' | 'user';
+
+export type HatStudioDraftKey =
+  | 'ideaTitle'
+  | 'problemInsight'
+  | 'userValue'
+  | 'solutionPoints'
+  | 'riskDiff';
+
+export type HatStudioCell = { content: string; updatedBy: string };
+
+export type HatStudioFill = { targetModule: HatStudioDraftKey | string; moduleContent: string };
+
+export type HatStudioDebateMessage = {
+  id: string;
+  hat: HatStudioHat;
+  content: string;
+  targetModule: string | null;
+  moduleContent: string;
+  fills?: HatStudioFill[];
+  adoptedModules?: string[];
+  status?: 'adopted' | 'ignored' | 'guide';
+  roundIndex: number;
+  createdAt: string;
+};
+
+export type HatStudioDraft = Record<string, HatStudioCell>;
+
+export type HatStudioPayload = {
+  draft: HatStudioDraft;
+  draftDefs: { key: string; label: string }[];
+  transcript: { messages: HatStudioDebateMessage[]; roundCount: number };
+  filledCount: number;
+};
+
+export function parseHatStudioMentionedHat(text: string): Exclude<HatStudioHat, 'user'> | null {
+  const t = String(text || '');
+  const patterns: { re: RegExp; hat: Exclude<HatStudioHat, 'user'> }[] = [
+    { re: /@\s*白帽|@white/i, hat: 'white' },
+    { re: /@\s*红帽|@red/i, hat: 'red' },
+    { re: /@\s*黑帽|@black/i, hat: 'black' },
+    { re: /@\s*黄帽|@yellow/i, hat: 'yellow' },
+    { re: /@\s*绿帽|@green/i, hat: 'green' },
+    { re: /@\s*蓝帽|@blue/i, hat: 'blue' },
+  ];
+  for (const p of patterns) {
+    if (p.re.test(t)) return p.hat;
+  }
+  return null;
+}
 
 export type StudentIdeationAnalysis = {
   overallScore: number;
@@ -102,6 +153,89 @@ export async function analyzeStudentIdeationIdea(
       body: JSON.stringify(body),
     }
   ) as Promise<StudentIdeationIdea>;
+}
+
+function hatStudioBase(classId: string) {
+  return `/api/student/personal-classes/${encodeURIComponent(classId)}/ideation/hat-studio`;
+}
+
+export async function fetchHatStudio(classId: string): Promise<HatStudioPayload> {
+  return portalAuthenticatedFetch('student', hatStudioBase(classId)) as Promise<HatStudioPayload>;
+}
+
+export async function hatStudioDebateStart(
+  classId: string,
+  studentDisplayName: string
+): Promise<{ roundMessages: HatStudioDebateMessage[]; studio: HatStudioPayload }> {
+  return portalAuthenticatedFetch('student', `${hatStudioBase(classId)}/debate/start`, {
+    method: 'POST',
+    body: JSON.stringify({ studentDisplayName }),
+  }) as Promise<{ roundMessages: HatStudioDebateMessage[]; studio: HatStudioPayload }>;
+}
+
+/** 清空本轮讨论并重新引导开场（默认保留右侧工作区） */
+export async function hatStudioReset(
+  classId: string,
+  studentDisplayName: string,
+  opts?: { clearDraft?: boolean }
+): Promise<{ roundMessages: HatStudioDebateMessage[]; studio: HatStudioPayload }> {
+  return portalAuthenticatedFetch('student', `${hatStudioBase(classId)}/reset`, {
+    method: 'POST',
+    body: JSON.stringify({
+      studentDisplayName,
+      clearDraft: Boolean(opts?.clearDraft),
+    }),
+  }) as Promise<{ roundMessages: HatStudioDebateMessage[]; studio: HatStudioPayload }>;
+}
+
+export async function hatStudioDebateRound(
+  classId: string,
+  studentDisplayName: string,
+  userMessage: string
+): Promise<{ roundMessages: HatStudioDebateMessage[]; studio: HatStudioPayload }> {
+  return portalAuthenticatedFetch('student', `${hatStudioBase(classId)}/debate/round`, {
+    method: 'POST',
+    body: JSON.stringify({ studentDisplayName, userMessage }),
+  }) as Promise<{ roundMessages: HatStudioDebateMessage[]; studio: HatStudioPayload }>;
+}
+
+export async function hatStudioDebateReply(
+  classId: string,
+  studentDisplayName: string,
+  userMessage: string,
+  hat?: string
+): Promise<{ message: HatStudioDebateMessage; studio: HatStudioPayload }> {
+  return portalAuthenticatedFetch('student', `${hatStudioBase(classId)}/debate/reply`, {
+    method: 'POST',
+    body: JSON.stringify({ studentDisplayName, userMessage, hat }),
+  }) as Promise<{ message: HatStudioDebateMessage; studio: HatStudioPayload }>;
+}
+
+export async function saveHatStudioDraftCell(
+  classId: string,
+  moduleKey: string,
+  content: string
+): Promise<HatStudioPayload> {
+  return portalAuthenticatedFetch('student', `${hatStudioBase(classId)}/draft`, {
+    method: 'PUT',
+    body: JSON.stringify({ moduleKey, content }),
+  }) as Promise<HatStudioPayload>;
+}
+
+export async function adoptHatStudioMessage(
+  classId: string,
+  messageId: string,
+  moduleKey: string,
+  content?: string
+): Promise<HatStudioPayload> {
+  return portalAuthenticatedFetch(
+    'student',
+    `${hatStudioBase(classId)}/messages/${encodeURIComponent(messageId)}/adopt`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ moduleKey, ...(content ? { content } : {}) }),
+    }
+  ) as Promise<HatStudioPayload>;
 }
 
 export async function likeStudentIdeationIdea(classId: string, ideaId: string): Promise<StudentIdeationIdea> {

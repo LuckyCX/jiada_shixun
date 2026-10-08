@@ -5,7 +5,7 @@ type AlertOpts = {
   title?: string;
   content: string;
   okText?: string;
-  /** false 时禁止点遮罩关闭（如未到实训时间强制切回） */
+  /** @deprecated 全局禁止点遮罩关闭，此参数已无效 */
   maskClosable?: boolean;
 };
 
@@ -60,14 +60,13 @@ function pump() {
   };
 
   if (next.kind === 'alert') {
-    const { title = '提示', content, okText = '确定', maskClosable = true } = next.opts;
+    const { title = '提示', content, okText = '确定' } = next.opts;
     r.render(
-      <AppModalPortal open zIndex={2200} onMaskClick={maskClosable ? finishAlert : undefined}>
+      <AppModalPortal open zIndex={2200}>
         <div
           className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden"
           role="dialog"
           aria-modal="true"
-          onClick={(e) => e.stopPropagation()}
         >
           <div className="px-6 pt-5 pb-2">
             <h3 className="text-lg font-semibold text-gray-900 m-0">{title}</h3>
@@ -92,12 +91,11 @@ function pump() {
 
   const { title = '确认', content, okText = '确定', cancelText = '取消', danger } = next.opts;
   r.render(
-    <AppModalPortal open zIndex={2200} onMaskClick={() => finishConfirm(false)}>
+    <AppModalPortal open zIndex={2200}>
       <div
         className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden"
         role="dialog"
         aria-modal="true"
-        onClick={(e) => e.stopPropagation()}
       >
         <div className="px-6 pt-5 pb-2">
           <h3 className="text-lg font-semibold text-gray-900 m-0">{title}</h3>

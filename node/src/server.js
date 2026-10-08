@@ -34,6 +34,7 @@ import econoverseRoomsRoutes from './routes/econoverseRooms.js';
 import studentTrainingPrerequisiteRoutes from './routes/studentTrainingPrerequisite.js';
 import publicMarketSurveyRoutes from './routes/publicMarketSurvey.js';
 import courseSettingsRoutes from './routes/courseSettings.js';
+import aiTutorRoutes from './routes/aiTutor.js';
 import { startCourseSettingReminderJob } from './jobs/courseSettingReminderJob.js';
 import { httpMethodOverride } from './middleware/httpMethodOverride.js';
 import { securityHardening } from './middleware/securityHardening.js';
@@ -104,6 +105,7 @@ app.use('/api', econoverseRoomsRoutes);
 app.use('/api', studentTrainingPrerequisiteRoutes);
 app.use('/api', publicMarketSurveyRoutes);
 app.use('/api', courseSettingsRoutes);
+app.use('/api', aiTutorRoutes);
 
 app.use((err, req, res, _next) => {
   logError(`express errorHandler traceId=${req.traceId}`, err);

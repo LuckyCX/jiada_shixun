@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { Modal, message } from 'antd';
 import DeadlineSettings from './components/DeadlineSettings';
 import CourseManagement from '../admin-dashboard/components/courseResource/CourseManagement';
 import {
   COURSE_SETTING_STAGES,
+  SKIPPABLE_COURSE_STAGE_KEYS,
   fetchCourseSettings,
   saveCourseStageSetting,
+  saveCourseWorkflow,
   type CourseSettingStageKey,
   type CourseStageSetting,
 } from '../../lib/courseSettingsApi';
@@ -36,6 +39,7 @@ function emptySetting(moduleKey: CourseSettingStageKey): CourseStageSetting {
     durationDays: 0,
     reminderDays: 3,
     reminderEnabled: true,
+    skipped: false,
     lastRemindedAt: '',
     lastRemindedDeadline: '',
   };
@@ -45,8 +49,11 @@ export default function CourseSettingsPage({ embedded = false, personalClass = n
   const [selectedStageKey, setSelectedStageKey] = useState<CourseSettingStageKey | null>(null);
   const [activeTab, setActiveTab] = useState<DetailTab>('deadline');
   const [settings, setSettings] = useState<CourseStageSetting[]>([]);
+  const [draftSkipped, setDraftSkipped] = useState<Record<string, boolean>>({});
+  const [savedSkipped, setSavedSkipped] = useState<Record<string, boolean>>({});
   const [studentCount, setStudentCount] = useState(personalClass?.studentCount || 0);
   const [loading, setLoading] = useState(false);
+  const [savingWorkflow, setSavingWorkflow] = useState(false);
   const [savingKey, setSavingKey] = useState<CourseSettingStageKey | null>(null);
   const [notice, setNotice] = useState('');
 
@@ -57,6 +64,15 @@ export default function CourseSettingsPage({ embedded = false, personalClass = n
     [settings]
   );
   const selectedSetting = selectedStage ? settingsByKey.get(selectedStage.key) || emptySetting(selectedStage.key) : null;
+  const workflowDirty = useMemo(
+    () => SKIPPABLE_COURSE_STAGE_KEYS.some((k) => Boolean(draftSkipped[k]) !== Boolean(savedSkipped[k])),
+    [draftSkipped, savedSkipped]
+  );
+  /** 草稿态启用链路（用于顶部流程预览） */
+  const draftActiveStages = useMemo(
+    () => COURSE_SETTING_STAGES.filter((s) => s.key === 'team' || !draftSkipped[s.key]),
+    [draftSkipped]
+  );
 
   useEffect(() => {
     if (!classId) {
@@ -71,6 +87,13 @@ export default function CourseSettingsPage({ embedded = false, personalClass = n
         if (cancelled) return;
         setSettings(data.settings);
         setStudentCount(data.studentCount);
+        const skippedMap: Record<string, boolean> = {};
+        for (const s of data.settings) {
+          skippedMap[s.moduleKey] = Boolean(s.skipped);
+        }
+        skippedMap.team = false;
+        setDraftSkipped(skippedMap);
+        setSavedSkipped({ ...skippedMap });
       })
       .catch((e) => {
         if (!cancelled) setNotice(e instanceof Error ? e.message : '课程设置加载失败');
@@ -82,6 +105,81 @@ export default function CourseSettingsPage({ embedded = false, personalClass = n
       cancelled = true;
     };
   }, [classId]);
+
+  const toggleSkipDraft = (stageKey: CourseSettingStageKey, nextSkipped: boolean) => {
+    if (stageKey === 'team') return;
+    if (nextSkipped) {
+      const enabledLeft = SKIPPABLE_COURSE_STAGE_KEYS.filter(
+        (k) => k === stageKey ? false : !draftSkipped[k]
+      ).length;
+      if (enabledLeft < 1) {
+        message.warning('至少保留一个实训阶段');
+        return;
+      }
+      Modal.confirm({
+        title: '略过该实训阶段？',
+        content: '确认后将进入草稿；保存实训流程后，学生端将隐藏该阶段。',
+        okText: '确认略过',
+        cancelText: '取消',
+        onOk: () => setDraftSkipped((prev) => ({ ...prev, [stageKey]: true })),
+      });
+      return;
+    }
+    Modal.confirm({
+      title: '恢复该实训阶段？',
+      content: '确认后将进入草稿；保存实训流程时将清空该阶段全班已填数据，学生需重新填写。',
+      okText: '确认恢复',
+      cancelText: '取消',
+      onOk: () => setDraftSkipped((prev) => ({ ...prev, [stageKey]: false })),
+    });
+  };
+
+  const saveWorkflow = () => {
+    if (!classId) {
+      message.warning('请先选择班级');
+      return;
+    }
+    const enabledLeft = SKIPPABLE_COURSE_STAGE_KEYS.filter((k) => !draftSkipped[k]).length;
+    if (enabledLeft < 1) {
+      message.warning('至少保留一个实训阶段');
+      return;
+    }
+    const willRestore = SKIPPABLE_COURSE_STAGE_KEYS.filter(
+      (k) => Boolean(savedSkipped[k]) && !Boolean(draftSkipped[k])
+    );
+    Modal.confirm({
+      title: '保存实训流程？',
+      content: willRestore.length
+        ? `将对所有学生生效。恢复的阶段（${willRestore
+            .map((k) => COURSE_SETTING_STAGES.find((s) => s.key === k)?.shortName || k)
+            .join('、')}）将清空全班已填数据且不可恢复。`
+        : '保存后对学生端与审核/监控菜单生效。',
+      okText: '确认保存',
+      cancelText: '取消',
+      okButtonProps: willRestore.length ? { danger: true } : undefined,
+      onOk: async () => {
+        setSavingWorkflow(true);
+        try {
+          const skipped: Partial<Record<CourseSettingStageKey, boolean>> = {};
+          for (const k of SKIPPABLE_COURSE_STAGE_KEYS) skipped[k] = Boolean(draftSkipped[k]);
+          skipped.team = false;
+          const data = await saveCourseWorkflow(classId, skipped);
+          setSettings(data.settings);
+          const skippedMap: Record<string, boolean> = {};
+          for (const s of data.settings) skippedMap[s.moduleKey] = Boolean(s.skipped);
+          skippedMap.team = false;
+          setDraftSkipped(skippedMap);
+          setSavedSkipped({ ...skippedMap });
+          message.success(willRestore.length ? '已保存，恢复环节的历史数据已清空' : '实训流程已保存');
+        } catch (e) {
+          message.error(e instanceof Error ? e.message : '保存失败');
+          throw e;
+        } finally {
+          setSavingWorkflow(false);
+        }
+      },
+    });
+  };
 
   const configuredCount = settings.filter((setting) => setting.deadlineDate).length;
   const totalDuration = settings.reduce((sum, setting) => sum + Number(setting.durationDays || 0), 0);
@@ -175,6 +273,45 @@ export default function CourseSettingsPage({ embedded = false, personalClass = n
         {renderStats()}
       </div>
 
+      {classId ? (
+        <div className="bg-white rounded-2xl border border-teal-100 shadow-sm p-5">
+          <div className="flex items-start justify-between gap-4 flex-wrap mb-3">
+            <div className="min-w-0">
+              <div className="text-sm font-bold text-gray-900">实训流程</div>
+              {workflowDirty ? (
+                <div className="mt-1 text-xs text-amber-600">有未保存的流程变更</div>
+              ) : null}
+            </div>
+            <button
+              type="button"
+              disabled={savingWorkflow || !workflowDirty}
+              onClick={() => saveWorkflow()}
+              className="px-4 py-2 rounded-xl bg-teal-600 text-white text-sm font-semibold hover:bg-teal-700 disabled:opacity-50 cursor-pointer whitespace-nowrap"
+            >
+              {savingWorkflow ? '保存中…' : '保存实训流程'}
+            </button>
+          </div>
+          <div className="flex flex-wrap items-center gap-x-1.5 gap-y-2">
+            {draftActiveStages.map((stage, idx) => (
+              <div key={stage.key} className="flex items-center gap-1.5">
+                <div className="inline-flex items-center gap-2 pl-1.5 pr-3 py-1.5 rounded-xl bg-teal-50/80 border border-teal-100">
+                  <div
+                    className={`w-7 h-7 rounded-lg bg-gradient-to-br ${stage.color} text-white flex items-center justify-center flex-shrink-0`}
+                  >
+                    <i className={`${stage.icon} text-sm`} />
+                  </div>
+                  <span className="text-sm font-semibold text-teal-900 whitespace-nowrap">{stage.shortName}</span>
+                </div>
+                {idx < draftActiveStages.length - 1 ? (
+                  <i className="ri-arrow-right-s-line text-teal-300 text-lg flex-shrink-0" aria-hidden />
+                ) : null}
+              </div>
+            ))}
+            {!draftActiveStages.length ? <span className="text-sm text-gray-400">—</span> : null}
+          </div>
+        </div>
+      ) : null}
+
       {!classId ? (
         <div className="bg-white rounded-2xl border border-dashed border-gray-200 p-12 text-center text-sm text-gray-500">
           请先选择班级后再配置课程设置
@@ -183,29 +320,75 @@ export default function CourseSettingsPage({ embedded = false, personalClass = n
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {COURSE_SETTING_STAGES.map((stage, index) => {
             const setting = settingsByKey.get(stage.key) || emptySetting(stage.key);
+            const isSkipped = stage.key !== 'team' && Boolean(draftSkipped[stage.key]);
             return (
-              <button
+              <div
                 key={stage.key}
-                type="button"
-                onClick={() => openStage(stage.key)}
-                className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 text-left hover:border-teal-200 hover:shadow-md transition-all cursor-pointer"
+                className={`bg-white rounded-2xl border shadow-sm p-4 text-left transition-all ${
+                  isSkipped ? 'border-gray-200 opacity-60' : 'border-gray-100 hover:border-teal-200 hover:shadow-md'
+                }`}
               >
                 <div className="flex items-start gap-3">
-                  <div className={`w-11 h-11 rounded-2xl bg-gradient-to-br ${stage.color} text-white flex items-center justify-center flex-shrink-0`}>
+                  <button
+                    type="button"
+                    onClick={() => openStage(stage.key)}
+                    className={`w-11 h-11 rounded-2xl bg-gradient-to-br ${stage.color} text-white flex items-center justify-center flex-shrink-0 cursor-pointer border-0 p-0`}
+                    aria-label={`打开${stage.shortName}设置`}
+                  >
                     <i className={`${stage.icon} text-xl`}></i>
-                  </div>
+                  </button>
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs text-gray-400">第 {index + 1} 阶段</span>
-                      <span className={`px-2 py-0.5 rounded-full text-xs ${setting.deadlineDate ? 'bg-teal-50 text-teal-600' : 'bg-gray-100 text-gray-400'}`}>
-                        {setting.deadlineDate ? '已配置' : '未配置'}
-                      </span>
+                    {/* 状态与略过操作同一行水平对齐 */}
+                    <div className="flex items-center justify-between gap-2 min-h-[22px]">
+                      <button
+                        type="button"
+                        onClick={() => openStage(stage.key)}
+                        className="text-xs text-gray-400 cursor-pointer bg-transparent border-0 p-0"
+                      >
+                        第 {index + 1} 阶段
+                      </button>
+                      <div className="flex items-center gap-1.5 flex-shrink-0">
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-xs leading-5 ${
+                            isSkipped
+                              ? 'bg-gray-100 text-gray-500'
+                              : setting.deadlineDate
+                                ? 'bg-teal-50 text-teal-600'
+                                : 'bg-gray-100 text-gray-400'
+                          }`}
+                        >
+                          {isSkipped ? '已略过' : setting.deadlineDate ? '已配置' : '未配置'}
+                        </span>
+                        {stage.key !== 'team' ? (
+                          <button
+                            type="button"
+                            onClick={() => toggleSkipDraft(stage.key, !isSkipped)}
+                            className={`px-2 py-0.5 rounded-lg text-xs font-semibold leading-5 cursor-pointer border-0 ${
+                              isSkipped
+                                ? 'bg-teal-50 text-teal-700 hover:bg-teal-100'
+                                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                            }`}
+                          >
+                            {isSkipped ? '恢复' : '略过'}
+                          </button>
+                        ) : null}
+                      </div>
                     </div>
-                    <h3 className="text-sm font-bold text-gray-900 mt-1 truncate">{stage.shortName}</h3>
-                    <p className="text-xs text-gray-500 mt-1 line-clamp-2">{stage.taskName}</p>
+                    <button
+                      type="button"
+                      onClick={() => openStage(stage.key)}
+                      className="w-full text-left cursor-pointer bg-transparent border-0 p-0 mt-1"
+                    >
+                      <h3 className="text-sm font-bold text-gray-900 truncate">{stage.shortName}</h3>
+                      <p className="text-xs text-gray-500 mt-1 line-clamp-2">{stage.taskName}</p>
+                    </button>
                   </div>
                 </div>
-                <div className="mt-4 grid grid-cols-3 gap-2">
+                <button
+                  type="button"
+                  onClick={() => openStage(stage.key)}
+                  className="mt-4 w-full grid grid-cols-3 gap-2 cursor-pointer bg-transparent border-0 p-0 text-left"
+                >
                   <div className="rounded-xl bg-gray-50 px-3 py-2">
                     <div className="text-xs text-gray-400">截止</div>
                     <div className="text-xs font-semibold text-gray-700 truncate">{setting.deadlineDate || '未配置'}</div>
@@ -218,8 +401,8 @@ export default function CourseSettingsPage({ embedded = false, personalClass = n
                     <div className="text-xs text-gray-400">提醒</div>
                     <div className="text-xs font-semibold text-gray-700">{setting.reminderEnabled ? `${setting.reminderDays} 天` : '关闭'}</div>
                   </div>
-                </div>
-              </button>
+                </button>
+              </div>
             );
           })}
         </div>

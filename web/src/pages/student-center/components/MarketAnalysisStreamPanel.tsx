@@ -37,22 +37,32 @@ export default function MarketAnalysisStreamPanel({
     );
   }
 
-  const display = thinking || content || status;
-  if (!display && !status) return null;
+  const hasThinking = Boolean(thinking?.trim());
+  const hasContent = Boolean(content?.trim());
+  if (!hasThinking && !hasContent && !status) return null;
 
   return (
     <div
       ref={scrollRef}
-      className="rounded-xl border border-green-200 bg-white p-4 max-h-48 overflow-y-auto flex flex-col justify-end"
+      className="rounded-xl border border-green-200 bg-white p-4 max-h-64 overflow-y-auto space-y-3"
     >
-      {status && !thinking && !content && (
-        <p className="text-sm text-gray-600 flex items-center gap-2">
+      {status && (
+        <p className="text-sm text-gray-600 flex items-center gap-2 m-0">
           <i className="ri-loader-4-line animate-spin text-green-500" />
           {status}
         </p>
       )}
-      {(thinking || content) && (
-        <pre className="text-xs text-gray-600 whitespace-pre-wrap font-sans m-0">{thinking || content}</pre>
+      {hasThinking && (
+        <div>
+          <div className="text-[11px] font-medium text-amber-700 mb-1">模型思考</div>
+          <pre className="text-xs text-gray-500 whitespace-pre-wrap font-sans m-0">{thinking}</pre>
+        </div>
+      )}
+      {hasContent && (
+        <div>
+          <div className="text-[11px] font-medium text-green-700 mb-1">流式输出</div>
+          <pre className="text-xs text-gray-700 whitespace-pre-wrap font-sans m-0">{content}</pre>
+        </div>
       )}
     </div>
   );

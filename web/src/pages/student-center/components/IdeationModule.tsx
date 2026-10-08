@@ -29,6 +29,7 @@ import {
   type InstanceLibraryCase,
   type InstanceLibraryCategory,
 } from '../../../lib/teacherInstanceLibraryApi';
+import IdeationHatStudio from './IdeationHatStudio';
 
 type AiAnalysis = StudentIdeationAnalysis;
 
@@ -590,6 +591,7 @@ export default function IdeationModule({
     { key: 'scamper' as const, label: 'SCAMPER', icon: 'ri-compass-3-line', color: 'from-orange-500 to-amber-500' },
     { key: 'triz' as const, label: 'TRIZ', icon: 'ri-puzzle-line', color: 'from-green-500 to-emerald-500' },
     { key: 'ai' as const, label: 'AI创意', icon: 'ri-sparkling-line', color: 'from-rose-500 to-pink-500' },
+    { key: 'six_hats' as const, label: '六帽创想室', icon: 'ri-user-voice-line', color: 'from-violet-500 to-fuchsia-500' },
   ];
 
   const scoreBg = (score: number) => {
@@ -780,7 +782,7 @@ export default function IdeationModule({
             {/* 创新方法工具 */}
             <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
               <h3 className="text-base font-bold text-gray-900 mb-4">创新方法工具</h3>
-              <div className="grid grid-cols-4 gap-2 mb-5">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 mb-5">
                 {methodTabs.map((tab) => (
                   <button
                     key={tab.key}
@@ -797,6 +799,19 @@ export default function IdeationModule({
                 ))}
               </div>
 
+              {activeMethod === 'six_hats' ? (
+                <IdeationHatStudio
+                  classId={classId}
+                  disabled={!teamName}
+                  onIdeaCreated={() => {
+                    void fetchStudentIdeationWorkspace(classId)
+                      .then((ws) => {
+                        setIdeas(ws.ideas || []);
+                      })
+                      .catch(() => {});
+                  }}
+                />
+              ) : (
               <Form form={form} layout="vertical" onFinish={handleSubmitIdea} className="space-y-4">
                 {activeMethod === 'brainstorm' && (
                   <div className="bg-teal-50 border border-teal-200 rounded-xl p-4">
@@ -926,6 +941,7 @@ export default function IdeationModule({
                   {activeMethod === 'ai' ? 'AI生成创意并分析' : '提交创意并获取AI分析'}
                 </Button>
               </Form>
+              )}
             </div>
 
             {/* 团队创意库 */}
@@ -1308,7 +1324,7 @@ export default function IdeationModule({
                   disabled={isSubmitting}
                   requiredMark={false}
                 >
-                  <Form.Item name="projectName" label="项目名称" rules={[{ required: true, message: '请输入项目名称' }, { min: 5, message: '项目名称至少需要5个字' }]}>
+                  <Form.Item name="projectName" label="项目名称" rules={[{ required: true, message: '请输入项目名称' }, { min: 15, message: '项目名称至少需要15个字' }]}>
                     <Input placeholder="为你的项目起一个响亮的名字" />
                   </Form.Item>
                   <Form.Item name="projectDirection" label="项目方向" rules={[{ required: true, message: '请选择项目方向' }]}>
@@ -1322,25 +1338,25 @@ export default function IdeationModule({
                       notFoundContent={examplesLoading ? '加载中...' : '暂无可选方向'}
                     />
                   </Form.Item>
-                  <Form.Item name="projectDescription" label="项目描述" rules={[{ required: true, message: '请输入项目描述' }]}>
+                  <Form.Item name="projectDescription" label="项目描述" rules={[{ required: true, message: '请输入项目描述' }, { min: 15, message: '项目描述至少需要15个字' }]}>
                     <Input.TextArea rows={3} placeholder="概述项目要做什么、面向什么场景" />
                   </Form.Item>
-                  <Form.Item name="coreValue" label="核心价值主张" rules={[{ required: true, message: '请输入核心价值主张' }, { min: 20, message: '核心价值主张至少需要20个字' }]}>
+                  <Form.Item name="coreValue" label="核心价值主张" rules={[{ required: true, message: '请输入核心价值主张' }, { min: 15, message: '核心价值主张至少需要15个字' }]}>
                     <Input.TextArea rows={2} placeholder="说明项目为用户创造什么价值" />
                   </Form.Item>
-                  <Form.Item name="targetUsers" label="目标用户" rules={[{ required: true, message: '请输入目标用户' }, { min: 10, message: '目标用户描述至少需要10个字' }]}>
+                  <Form.Item name="targetUsers" label="目标用户" rules={[{ required: true, message: '请输入目标用户' }, { min: 15, message: '目标用户描述至少需要15个字' }]}>
                     <Input placeholder="例如：大学生、上班族、老年人" />
                   </Form.Item>
-                  <Form.Item name="coreProblem" label="解决的核心问题" rules={[{ required: true, message: '请输入解决的核心问题' }, { min: 50, message: '解决的核心问题至少需要50个字' }]}>
+                  <Form.Item name="coreProblem" label="解决的核心问题" rules={[{ required: true, message: '请输入解决的核心问题' }, { min: 15, message: '解决的核心问题至少需要15个字' }]}>
                     <Input.TextArea rows={3} placeholder="描述目标用户面临的核心痛点和问题" />
                   </Form.Item>
-                  <Form.Item name="solutionOverview" label="解决方案概述" rules={[{ required: true, message: '请输入解决方案概述' }, { min: 100, message: '解决方案概述至少需要100个字' }]}>
+                  <Form.Item name="solutionOverview" label="解决方案概述" rules={[{ required: true, message: '请输入解决方案概述' }, { min: 15, message: '解决方案概述至少需要15个字' }]}>
                     <Input.TextArea rows={4} placeholder="简要描述你的解决方案和核心功能" />
                   </Form.Item>
-                  <Form.Item name="marketSize" label="市场规模" rules={[{ required: true, message: '请输入市场规模' }]}>
+                  <Form.Item name="marketSize" label="市场规模" rules={[{ required: true, message: '请输入市场规模' }, { min: 15, message: '市场规模至少需要15个字' }]}>
                     <Input.TextArea rows={2} placeholder="说明潜在用户、市场空间或需求规模" />
                   </Form.Item>
-                  <Form.Item name="competitiveAdvantage" label="竞争优势" rules={[{ required: true, message: '请输入竞争优势' }]}>
+                  <Form.Item name="competitiveAdvantage" label="竞争优势" rules={[{ required: true, message: '请输入竞争优势' }, { min: 15, message: '竞争优势至少需要15个字' }]}>
                     <Input.TextArea rows={3} placeholder="说明项目与现有方案相比的差异和优势" />
                   </Form.Item>
                   <div className="flex flex-col sm:flex-row gap-3">

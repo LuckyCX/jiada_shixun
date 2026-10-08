@@ -34,9 +34,12 @@ export default function SurveyResponsesModal({ open, classId, survey, onClose, o
     setLoading(true);
     try {
       const data = await fetchMarketSurveyResponses(classId, survey.id);
+      const list = data.responses || [];
       setQuestions(data.questions || []);
-      setResponses(data.responses || []);
-      setSelectedId(data.responses?.[0]?.id ?? null);
+      setResponses(list);
+      setSelectedId(list[0]?.id ?? null);
+      // 打开答卷后把回收数写回列表，避免切到画像仍显示 0 份
+      onCollectedChange(survey.id, list.length);
     } catch (e) {
       message.error(e instanceof Error ? e.message : '加载失败');
       setQuestions([]);
@@ -45,6 +48,7 @@ export default function SurveyResponsesModal({ open, classId, survey, onClose, o
     } finally {
       setLoading(false);
     }
+    // onCollectedChange 仅回写列表回收数，不放进依赖以免父组件内联函数导致重复请求
   }, [classId, survey?.id]);
 
   useEffect(() => {

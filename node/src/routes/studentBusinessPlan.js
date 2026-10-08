@@ -24,11 +24,15 @@ import {
   normalizeOutlinePayload,
 } from '../lib/businessPlanPrompts.js';
 import {
+  coerceCover,
   coerceSections,
   countCompletedSections,
+  defaultCover,
   defaultSections,
+  enrichCoverWithTeamMeta,
   sectionsToFullText,
 } from '../lib/businessPlanSections.js';
+import { BUSINESS_PLAN_RUBRIC_DIMENSIONS } from '../lib/businessPlanRubric.js';
 import { evaluateModulePrerequisiteForStudent } from '../lib/trainingModulePrerequisite.js';
 import { formatDateTimeZhCN } from '../lib/calendarDate.js';
 import {
@@ -96,7 +100,7 @@ async function studentEnrolledInClass(pool, studentId, classId) {
 
 async function getConfirmedTeam(pool, studentId, classId) {
   const { rows } = await pool.query(
-    `SELECT t.id, t.name
+    `SELECT t.id, t.name, t.is_solo AS "isSolo"
      FROM teacher_personal_class_team_members m
      JOIN teacher_personal_class_teams t ON t.id = m.team_id
      WHERE t.teacher_personal_class_id = $1
@@ -106,7 +110,11 @@ async function getConfirmedTeam(pool, studentId, classId) {
     [classId, studentId]
   );
   if (!rows.length) return null;
-  return { id: Number(rows[0].id), name: rows[0].name || '' };
+  return {
+    id: Number(rows[0].id),
+    name: rows[0].name || '',
+    isSolo: Boolean(rows[0].isSolo),
+  };
 }
 
 async function resolveTeamLeaderId(pool, teamId) {
@@ -130,14 +138,60 @@ async function resolveTeamLeaderId(pool, teamId) {
 
 async function loadTeamMembers(pool, teamId) {
   const { rows } = await pool.query(
-    `SELECT u.id, COALESCE(u.real_name, u.username) AS name
+    `SELECT u.id,
+            COALESCE(NULLIF(TRIM(u.real_name), ''), u.username) AS name,
+            COALESCE(NULLIF(TRIM(u.student_no), ''), '') AS student_no
      FROM teacher_personal_class_team_members m
      JOIN users u ON u.id = m.student_id
      WHERE m.team_id = $1
      ORDER BY u.id ASC`,
     [teamId]
   );
-  return rows.map((r) => ({ id: String(r.id), name: String(r.name || '').trim() || '同学' }));
+  return rows.map((r) => ({
+    id: String(r.id),
+    name: String(r.name || '').trim() || '同学',
+    studentNo: String(r.student_no || '').trim(),
+  }));
+}
+
+/** 个性化班级名称 + 授课教师（封面只读字段来源） */
+async function loadClassCoverMeta(pool, classId) {
+  const { rows } = await pool.query(
+    `SELECT c.name AS class_name,
+            COALESCE(NULLIF(TRIM(u.real_name), ''), u.username) AS teacher_name
+     FROM teacher_personal_classes c
+     JOIN users u ON u.id = c.teacher_id
+     WHERE c.id = $1`,
+    [classId]
+  );
+  if (!rows.length) return { collegeClass: '', advisor: '' };
+  return {
+    collegeClass: String(rows[0].class_name || '').trim(),
+    advisor: String(rows[0].teacher_name || '').trim(),
+  };
+}
+
+function buildTeamMemberMeta(members, leaderId) {
+  const list = members || [];
+  const leader = String(leaderId || list[0]?.id || '');
+  return list.map((m) => ({
+    id: String(m.id),
+    name: String(m.name || '').trim() || '同学',
+    studentNo: String(m.studentNo || '').trim(),
+    isLeader: leader ? String(m.id) === leader : false,
+  }));
+}
+
+/** 读取第二步项目选题名称（有则封面项目名锁定） */
+async function loadTopicProjectName(pool, teamId) {
+  const { rows } = await pool.query(
+    `SELECT project_name
+     FROM teacher_personal_class_team_project_topics
+     WHERE team_id = $1
+     LIMIT 1`,
+    [teamId]
+  );
+  return String(rows[0]?.project_name || '').trim();
 }
 
 async function userDisplayName(pool, userId) {
@@ -168,6 +222,9 @@ async function requireTeamContext(req, res) {
   }
   const leaderId = await resolveTeamLeaderId(pool, team.id);
   const members = await loadTeamMembers(pool, team.id);
+  const classMeta = await loadClassCoverMeta(pool, classId);
+  const topicProjectName = await loadTopicProjectName(pool, team.id);
+  const isSolo = Boolean(team.isSolo) || members.length <= 1;
   return {
     sid,
     classId,
@@ -175,6 +232,10 @@ async function requireTeamContext(req, res) {
     team,
     leaderId,
     members,
+    classMeta,
+    topicProjectName,
+    isSolo,
+    teamMembers: buildTeamMemberMeta(members, leaderId),
     isTeamLeader: String(leaderId || '') === String(sid),
   };
 }
@@ -191,6 +252,7 @@ async function assertEntryAllowed(ctx, req, res) {
 async function loadSubmission(pool, teamId) {
   const { rows } = await pool.query(
     `SELECT s.id, s.version_id, s.status, s.submitted_at, s.review_comment, s.reviewed_at,
+            s.score_json, s.total_score,
             v.version_no AS "versionNo", v.summary AS "versionSummary"
      FROM teacher_personal_class_team_business_plan_submissions s
      JOIN teacher_personal_class_team_business_plan_versions v ON v.id = s.version_id
@@ -199,6 +261,7 @@ async function loadSubmission(pool, teamId) {
   );
   if (!rows.length) return null;
   const r = rows[0];
+  const scoreJson = r.score_json && typeof r.score_json === 'object' ? r.score_json : {};
   return {
     id: String(r.id),
     versionId: String(r.version_id),
@@ -208,7 +271,14 @@ async function loadSubmission(pool, teamId) {
     submittedAt: r.submitted_at ? new Date(r.submitted_at).toISOString() : '',
     reviewComment: String(r.review_comment || ''),
     reviewedAt: r.reviewed_at ? new Date(r.reviewed_at).toISOString() : '',
+    scores: scoreJson,
+    totalScore: r.total_score != null && Number.isFinite(Number(r.total_score)) ? Number(r.total_score) : null,
   };
+}
+
+/** 入库只存 key/title/content，guide 由模板定义动态附带 */
+function sectionsForDb(sections) {
+  return coerceSections(sections).map(({ key, title, content }) => ({ key, title, content }));
 }
 
 async function isReadOnly(pool, teamId) {
@@ -218,7 +288,7 @@ async function isReadOnly(pool, teamId) {
 
 async function ensureWorkspace(pool, teamId, classId) {
   const { rows } = await pool.query(
-    `SELECT sections_json, revision, updated_at, updated_by
+    `SELECT sections_json, cover_json, revision, updated_at, updated_by
      FROM teacher_personal_class_team_business_plan_workspace
      WHERE team_id = $1`,
     [teamId]
@@ -226,13 +296,13 @@ async function ensureWorkspace(pool, teamId, classId) {
   if (rows.length) return rows[0];
   await pool.query(
     `INSERT INTO teacher_personal_class_team_business_plan_workspace
-       (team_id, teacher_personal_class_id, sections_json, revision, updated_by)
-     VALUES ($1, $2, $3::jsonb, 1, NULL)
+       (team_id, teacher_personal_class_id, sections_json, cover_json, revision, updated_by)
+     VALUES ($1, $2, $3::jsonb, $4::jsonb, 1, NULL)
      ON CONFLICT (team_id) DO NOTHING`,
-    [teamId, classId, JSON.stringify(defaultSections())]
+    [teamId, classId, JSON.stringify(sectionsForDb(defaultSections())), JSON.stringify(defaultCover())]
   );
   const { rows: again } = await pool.query(
-    `SELECT sections_json, revision, updated_at, updated_by
+    `SELECT sections_json, cover_json, revision, updated_at, updated_by
      FROM teacher_personal_class_team_business_plan_workspace
      WHERE team_id = $1`,
     [teamId]
@@ -290,9 +360,19 @@ async function getActiveLockForSection(pool, teamId, sectionKey) {
   return locks.find((l) => l.sectionKey === sectionKey) || null;
 }
 
+function coverMetaFromCtx(ctx) {
+  return {
+    classMeta: ctx.classMeta,
+    teamMembers: ctx.teamMembers,
+    isSolo: ctx.isSolo,
+    topicProjectName: ctx.topicProjectName || '',
+  };
+}
+
 async function buildWorkspacePayload(ctx) {
   const row = await ensureWorkspace(ctx.pool, ctx.team.id, ctx.classId);
   const sections = coerceSections(row?.sections_json);
+  const cover = enrichCoverWithTeamMeta(coerceCover(row?.cover_json), coverMetaFromCtx(ctx));
   const updatedByName = await userDisplayName(ctx.pool, row?.updated_by);
   const versions = await loadVersionSummaries(ctx.pool, ctx.team.id);
   const submission = await loadSubmission(ctx.pool, ctx.team.id);
@@ -300,6 +380,13 @@ async function buildWorkspacePayload(ctx) {
   const readOnly = submission?.status === 'approved';
   return {
     sections,
+    cover,
+    classMeta: ctx.classMeta,
+    teamMembers: ctx.teamMembers,
+    isSolo: ctx.isSolo,
+    topicProjectName: ctx.topicProjectName || '',
+    projectNameLocked: Boolean(ctx.topicProjectName),
+    rubric: BUSINESS_PLAN_RUBRIC_DIMENSIONS,
     fullText: sectionsToFullText(sections),
     completedSectionCount: countCompletedSections(sections),
     totalSectionCount: sections.length,
@@ -326,6 +413,7 @@ async function saveWorkspaceOptimistic(ctx, {
   clientRevision,
   activeSectionKey,
   replaceAll = false,
+  cover,
 }) {
   const expectedRevision = Number(clientRevision);
   if (!Number.isFinite(expectedRevision) || expectedRevision < 1) {
@@ -346,17 +434,12 @@ async function saveWorkspaceOptimistic(ctx, {
     throw err;
   }
 
-  let nextSections;
+  // 固定模板：始终按课程模板合并，禁止客户端改结构
+  let nextSections = coerceSections(serverSections);
+  const key = String(activeSectionKey || '').trim();
   if (replaceAll) {
     nextSections = coerceSections(clientSections);
-  } else {
-    const key = String(activeSectionKey || '').trim();
-    if (!key) {
-      const err = new Error('请指定要保存的章节');
-      err.status = 400;
-      err.code = 40004;
-      throw err;
-    }
+  } else if (key) {
     const lock = await getActiveLockForSection(ctx.pool, ctx.team.id, key);
     if (!lock || String(lock.lockedById) !== String(ctx.sid)) {
       const err = new Error(lock ? `章节已被 ${lock.lockedByName} 编辑中` : '请先进入章节编辑态再保存');
@@ -373,33 +456,44 @@ async function saveWorkspaceOptimistic(ctx, {
       err.code = 40004;
       throw err;
     }
-    const byKey = new Map(serverSections.map((s) => [s.key, s]));
-    // 结构变更（增删改序）仅允许持锁用户在保存时用客户端整份结构，但其他章 content 仍用服务端
-    const structure = incoming.length ? incoming : serverSections;
-    nextSections = structure.map((s) => {
-      if (s.key === key) return { key: patch.key, title: patch.title, content: patch.content };
-      const server = byKey.get(s.key);
-      return {
-        key: s.key,
-        title: server?.title ?? s.title,
-        content: server?.content ?? '',
-      };
-    });
-    // 服务端有、客户端结构里没有的章：保留（避免误删他人章）
-    for (const s of serverSections) {
-      if (!nextSections.some((x) => x.key === s.key)) nextSections.push(s);
+    nextSections = nextSections.map((s) =>
+      s.key === key ? { key: s.key, title: s.title, content: patch.content } : s
+    );
+  } else if (cover === undefined) {
+    const err = new Error('请指定要保存的章节或封面信息');
+    err.status = 400;
+    err.code = 40004;
+    throw err;
+  }
+  // 无 activeSectionKey 且传入 cover：仅更新封面（保留章节）
+  // 封面字段以系统数据为准；仅在无第二步选题时允许手写项目名称
+  let nextCover = enrichCoverWithTeamMeta(coerceCover(row?.cover_json), coverMetaFromCtx(ctx));
+  if (cover !== undefined) {
+    const incoming = coerceCover(cover);
+    if (!ctx.topicProjectName) {
+      const name = String(incoming.projectName || '').trim();
+      if (!name) {
+        const err = new Error('请填写小组项目名称');
+        err.status = 400;
+        err.code = 40005;
+        throw err;
+      }
+      nextCover.projectName = name;
     }
+    // 日期/成员/班级等在 enrich 中已按当前时间与系统数据覆盖
+    nextCover = enrichCoverWithTeamMeta(nextCover, coverMetaFromCtx(ctx));
   }
 
   const { rows: upd } = await ctx.pool.query(
     `UPDATE teacher_personal_class_team_business_plan_workspace
      SET sections_json = $2::jsonb,
+         cover_json = $3::jsonb,
          revision = revision + 1,
          updated_at = now(),
-         updated_by = $3
-     WHERE team_id = $1 AND revision = $4
+         updated_by = $4
+     WHERE team_id = $1 AND revision = $5
      RETURNING revision`,
-    [ctx.team.id, JSON.stringify(nextSections), ctx.sid, expectedRevision]
+    [ctx.team.id, JSON.stringify(sectionsForDb(nextSections)), JSON.stringify(nextCover), ctx.sid, expectedRevision]
   );
   if (!upd.length) {
     const err = new Error('文档已被其他同学更新，请先拉取最新内容');
@@ -489,6 +583,7 @@ router.put('/student/personal-classes/:classId/business-plan/workspace', require
       clientRevision: req.body?.revision,
       activeSectionKey: req.body?.activeSectionKey,
       replaceAll: Boolean(req.body?.replaceAll),
+      cover: req.body?.cover,
     });
     return ok(req, res, payload);
   } catch (e) {
@@ -645,15 +740,17 @@ router.post('/student/personal-classes/:classId/business-plan/versions', require
     if (!summary) return bad(req, res, 400, 40004, '请填写版本说明');
 
     const row = await ensureWorkspace(ctx.pool, ctx.team.id, ctx.classId);
-    const sections = coerceSections(req.body?.sections ?? row?.sections_json);
+    const sections = sectionsForDb(req.body?.sections ?? row?.sections_json);
+    const cover = enrichCoverWithTeamMeta(coerceCover(req.body?.cover ?? row?.cover_json), coverMetaFromCtx(ctx));
 
     await ctx.pool.query(
       `INSERT INTO teacher_personal_class_team_business_plan_workspace
-         (team_id, teacher_personal_class_id, sections_json, updated_at, updated_by)
-       VALUES ($1, $2, $3::jsonb, now(), $4)
+         (team_id, teacher_personal_class_id, sections_json, cover_json, updated_at, updated_by)
+       VALUES ($1, $2, $3::jsonb, $4::jsonb, now(), $5)
        ON CONFLICT (team_id)
-       DO UPDATE SET sections_json = EXCLUDED.sections_json, updated_at = now(), updated_by = EXCLUDED.updated_by`,
-      [ctx.team.id, ctx.classId, JSON.stringify(sections), ctx.sid]
+       DO UPDATE SET sections_json = EXCLUDED.sections_json, cover_json = EXCLUDED.cover_json,
+         updated_at = now(), updated_by = EXCLUDED.updated_by`,
+      [ctx.team.id, ctx.classId, JSON.stringify(sections), JSON.stringify(cover), ctx.sid]
     );
 
     const { rows: maxRows } = await ctx.pool.query(
@@ -665,10 +762,10 @@ router.post('/student/personal-classes/:classId/business-plan/versions', require
     const nextNo = Number(maxRows[0]?.m || 0) + 1;
     const { rows: ins } = await ctx.pool.query(
       `INSERT INTO teacher_personal_class_team_business_plan_versions
-         (team_id, version_no, summary, sections_json, saved_by)
-       VALUES ($1, $2, $3, $4::jsonb, $5)
+         (team_id, version_no, summary, sections_json, cover_json, saved_by)
+       VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6)
        RETURNING id, version_no, summary, saved_at`,
-      [ctx.team.id, nextNo, summary.slice(0, 500), JSON.stringify(sections), ctx.sid]
+      [ctx.team.id, nextNo, summary.slice(0, 500), JSON.stringify(sections), JSON.stringify(cover), ctx.sid]
     );
     const savedByName = await userDisplayName(ctx.pool, ctx.sid);
     const payload = await buildWorkspacePayload(ctx);
@@ -1001,50 +1098,13 @@ router.post(
       if (await isReadOnly(ctx.pool, ctx.team.id)) {
         return bad(req, res, 403, 40311, '商业计划书已审核通过，不可再生成');
       }
-      const provider = await getEnabledProvider('multimodal');
-      if (!provider) return bad(req, res, 503, 50301, '未配置 AI 服务');
-
-      const bundle = await assembleBusinessPlanBundle(ctx.pool, ctx.team.id);
-      const userPrompt = buildBusinessPlanOutlineUserPrompt(bundle);
-      logPromptToConsole?.(provider, BUSINESS_PLAN_OUTLINE_SYSTEM_PROMPT, userPrompt);
-
-      let text = '';
-      try {
-        text = await chatCompletion({
-          provider,
-          system: BUSINESS_PLAN_OUTLINE_SYSTEM_PROMPT,
-          user: userPrompt,
-          jsonMode: true,
-        });
-      } catch (e) {
-        const sm = String(e?.message || '');
-        if (/response_format|json_object|json mode/i.test(sm)) {
-          text = await chatCompletion({
-            provider,
-            system: BUSINESS_PLAN_OUTLINE_SYSTEM_PROMPT,
-            user: userPrompt,
-            jsonMode: false,
-          });
-        } else {
-          throw e;
-        }
-      }
-
-      let parsed;
-      try {
-        parsed = typeof text === 'string' ? JSON.parse(text) : text;
-      } catch {
-        parsed = extractJsonFromLlmText(String(text || '')) || null;
-      }
-      const sections = normalizeOutlinePayload(parsed);
-
-      // 生成大纲前：不允许他人持有有效章节锁
+      // 课程固定模板：不再调用 AI 自由大纲，仅按模板合并并保留已有正文
       const locks = await loadActiveSectionLocks(ctx.pool, ctx.team.id);
       const others = locks.filter((l) => String(l.lockedById) !== String(ctx.sid));
       if (others.length) {
         return res.status(409).json({
           code: 40902,
-          message: `有同学正在编辑章节（${others.map((o) => o.lockedByName).join('、')}），请稍后再生成大纲`,
+          message: `有同学正在编辑章节（${others.map((o) => o.lockedByName).join('、')}），请稍后再操作`,
           data: { workspace: await buildWorkspacePayload(ctx) },
           traceId: req.traceId,
         });
@@ -1057,7 +1117,7 @@ router.post(
       const row = await ensureWorkspace(ctx.pool, ctx.team.id, ctx.classId);
       const clientRevision = Number(req.body?.revision ?? row?.revision ?? 1);
       const payload = await saveWorkspaceOptimistic(ctx, {
-        clientSections: sections,
+        clientSections: coerceSections(row?.sections_json),
         clientRevision,
         replaceAll: true,
       });
@@ -1377,17 +1437,22 @@ router.post(
       let versionId = parseId(req.body?.versionId);
       if (!versionId) {
         const row = await ensureWorkspace(ctx.pool, ctx.team.id, ctx.classId);
-        const sections = coerceSections(row?.sections_json);
+        const sections = sectionsForDb(row?.sections_json);
+        const cover = enrichCoverWithTeamMeta(coerceCover(row?.cover_json), coverMetaFromCtx(ctx));
         if (!countCompletedSections(sections)) {
           return bad(req, res, 400, 40004, '请先填写并保存商业计划书要点后再提交');
         }
+        if (!String(cover.projectName || '').trim()) {
+          return bad(req, res, 400, 40005, '请先填写封面项目名称后再提交');
+        }
         await ctx.pool.query(
           `INSERT INTO teacher_personal_class_team_business_plan_workspace
-             (team_id, teacher_personal_class_id, sections_json, updated_at, updated_by)
-           VALUES ($1, $2, $3::jsonb, now(), $4)
+             (team_id, teacher_personal_class_id, sections_json, cover_json, updated_at, updated_by)
+           VALUES ($1, $2, $3::jsonb, $4::jsonb, now(), $5)
            ON CONFLICT (team_id)
-           DO UPDATE SET sections_json = EXCLUDED.sections_json, updated_at = now(), updated_by = EXCLUDED.updated_by`,
-          [ctx.team.id, ctx.classId, JSON.stringify(sections), ctx.sid]
+           DO UPDATE SET sections_json = EXCLUDED.sections_json, cover_json = EXCLUDED.cover_json,
+             updated_at = now(), updated_by = EXCLUDED.updated_by`,
+          [ctx.team.id, ctx.classId, JSON.stringify(sections), JSON.stringify(cover), ctx.sid]
         );
         const { rows: maxRows } = await ctx.pool.query(
           `SELECT COALESCE(MAX(version_no), 0)::int AS m
@@ -1398,10 +1463,10 @@ router.post(
         const nextNo = Number(maxRows[0]?.m || 0) + 1;
         const { rows: ins } = await ctx.pool.query(
           `INSERT INTO teacher_personal_class_team_business_plan_versions
-             (team_id, version_no, summary, sections_json, saved_by)
-           VALUES ($1, $2, $3, $4::jsonb, $5)
+             (team_id, version_no, summary, sections_json, cover_json, saved_by)
+           VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6)
            RETURNING id`,
-          [ctx.team.id, nextNo, '提交快照', JSON.stringify(sections), ctx.sid]
+          [ctx.team.id, nextNo, '提交快照', JSON.stringify(sections), JSON.stringify(cover), ctx.sid]
         );
         versionId = Number(ins[0]?.id);
       }
@@ -1448,7 +1513,8 @@ router.post(
         await ctx.pool.query(
           `UPDATE teacher_personal_class_team_business_plan_submissions
            SET version_id = $2, status = 'pending', submitted_by = $3, submitted_at = now(),
-               review_comment = '', reviewed_by = NULL, reviewed_at = NULL
+               review_comment = '', score_json = '{}'::jsonb, total_score = NULL,
+               reviewed_by = NULL, reviewed_at = NULL
            WHERE team_id = $1`,
           [ctx.team.id, versionId, ctx.sid]
         );
