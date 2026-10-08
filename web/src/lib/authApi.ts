@@ -520,12 +520,74 @@ export async function loginWithApi(username: string, password: string): Promise<
   return data;
 }
 
+export type AuthMeProfile = {
+  id: string;
+  username: string;
+  realName: string;
+  role: string;
+  status: string;
+  email: string;
+  phone: string;
+  mustChangePassword: boolean;
+};
+
+/** GET /api/auth/me（含邮箱/手机，供强制改密弹窗判断是否需绑定） */
+export async function fetchAuthMe(role: PortalRole): Promise<AuthMeProfile> {
+  const data = (await portalAuthenticatedFetch(role, '/api/auth/me')) as AuthMeProfile | null;
+  if (!data?.id) throw new Error('无法获取账号信息');
+  return {
+    id: String(data.id),
+    username: String(data.username || ''),
+    realName: String(data.realName || ''),
+    role: String(data.role || ''),
+    status: String(data.status || ''),
+    email: String(data.email || ''),
+    phone: String(data.phone || ''),
+    mustChangePassword: Boolean(data.mustChangePassword),
+  };
+}
+
+/** 强制改密场景：发送邮箱绑定验证码 */
+export async function sendBindEmailCodeApi(role: PortalRole, email: string): Promise<void> {
+  await portalAuthenticatedFetch(role, '/api/auth/bind-email-code', {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  });
+}
+
+/** 强制改密场景：发送手机绑定验证码 */
+export async function sendBindPhoneCodeApi(role: PortalRole, phone: string): Promise<void> {
+  await portalAuthenticatedFetch(role, '/api/auth/bind-phone-code', {
+    method: 'POST',
+    body: JSON.stringify({ phone }),
+  });
+}
+
+/** 个人中心主动改密：向已绑定邮箱/手机发送验证码 */
+export async function sendSecureCodeApi(role: PortalRole, channel: 'email' | 'phone'): Promise<void> {
+  await portalAuthenticatedFetch(role, '/api/auth/secure-code', {
+    method: 'POST',
+    body: JSON.stringify({ channel }),
+  });
+}
+
 /**
  * POST /api/auth/change-password（强制改密 / 主动改密）
+ * 强制改密可不传 oldPassword；主动改密须传 verifyChannel + verifyCode
  */
 export async function changePasswordWithApi(
   role: PortalRole,
-  body: { oldPassword: string; newPassword: string; confirmPassword: string }
+  body: {
+    oldPassword?: string;
+    newPassword: string;
+    confirmPassword: string;
+    email?: string;
+    emailCode?: string;
+    phone?: string;
+    phoneCode?: string;
+    verifyChannel?: 'email' | 'phone';
+    verifyCode?: string;
+  }
 ): Promise<void> {
   const data = (await portalAuthenticatedFetch(role, '/api/auth/change-password', {
     method: 'POST',

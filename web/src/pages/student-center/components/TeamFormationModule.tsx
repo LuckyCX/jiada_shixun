@@ -736,30 +736,38 @@ export default function TeamFormationModule({ classId, className, initialSubTab,
       />
 
       {/* 模块头部 */}
-      <div className="bg-gradient-to-br from-teal-500 to-cyan-600 rounded-2xl p-6 text-white">
-        <div className="flex items-center gap-4">
-          <div className="w-14 h-14 bg-white/20 rounded-2xl flex items-center justify-center backdrop-blur-sm">
+      <div className="bg-gradient-to-br from-teal-500 to-cyan-600 rounded-2xl p-4 md:p-6 text-white">
+        <div className="flex items-center gap-3 md:gap-4 !flex-nowrap">
+          <div className="w-12 h-12 md:w-14 md:h-14 bg-white/20 rounded-2xl flex items-center justify-center backdrop-blur-sm flex-shrink-0">
             <i className="ri-group-line text-2xl"></i>
           </div>
-          <div>
-            <h2 className="text-xl font-bold mb-1">智能组队系统</h2>
-            <p className="text-white/80 text-sm">完成测评 → AI 分析（视频选填）→ 等待组队 → 完善团队信息</p>
+          <div className="min-w-0">
+            <h2 className="text-xl font-bold mb-1" style={{ overflowWrap: 'normal' }}>智能组队系统</h2>
+            <p className="text-white/80 text-sm leading-6 flex flex-wrap gap-x-1">
+              <span className="!whitespace-nowrap">完成测评</span>
+              <span>→</span>
+              <span className="!whitespace-nowrap">AI 分析（视频选填）</span>
+              <span>→</span>
+              <span className="!whitespace-nowrap">等待组队</span>
+              <span>→</span>
+              <span className="!whitespace-nowrap">完善团队信息</span>
+            </p>
           </div>
         </div>
       </div>
 
-      {/* 标签页 */}
+      {/* 标签页：窄屏两列，文案保持整词不拆开 */}
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100">
-        <div className="flex border-b border-gray-100">
+        <div className="grid grid-cols-4 border-b border-gray-100">
           {tabs.map(tab => (
             <button key={tab.key} type="button" onClick={() => handleTabClick(tab.key)}
-              className={`flex-1 px-4 py-3.5 text-sm font-medium transition-colors whitespace-nowrap cursor-pointer flex items-center justify-center gap-1.5 ${
+              className={`px-2 md:px-4 py-3.5 text-sm font-medium transition-colors cursor-pointer flex items-center justify-center gap-1 !whitespace-nowrap !flex-nowrap ${
                 activeTab === tab.key ? 'text-teal-600 border-b-2 border-teal-600 bg-teal-50/30' : 'text-gray-500 hover:text-gray-800 hover:bg-gray-50'
               }`}>
               <i className={tab.icon}></i>
               {tab.label}
               {tab.badge && (
-                <span className={`px-1.5 py-0.5 text-xs font-bold rounded-full whitespace-nowrap ${tab.badge === '✓' ? 'bg-green-100 text-green-600' : tab.badge === '进行中' ? 'bg-orange-100 text-orange-600' : 'bg-blue-100 text-blue-600'}`}>
+                <span className={`px-1.5 py-0.5 text-xs font-bold rounded-full !whitespace-nowrap ${tab.badge === '✓' ? 'bg-green-100 text-green-600' : tab.badge === '进行中' ? 'bg-orange-100 text-orange-600' : 'bg-blue-100 text-blue-600'}`}>
                   {tab.badge}
                 </span>
               )}
@@ -1003,28 +1011,28 @@ export default function TeamFormationModule({ classId, className, initialSubTab,
                       团队成员
                       <span className="text-xs font-normal text-gray-400">共 {myTeam.members.length} 人</span>
                     </h3>
-                    <div className="grid grid-cols-[repeat(auto-fill,minmax(7.5rem,1fr))] gap-3">
+                    <div className="divide-y divide-gray-100 border border-gray-100 rounded-xl overflow-hidden">
                       {myTeam.members.map((member) => (
                         <div
                           key={member.id}
-                          className="bg-gray-50 border border-gray-100 rounded-xl p-3 flex flex-col items-center text-center hover:border-teal-200 hover:bg-teal-50/40 transition-colors"
+                          className="flex items-center gap-3 px-3 py-3 bg-white !flex-nowrap"
                         >
-                          <MemberTextAvatar name={member.name} avatarUrl={member.avatarUrl} />
-                          <div className="mt-2 flex flex-wrap items-center justify-center gap-1 w-full">
-                            <span className="text-sm font-bold text-gray-900 truncate max-w-full">{member.name}</span>
-                            {member.isLeader && (
-                              <span className="px-1 py-0.5 bg-amber-100 text-amber-700 text-[10px] font-medium rounded-full whitespace-nowrap inline-flex items-center gap-0.5">
-                                <i className="ri-vip-crown-fill"></i>
-                                队长
-                              </span>
-                            )}
+                          <MemberTextAvatar name={member.name} avatarUrl={member.avatarUrl} size="sm" />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <span className="text-sm font-semibold text-gray-900 truncate">{member.name}</span>
+                              {member.isLeader && (
+                                <span className="px-1.5 py-0.5 bg-amber-100 text-amber-700 text-[10px] font-medium rounded-full inline-flex items-center gap-0.5 flex-shrink-0 !whitespace-nowrap">
+                                  <i className="ri-vip-crown-fill"></i>
+                                  队长
+                                </span>
+                              )}
+                            </div>
+                            <p className="mt-0.5 text-xs text-gray-500 truncate" style={{ overflowWrap: 'normal' }}>
+                              {member.studentId || '—'}
+                              {member.aiMatchedRole ? ` · ${member.aiMatchedRole}` : ''}
+                            </p>
                           </div>
-                          <p className="mt-1.5 text-[11px] text-gray-500 w-full truncate">
-                            {member.studentId || '—'}
-                          </p>
-                          <p className="text-[11px] text-teal-700 font-medium w-full truncate leading-snug">
-                            {member.aiMatchedRole}
-                          </p>
                         </div>
                       ))}
                     </div>

@@ -1,7 +1,8 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Dropdown, Drawer, Upload, message as antdMessage, Input, Button } from 'antd';
+import { Dropdown, Drawer, Upload, message as antdMessage, Button } from 'antd';
 import { clearPortalToken, getPortalToken, parseJwtPayload } from '../../lib/authApi';
+import ProfileContactPanels from '../../components/ProfileContactPanels';
 import { useSiteBrand } from '../../lib/publicSite';
 import TeamCard, { TeamProject } from './components/TeamCard';
 import TeamDetailModal from './components/TeamDetailModal';
@@ -13,9 +14,7 @@ import StudentAnalysisBoard from './components/StudentAnalysisBoard';
 import ClassManagement from './components/classManagement';
 import StudentManagement from './components/studentManagement';
 import TeamReview from './components/teamReview';
-import TeamQuestionsPresetPage, {
-  confirmLeaveTeamQuestionsUnsaved,
-} from './components/teamReview/TeamQuestionsPresetPage';
+import TeamQuestionsPresetPage from './components/teamReview/TeamQuestionsPresetPage';
 import TopicReview from './components/topicReview';
 import BusinessPlanReview from './components/businessPlanReview';
 import ClassProjectOverview from '../class-project-overview/page';
@@ -26,7 +25,6 @@ import { usePublicDictOptions } from '../admin-dashboard/components/classManagem
 import {
   getTeacherProfile,
   listTeacherPersonalClasses,
-  sendTeacherEmailCode,
   updateTeacherProfile,
   uploadTeacherAvatar,
   type TeacherPersonalClassRow,
@@ -145,6 +143,7 @@ export default function TeacherDashboard() {
   const brandTitle = siteTitle.trim() || '教师工作台';
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const activeTab = tabFromSearchParams(searchParams);
   const teamReviewSubPage: 'main' | 'questions' =
     searchParams.get(TEACHER_SUB_PARAM) === 'questions' ? 'questions' : 'main';
@@ -189,37 +188,19 @@ export default function TeacherDashboard() {
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [teacherProfile, setTeacherProfile] = useState<TeacherProfile | null>(null);
   const [profileModalOpen, setProfileModalOpen] = useState(false);
-  const [profileSaving, setProfileSaving] = useState(false);
-  const [profileEmailDraft, setProfileEmailDraft] = useState('');
-  const [profileEmailCode, setProfileEmailCode] = useState('');
-  const [profileEmailSending, setProfileEmailSending] = useState(false);
-  const [profileOldPwd, setProfileOldPwd] = useState('');
-  const [profileNewPwd, setProfileNewPwd] = useState('');
   const [personalClasses, setPersonalClasses] = useState<TeacherPersonalClassRow[]>([]);
   const [selectedPersonalClass, setSelectedPersonalClass] = useState<TeacherPersonalClassRow | null>(null);
   const [monitorTeams, setMonitorTeams] = useState<TeamProject[]>([]);
   const [monitorTeamsLoading, setMonitorTeamsLoading] = useState(false);
   const [teamQuestionsSavedTick, setTeamQuestionsSavedTick] = useState(0);
-  const [teamQuestionsDirty, setTeamQuestionsDirty] = useState(false);
   const { labelByValue: semesterLabel } = usePublicDictOptions('semester', true);
 
   const leaveTeamQuestionsPreset = () => {
-    setTeamQuestionsDirty(false);
     setTeacherTab('teamReview', { sub: 'main' });
   };
 
   const backFromClassStudents = () => {
     setTeacherTab('classManagement', { classId: null, sub: null });
-  };
-
-  const backFromTeamReview = () => {
-    if (teamReviewSubPage === 'questions') {
-      if (teamQuestionsDirty) {
-        confirmLeaveTeamQuestionsUnsaved(leaveTeamQuestionsPreset);
-        return;
-      }
-      leaveTeamQuestionsPreset();
-    }
   };
 
   const syncClassToUrl = useCallback((cls: TeacherPersonalClassRow | null) => {
@@ -279,7 +260,6 @@ export default function TeacherDashboard() {
     getTeacherProfile()
       .then((p) => {
         setTeacherProfile(p);
-        setProfileEmailDraft(p.email || '');
       })
       .catch(() => {
         /* 侧栏仍可用 JWT 中的 username 兜底 */
@@ -339,6 +319,7 @@ export default function TeacherDashboard() {
   });
 
   const handleSidebarClick = (item: typeof sidebarItems[number]) => {
+    setMobileNavOpen(false);
     if (item.type === 'link' && item.to) {
       navigate(item.to);
       return;
@@ -484,7 +465,6 @@ export default function TeacherDashboard() {
               classId={selectedPersonalClass.id}
               className={selectedPersonalClass.name}
               onBack={leaveTeamQuestionsPreset}
-              onDirtyChange={setTeamQuestionsDirty}
               onSaved={() => setTeamQuestionsSavedTick((n) => n + 1)}
             />
           );
@@ -542,8 +522,20 @@ export default function TeacherDashboard() {
 
   return (
     <div className="flex h-screen bg-gray-50 overflow-hidden">
-      {/* 左侧侧边栏 */}
-      <aside className="w-56 flex-shrink-0 bg-white border-r border-gray-100 flex flex-col shadow-sm">
+      {mobileNavOpen ? (
+        <button
+          type="button"
+          className="md:hidden fixed inset-0 z-40 bg-black/40"
+          aria-label="关闭菜单"
+          onClick={() => setMobileNavOpen(false)}
+        />
+      ) : null}
+      {/* 左侧侧边栏：手机为抽屉，桌面保持固定栏 */}
+      <aside
+        className={`w-56 flex-shrink-0 bg-white border-r border-gray-100 flex-col shadow-sm ${
+          mobileNavOpen ? 'fixed inset-y-0 left-0 z-50 flex' : 'hidden md:flex'
+        }`}
+      >
         {/* Logo 区域 */}
         <div className="px-5 py-5 border-b border-gray-100">
           <div className="flex items-center gap-2.5">
@@ -628,28 +620,16 @@ export default function TeacherDashboard() {
       {/* 右侧主内容区 */}
       <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
         {/* 顶部 Header */}
-        <header className="bg-white border-b border-gray-100 shadow-sm flex-shrink-0 px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3 min-w-0">
-            {activeTab === 'studentManagement' && selectedPersonalClass && (
-              <button
-                type="button"
-                onClick={backFromClassStudents}
-                className="flex items-center gap-1 px-2 py-1 text-sm text-teal-600 hover:bg-teal-50 rounded-lg transition-colors cursor-pointer whitespace-nowrap flex-shrink-0"
-              >
-                <i className="ri-arrow-left-line" />
-                返回班级管理
-              </button>
-            )}
-            {activeTab === 'teamReview' && teamReviewSubPage === 'questions' && selectedPersonalClass && (
-              <button
-                type="button"
-                onClick={backFromTeamReview}
-                className="flex items-center gap-1 px-2 py-1 text-sm text-teal-600 hover:bg-teal-50 rounded-lg transition-colors cursor-pointer whitespace-nowrap flex-shrink-0"
-              >
-                <i className="ri-arrow-left-line" />
-                返回组队管理
-              </button>
-            )}
+        <header className="bg-white border-b border-gray-100 shadow-sm flex-shrink-0 px-3 md:px-6 py-3 md:py-4 flex items-center justify-between gap-2 !flex-nowrap">
+          <div className="flex items-center gap-2 md:gap-3 min-w-0 flex-1">
+            <button
+              type="button"
+              className="md:hidden w-9 h-9 flex items-center justify-center text-gray-700 hover:bg-gray-100 rounded-lg flex-shrink-0"
+              aria-label="打开菜单"
+              onClick={() => setMobileNavOpen(true)}
+            >
+              <i className="ri-menu-line text-xl" />
+            </button>
             <div className="min-w-0">
             <h1 className="text-base font-bold text-gray-900 truncate">
               {activeTab === 'studentManagement' && selectedPersonalClass
@@ -660,7 +640,7 @@ export default function TeacherDashboard() {
                     : `组队管理 — ${selectedPersonalClass.name}`
                   : (activeItem?.label ?? '教师工作台')}
             </h1>
-            <p className="text-xs text-gray-400 mt-0.5">
+            <p className="hidden md:block text-xs text-gray-400 mt-0.5">
               {activeTab === 'monitor' && `共 ${monitorTeams.length} 个团队 · ${monitorTeams.filter(t => t.status !== 'on-track').length} 个需关注`}
               {activeTab === 'analysis' && '智能分析学生学习数据'}
               {activeTab === 'guidance' && selectedPersonalClass && '发送引导与管理实训任务'}
@@ -683,7 +663,7 @@ export default function TeacherDashboard() {
             </p>
             </div>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 md:gap-3 flex-shrink-0 !flex-nowrap">
             {personalClasses.length > 0 && (
               <Dropdown
                 menu={{
@@ -696,14 +676,14 @@ export default function TeacherDashboard() {
               >
                 <button
                   type="button"
-                  className={`flex items-center gap-2 px-3 py-1.5 text-sm font-medium border rounded-lg whitespace-nowrap transition-colors ${
+                  className={`flex items-center gap-1.5 md:gap-2 px-2 md:px-3 py-1.5 text-sm font-medium border rounded-lg !whitespace-nowrap transition-colors ${
                     personalClasses.length > 1
                       ? 'text-teal-700 bg-teal-50 border-teal-200 hover:bg-teal-100 cursor-pointer'
                       : 'text-gray-700 bg-gray-50 border-gray-200 cursor-default'
                   }`}
                 >
                   <i className="ri-building-4-line text-teal-600" />
-                  <span className="max-w-[180px] truncate">
+                  <span className="max-w-[4.5rem] sm:max-w-[120px] md:max-w-[180px] truncate">
                     {selectedPersonalClass?.name ?? '选择班级'}
                   </span>
                   {personalClasses.length > 1 && <i className="ri-arrow-down-s-line" />}
@@ -761,102 +741,34 @@ export default function TeacherDashboard() {
               </div>
             </div>
 
-            <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-              <div className="text-sm font-semibold text-gray-900 mb-3">邮箱</div>
-              <div className="space-y-3">
-                <Input value={profileEmailDraft} onChange={(e) => setProfileEmailDraft(e.target.value)} placeholder="修改邮箱" />
-                <div className="flex flex-col sm:flex-row gap-2">
-                  <Input
-                    className="min-w-0 flex-1"
-                    value={profileEmailCode}
-                    onChange={(e) => setProfileEmailCode(e.target.value)}
-                    placeholder="邮箱验证码"
-                  />
-                  <Button
-                    className="w-full sm:w-auto sm:flex-shrink-0"
-                    loading={profileEmailSending}
-                    onClick={async () => {
-                      setProfileEmailSending(true);
-                      try {
-                        await sendTeacherEmailCode(profileEmailDraft);
-                        antdMessage.success('验证码已发送');
-                      } catch (e: any) {
-                        antdMessage.error(e?.message || '发送失败');
-                      } finally {
-                        setProfileEmailSending(false);
-                      }
-                    }}
-                  >
-                    获取验证码
-                  </Button>
-                </div>
-                <div className="flex justify-end">
-                  <Button
-                    type="primary"
-                    size="small"
-                    className="!bg-teal-500 !border-teal-500 hover:!bg-teal-600"
-                    loading={profileSaving}
-                    onClick={async () => {
-                      setProfileSaving(true);
-                      try {
-                        await updateTeacherProfile({ email: profileEmailDraft, code: profileEmailCode });
-                        const p = await getTeacherProfile();
-                        setTeacherProfile(p);
-                        antdMessage.success('已保存');
-                      } catch (e: any) {
-                        antdMessage.error(e?.message || '保存失败');
-                      } finally {
-                        setProfileSaving(false);
-                      }
-                    }}
-                  >
-                    保存邮箱
-                  </Button>
-                </div>
-              </div>
-            </div>
-
-            <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-              <div className="text-sm font-semibold text-gray-900 mb-3">修改密码</div>
-              <div className="space-y-3">
-                <Input.Password value={profileOldPwd} onChange={(e) => setProfileOldPwd(e.target.value)} placeholder="旧密码" />
-                <Input.Password value={profileNewPwd} onChange={(e) => setProfileNewPwd(e.target.value)} placeholder="新密码（至少8位，含大小写与数字）" />
-                <div className="flex justify-end">
-                  <Button
-                    type="primary"
-                    size="small"
-                    className="!bg-teal-500 !border-teal-500 hover:!bg-teal-600"
-                    loading={profileSaving}
-                    onClick={async () => {
-                      setProfileSaving(true);
-                      try {
-                        const { validatePasswordStrength, PASSWORD_POLICY_HINT } = await import('../../lib/passwordPolicy');
-                        const strength = validatePasswordStrength(profileNewPwd);
-                        if (!strength.ok) {
-                          antdMessage.warning(PASSWORD_POLICY_HINT);
-                          return;
-                        }
-                        await updateTeacherProfile({ oldPassword: profileOldPwd, newPassword: profileNewPwd });
-                        setProfileOldPwd('');
-                        setProfileNewPwd('');
-                        antdMessage.success('密码已更新');
-                      } catch (e: any) {
-                        antdMessage.error(e?.message || '保存失败');
-                      } finally {
-                        setProfileSaving(false);
-                      }
-                    }}
-                  >
-                    保存密码
-                  </Button>
-                </div>
-              </div>
-            </div>
+            <ProfileContactPanels
+              role="teacher"
+              email={teacherProfile?.email || ''}
+              phone={teacherProfile?.phone || ''}
+              classItems={personalClasses.map((c) => ({
+                id: c.id,
+                title: c.name,
+                subtitle: `学生 ${c.studentCount ?? 0} 人`,
+              }))}
+              classEmptyText="暂无个性化班级"
+              onSaveContact={async (payload) => {
+                if ('email' in payload) {
+                  await updateTeacherProfile({ email: payload.email, code: payload.code });
+                } else {
+                  await updateTeacherProfile({ phone: payload.phone, phoneCode: payload.phoneCode });
+                }
+                const p = await getTeacherProfile();
+                setTeacherProfile(p);
+              }}
+              onContactSaved={(next) => {
+                setTeacherProfile((prev) => (prev ? { ...prev, email: next.email, phone: next.phone } : prev));
+              }}
+            />
           </div>
         </Drawer>
 
         {/* 主内容 */}
-        <main className="flex-1 overflow-y-auto py-6 px-6">
+        <main className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden py-4 px-4 md:py-6 md:px-6">
           {renderContent()}
         </main>
       </div>

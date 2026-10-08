@@ -30,6 +30,7 @@ export type StudentProfile = {
   realName: string;
   studentNo: string;
   email: string;
+  phone: string;
   avatarUrl: string;
   classId: string;
   className: string;
@@ -39,12 +40,19 @@ export type StudentProfile = {
 };
 
 export async function getStudentProfile(): Promise<StudentProfile> {
-  return studentFetch('/api/student/me') as Promise<StudentProfile>;
+  const data = (await studentFetch('/api/student/me')) as StudentProfile;
+  return {
+    ...data,
+    email: data?.email || '',
+    phone: data?.phone || '',
+  };
 }
 
 export async function updateStudentProfile(body: {
   email?: string;
   code?: string;
+  phone?: string;
+  phoneCode?: string;
   oldPassword?: string;
   newPassword?: string;
 }) {

@@ -39,14 +39,14 @@ export default function StudentClassSwitcher({ enrollments, selectedClassId, onC
     >
       <button
         type="button"
-        className={`flex items-center gap-2 px-3 py-1.5 text-sm font-medium border rounded-lg whitespace-nowrap transition-colors ${
+        className={`flex items-center gap-1.5 md:gap-2 px-2 md:px-3 py-1.5 text-sm font-medium border rounded-lg !whitespace-nowrap transition-colors ${
           canSwitch
             ? 'text-teal-700 bg-teal-50 border-teal-200 hover:bg-teal-100 cursor-pointer'
             : 'text-gray-700 bg-gray-50 border-gray-200 cursor-default'
         }`}
       >
         <i className="ri-building-4-line text-teal-600" />
-        <span className="max-w-[180px] truncate">{label}</span>
+        <span className="max-w-[4.5rem] sm:max-w-[120px] md:max-w-[180px] truncate">{label}</span>
         {canSwitch && <i className="ri-arrow-down-s-line" />}
       </button>
     </Dropdown>

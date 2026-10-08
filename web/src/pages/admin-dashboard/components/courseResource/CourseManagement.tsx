@@ -559,7 +559,7 @@ export default function CourseManagement({ selectedModule: selectedModuleProp, h
 
   const renderLeaf = (leaf: CourseResourceNode) => (
     <div key={leaf.id} className="border border-gray-100 rounded-xl p-4 hover:border-teal-200 transition-all bg-white">
-      <div className="flex items-start justify-between gap-3 mb-3">
+      <div className="flex flex-wrap items-start justify-between gap-3 mb-3">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1 flex-wrap">
             <h4 className="text-sm font-bold text-gray-900">{leaf.title}</h4>
@@ -576,8 +576,8 @@ export default function CourseManagement({ selectedModule: selectedModuleProp, h
             </div>
           )}
         </div>
-        <div className="flex items-center gap-2 flex-shrink-0">
-          <button onClick={() => openKnowledgePicker(leaf)} className="px-3 py-1.5 bg-teal-50 text-teal-600 text-xs font-medium rounded-lg hover:bg-teal-100 transition-colors whitespace-nowrap cursor-pointer">
+        <div className="flex flex-wrap items-center gap-2 min-w-0">
+          <button onClick={() => openKnowledgePicker(leaf)} className="px-3 py-1.5 bg-teal-50 text-teal-600 text-xs font-medium rounded-lg hover:bg-teal-100 transition-colors cursor-pointer">
             <i className="ri-price-tag-3-line mr-1"></i>关联知识点
           </button>
           <button onClick={() => setUploadNode(leaf)} className="px-3 py-1.5 bg-indigo-50 text-indigo-600 text-xs font-medium rounded-lg hover:bg-indigo-100 transition-colors whitespace-nowrap cursor-pointer">
@@ -616,8 +616,8 @@ export default function CourseManagement({ selectedModule: selectedModuleProp, h
 
   const renderSection = (section: CourseResourceNode) => (
     <div key={section.id} className="border border-gray-100 rounded-xl bg-gray-50/50 p-3">
-      <div className="flex items-center justify-between ">
-        <button onClick={() => setExpanded((prev) => ({ ...prev, [section.id]: !prev[section.id] }))} className="flex items-center gap-2 text-left cursor-pointer">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <button onClick={() => setExpanded((prev) => ({ ...prev, [section.id]: !prev[section.id] }))} className="flex items-center gap-2 text-left cursor-pointer min-w-0">
           <i className={`${expanded[section.id] ? 'ri-arrow-down-s-line' : 'ri-arrow-right-s-line'} text-gray-400 text-lg`}></i>
           <span className="text-sm font-bold text-gray-900">{section.title}</span>
           <span className="text-xs text-gray-400">{section.children.length} 个子小节</span>
@@ -637,7 +637,7 @@ export default function CourseManagement({ selectedModule: selectedModuleProp, h
 
   const renderChapter = (chapter: CourseResourceNode) => (
     <div key={chapter.id} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-      <div className="flex items-center justify-between p-4 bg-gradient-to-r from-teal-50 to-cyan-50">
+      <div className="flex flex-wrap items-center justify-between gap-2 p-4 bg-gradient-to-r from-teal-50 to-cyan-50">
         <button type="button" onClick={() => setExpanded((prev) => ({ ...prev, [chapter.id]: !prev[chapter.id] }))} className="flex flex-1 items-center gap-3 text-left cursor-pointer min-w-0">
           <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-teal-500 to-cyan-500 flex items-center justify-center flex-shrink-0">
             <i className="ri-book-open-line text-white text-sm"></i>
@@ -647,8 +647,8 @@ export default function CourseManagement({ selectedModule: selectedModuleProp, h
             <div className="text-xs text-gray-500 mt-0.5">{chapter.children.length} 个小节</div>
           </div>
         </button>
-        <div className="flex items-center gap-2 flex-shrink-0">
-          <button onClick={() => openAddNode(chapter.id, 1)} className="px-3 py-1.5 bg-white text-teal-600 text-xs font-medium rounded-lg hover:bg-teal-50 transition-colors whitespace-nowrap cursor-pointer">
+        <div className="flex flex-wrap items-center gap-2 min-w-0">
+          <button onClick={() => openAddNode(chapter.id, 1)} className="px-3 py-1.5 bg-white text-teal-600 text-xs font-medium rounded-lg hover:bg-teal-50 transition-colors cursor-pointer">
             <i className="ri-add-line mr-1"></i>新增小节
           </button>
           <button onClick={() => askDeleteNode(chapter)} className="px-3 py-1.5 bg-white text-red-500 text-xs font-medium rounded-lg hover:bg-red-50 transition-colors whitespace-nowrap cursor-pointer">
@@ -673,7 +673,7 @@ export default function CourseManagement({ selectedModule: selectedModuleProp, h
   );
 
   const renderCourseActions = () => (
-    <div className="flex items-center gap-2 flex-shrink-0">
+    <div className="flex flex-wrap items-center gap-2 min-w-0">
       <button onClick={() => setKnowledgeDialogOpen(true)} className="px-4 py-2 bg-white border border-teal-200 text-teal-600 text-sm font-medium rounded-xl hover:bg-teal-50 transition-colors whitespace-nowrap cursor-pointer">
         <i className="ri-price-tag-3-line mr-1.5"></i>知识点维护
       </button>
@@ -684,11 +684,11 @@ export default function CourseManagement({ selectedModule: selectedModuleProp, h
   );
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5 min-w-0 overflow-x-hidden">
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
         {!hideModuleTabs && (
-          <div className="border-gray-100 flex items-center justify-between gap-3">
-            <div className="flex items-center gap-3 overflow-x-auto">
+          <div className="border-gray-100 flex flex-wrap items-center justify-between gap-3 min-w-0">
+            <div className="flex flex-wrap items-center gap-2 min-w-0">
               {modules.map((mod) => (
                 <button key={mod.key} type="button" onClick={() => setInternalSelectedModule(mod.key)} className={`px-5 py-2.5 rounded-xl font-medium transition-all whitespace-nowrap text-sm ${selectedModule === mod.key ? `${mod.color} text-white shadow-lg` : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
                   {mod.shortName}
@@ -703,8 +703,8 @@ export default function CourseManagement({ selectedModule: selectedModuleProp, h
             {renderCourseActions()}
           </div>
         )}
-        {supportsInstanceLibraryTab && <div className="  border-gray-100 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
+        {supportsInstanceLibraryTab && <div className="border-gray-100 flex flex-wrap items-center justify-between gap-3 min-w-0">
+          <div className="flex flex-wrap items-center gap-2 min-w-0">
             {[
               { key: 'course' as ResourceContentTab, label: '课程资源' },
               { key: 'instance' as ResourceContentTab, label: instanceLibraryLabel },
@@ -723,7 +723,7 @@ export default function CourseManagement({ selectedModule: selectedModuleProp, h
           </div>
           {resourceContentTab === 'course' && renderCourseActions()}
         </div>}
-        {resourceContentTab === 'course' && <div className="mt-4 pt-4 border-t border-gray-100 grid grid-cols-5 gap-3">
+        {resourceContentTab === 'course' && <div className="mt-4 pt-4 border-t border-gray-100 grid grid-cols-2 md:grid-cols-5 gap-3">
           {[
             ['课程章节', stats.chapters, 'ri-book-line', 'bg-teal-50', 'text-teal-500', 'text-teal-700'],
             ['课程小节', stats.sections, 'ri-list-check', 'bg-indigo-50', 'text-indigo-500', 'text-indigo-700'],

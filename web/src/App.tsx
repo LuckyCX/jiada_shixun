@@ -6,6 +6,7 @@ import i18n from "./i18n";
 import SiteBrandHead from "./components/SiteBrandHead";
 import AntdAppProvider from "./components/AntdAppProvider";
 import MustChangePasswordGate from "./components/MustChangePasswordGate";
+import MobileAppMarker from "./components/MobileAppMarker";
 
 
 function App() {
@@ -13,6 +14,7 @@ function App() {
     <I18nextProvider i18n={i18n}>
       <AntdAppProvider>
         <BrowserRouter basename={__BASE_PATH__}>
+          <MobileAppMarker />
           <SiteBrandHead />
           <MustChangePasswordGate />
           <Suspense fallback={<div className="min-h-[30vh] flex items-center justify-center text-gray-500 text-sm">加载中…</div>}>

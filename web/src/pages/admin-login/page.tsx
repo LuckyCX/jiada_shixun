@@ -68,7 +68,7 @@ export default function AdminLoginPage() {
         <div className="p-6">
           <form onSubmit={handleLogin} className="space-y-4" autoComplete="off">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">管理员账号</label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">用户名 / 邮箱 / 手机号</label>
               <input
                 type="text"
                 required
@@ -76,7 +76,7 @@ export default function AdminLoginPage() {
                 value={loginUsername}
                 onChange={(ev) => setLoginUsername(ev.target.value)}
                 className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all text-sm"
-                placeholder="请输入管理员账号"
+                placeholder="请输入用户名、邮箱或手机号"
               />
             </div>
             <div>

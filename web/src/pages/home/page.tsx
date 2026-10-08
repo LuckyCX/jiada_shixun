@@ -49,11 +49,13 @@ export default function Home() {
   const [loginPassword, setLoginPassword] = useState('');
   const [loginRemember, setLoginRemember] = useState(false);
   const [loginCardMode, setLoginCardMode] = useState<'login' | 'reset'>('login');
-  const [resetEmail, setResetEmail] = useState('');
+  /** 忘记密码：邮箱或手机号 */
+  const [resetAccount, setResetAccount] = useState('');
   const [resetCode, setResetCode] = useState('');
   const [resetNewPassword, setResetNewPassword] = useState('');
   const [resetLoading, setResetLoading] = useState(false);
   const [resetSending, setResetSending] = useState(false);
+  const [navMenuOpen, setNavMenuOpen] = useState(false);
 
   useEffect(() => {
     const handleScroll = () => setScrolled(window.scrollY > 50);
@@ -139,11 +141,11 @@ export default function Home() {
         if (expected === 'teacher') throw new Error('该账号不是教师，请使用教师账号登录');
         throw new Error('该账号不是学生，请使用学生账号登录');
       }
-      // 弱口令须先改密：跳过入班门禁等业务校验，避免 40310
-      if (expected === 'student' && !mustChangePassword) {
+      // 学生无论口令强弱都先校验班级；未入班不写登录态、不弹改密
+      if (expected === 'student') {
         const gate = await assertStudentCanLoginWithToken(token);
         if (!gate.ok) {
-          throw new Error(gate.message);
+          throw new Error('未进入班级，当前暂无实训');
         }
       }
       saveLoginForm(expected, { remember, username, password });
@@ -151,7 +153,10 @@ export default function Home() {
       setUserInfo({ name: user.username, role: expected });
       setIsLoggedIn(true);
       setShowLoginModal(false);
-      notifyMustChangePasswordIfNeeded(expected, token, mustChangePassword);
+      // 学生改密弹窗由进入学生中心后再触发，避免停在登录页就弹出
+      if (!(expected === 'student' && mustChangePassword)) {
+        notifyMustChangePasswordIfNeeded(expected, token, mustChangePassword);
+      }
 
       if (pendingNavTarget) {
         const req = getRequiredPortalRole(pendingNavTarget);
@@ -291,10 +296,10 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-white">
       {/* Navigation */}
-      <nav className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 ${scrolled ? 'bg-white shadow-md' : 'bg-transparent'}`}>
-        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 flex items-center justify-center rounded-full bg-white/90 shadow overflow-hidden">
+      <nav className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 ${scrolled || navMenuOpen ? 'bg-white shadow-md' : 'bg-transparent'}`}>
+        <div className="max-w-7xl mx-auto px-4 md:px-6 py-4 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-10 h-10 flex items-center justify-center rounded-full bg-white/90 shadow overflow-hidden flex-shrink-0">
               {logoUrl ? (
                 <img src={logoUrl} alt="" className="w-9 h-9 object-contain" />
               ) : (
@@ -305,47 +310,70 @@ export default function Home() {
                 />
               )}
             </div>
-            <span className={`text-xl font-bold transition-colors ${scrolled ? 'text-gray-900' : 'text-white'}`}>{navBrandTitle}</span>
+            <span className={`text-base md:text-xl font-bold transition-colors truncate ${scrolled || navMenuOpen ? 'text-gray-900' : 'text-white'}`}>{navBrandTitle}</span>
           </div>
-          <div className="flex items-center gap-8">
+          <div className="hidden md:flex items-center gap-8">
             <a href="#modules" className={`text-sm font-medium transition-colors hover:text-teal-500 cursor-pointer ${scrolled ? 'text-gray-700' : 'text-white'}`}>实训模块</a>
             <a href="#features" className={`text-sm font-medium transition-colors hover:text-teal-500 cursor-pointer ${scrolled ? 'text-gray-700' : 'text-white'}`}>平台特色</a>
             <Link to={USER_GUIDE_PATH} className={`text-sm font-medium transition-colors hover:text-teal-500 cursor-pointer whitespace-nowrap ${scrolled ? 'text-gray-700' : 'text-white'}`}>
               <i className="ri-question-line mr-1"></i>帮助中心
             </Link>
           </div>
+          <button
+            type="button"
+            className={`md:hidden w-10 h-10 flex items-center justify-center rounded-lg ${scrolled || navMenuOpen ? 'text-gray-800' : 'text-white'}`}
+            aria-label={navMenuOpen ? '关闭菜单' : '打开菜单'}
+            onClick={() => setNavMenuOpen((open) => !open)}
+          >
+            <i className={`${navMenuOpen ? 'ri-close-line' : 'ri-menu-line'} text-2xl`} />
+          </button>
         </div>
+        {navMenuOpen ? (
+          <div className="md:hidden border-t border-gray-100 bg-white px-4 py-3 flex flex-col gap-1">
+            <a href="#modules" onClick={() => setNavMenuOpen(false)} className="px-3 py-3 text-sm font-medium text-gray-800 rounded-lg hover:bg-gray-50">实训模块</a>
+            <a href="#features" onClick={() => setNavMenuOpen(false)} className="px-3 py-3 text-sm font-medium text-gray-800 rounded-lg hover:bg-gray-50">平台特色</a>
+            <Link to={USER_GUIDE_PATH} onClick={() => setNavMenuOpen(false)} className="px-3 py-3 text-sm font-medium text-gray-800 rounded-lg hover:bg-gray-50">
+              <i className="ri-question-line mr-1"></i>帮助中心
+            </Link>
+          </div>
+        ) : null}
       </nav>
 
       {/* Hero Section */}
-      <section className="relative h-screen flex items-center justify-center overflow-hidden">
+      <section className="relative w-full min-h-[100dvh] md:h-screen flex items-center justify-center overflow-hidden">
         <img
           src={heroBgSrc}
           alt=""
-          className="absolute inset-0 w-full h-full object-cover object-top"
+          className="absolute inset-0 w-full h-full max-w-none object-cover object-center md:object-top"
         />
         <div className="absolute inset-0 bg-gradient-to-b from-black/40 via-black/30 to-black/40"></div>
-        <div className="relative z-10 text-center px-6 max-w-5xl mx-auto w-full">
+        <div className="relative z-10 text-center px-4 md:px-6 max-w-5xl mx-auto w-full">
           {heroTitleText ? (
-            <h1 className="text-5xl md:text-6xl font-bold text-white mb-6 leading-tight">{heroTitleText}</h1>
+            <h1 className="text-3xl md:text-6xl font-bold text-white mb-6 leading-tight break-words">{heroTitleText}</h1>
           ) : null}
           {heroSubtitleText ? (
-            <p className="text-xl md:text-2xl text-white/95 mb-8 leading-relaxed">{heroSubtitleText}</p>
+            <p className="text-base md:text-2xl text-white/95 mb-8 leading-relaxed break-words">{heroSubtitleText}</p>
           ) : null}
           {heroDescriptionText ? (
-            <p className="text-base md:text-lg text-white/90 mb-12 max-w-3xl mx-auto">{heroDescriptionText}</p>
+            <p className="text-sm md:text-lg text-white/90 mb-12 max-w-3xl mx-auto break-words">{heroDescriptionText}</p>
           ) : null}
-          <div className="flex flex-wrap items-stretch justify-center gap-4">
+          <div className="flex flex-col md:flex-row md:flex-wrap items-stretch justify-center gap-4">
             <button
               type="button"
               onClick={() => setShowLoginModal(true)}
-              className="inline-flex items-center justify-center min-h-[3.5rem] min-w-[11rem] px-8 py-3.5 rounded-xl border-2 border-transparent bg-teal-500 text-white font-bold text-lg hover:bg-teal-600 hover:shadow-2xl hover:scale-105 transition-all whitespace-nowrap box-border"
+              className="inline-flex items-center justify-center min-h-[3.5rem] w-full md:w-auto md:min-w-[11rem] px-8 py-3.5 rounded-xl border-2 border-transparent bg-teal-500 text-white font-bold text-lg hover:bg-teal-600 hover:shadow-2xl md:hover:scale-105 transition-all md:whitespace-nowrap box-border"
             >
               现在开始
             </button>
             <Link
               to={USER_GUIDE_PATH}
-              className="inline-flex items-center justify-center gap-2 min-h-[3.5rem] min-w-[11rem] px-8 py-3.5 rounded-xl border-2 border-slate-200 bg-white/90 backdrop-blur-sm text-slate-900 font-bold text-lg hover:shadow-xl hover:scale-105 transition-all whitespace-nowrap box-border"
+              className="md:hidden inline-flex items-center justify-center gap-1 text-white font-medium text-base underline underline-offset-4 hover:text-white/80"
+            >
+              <span>使用指南</span>
+            </Link>
+            <Link
+              to={USER_GUIDE_PATH}
+              className="hidden md:inline-flex items-center justify-center gap-2 min-h-[3.5rem] md:w-auto md:min-w-[11rem] px-8 py-3.5 rounded-xl border-2 border-slate-200 bg-white/90 backdrop-blur-sm text-slate-900 font-bold text-lg hover:shadow-xl md:hover:scale-105 transition-all md:whitespace-nowrap box-border"
             >
               <i className="ri-book-open-line"></i>
               <span>使用指南</span>
@@ -635,7 +663,7 @@ export default function Home() {
                   <>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">
-                        {loginRole === 'student' ? '学号' : '工号'}
+                        {loginRole === 'student' ? '学号 / 邮箱 / 手机号' : '工号 / 邮箱 / 手机号'}
                       </label>
                       <input
                         type="text"
@@ -645,7 +673,11 @@ export default function Home() {
                         value={loginUsername}
                         onChange={(ev) => setLoginUsername(ev.target.value)}
                         className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all text-sm"
-                        placeholder={loginRole === 'student' ? '请输入学号' : '请输入工号'}
+                        placeholder={
+                          loginRole === 'student'
+                            ? '请输入学号、邮箱或手机号'
+                            : '请输入工号、邮箱或手机号'
+                        }
                       />
                     </div>
                     <div>
@@ -678,7 +710,7 @@ export default function Home() {
                       <button
                         type="button"
                         onClick={() => {
-                          setResetEmail('');
+                          setResetAccount('');
                           setResetCode('');
                           setResetNewPassword('');
                           setLoginCardMode('reset');
@@ -698,15 +730,18 @@ export default function Home() {
                   </>
                 ) : (
                   <>
+                    <p className="text-xs text-gray-500 -mt-1 mb-1">
+                      请使用已绑定的邮箱或手机号收取验证码并重置密码
+                    </p>
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">邮箱</label>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">邮箱或手机号</label>
                       <input
-                        type="email"
+                        type="text"
                         autoComplete="off"
-                        value={resetEmail}
-                        onChange={(ev) => setResetEmail(ev.target.value)}
+                        value={resetAccount}
+                        onChange={(ev) => setResetAccount(ev.target.value)}
                         className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all text-sm"
-                        placeholder="请输入邮箱"
+                        placeholder="请输入绑定的邮箱或手机号"
                       />
                     </div>
                     <div>
@@ -726,14 +761,21 @@ export default function Home() {
                           onClick={async () => {
                             setResetSending(true);
                             try {
+                              const account = resetAccount.trim();
+                              const digits = account.replace(/\D/g, '');
+                              const isPhone = /^1\d{10}$/.test(digits);
+                              const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(account.toLowerCase());
+                              if (!isPhone && !isEmail) {
+                                throw new Error('请输入正确的邮箱或手机号');
+                              }
                               const r = await fetch('/api/auth/password-reset/code', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ email: resetEmail }),
+                                body: JSON.stringify(isPhone ? { phone: digits } : { email: account.toLowerCase() }),
                               });
                               const j = await r.json().catch(() => ({ code: -1, message: '无效响应' }));
                               if (!r.ok || j.code !== 0) throw new Error(j.message || `HTTP ${r.status}`);
-                              message.success('验证码已发送');
+                              message.success(isPhone ? '验证码已发送至手机' : '验证码已发送至邮箱');
                             } catch (e: any) {
                               message.error(e?.message || '发送失败');
                             } finally {
@@ -769,10 +811,21 @@ export default function Home() {
                             message.warning(PASSWORD_POLICY_HINT);
                             return;
                           }
+                          const account = resetAccount.trim();
+                          const digits = account.replace(/\D/g, '');
+                          const isPhone = /^1\d{10}$/.test(digits);
+                          const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(account.toLowerCase());
+                          if (!isPhone && !isEmail) {
+                            throw new Error('请输入正确的邮箱或手机号');
+                          }
                           const r = await fetch('/api/auth/password-reset/confirm', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ email: resetEmail, code: resetCode, newPassword: resetNewPassword }),
+                            body: JSON.stringify({
+                              ...(isPhone ? { phone: digits } : { email: account.toLowerCase() }),
+                              code: resetCode,
+                              newPassword: resetNewPassword,
+                            }),
                           });
                           const j = await r.json().catch(() => ({ code: -1, message: '无效响应' }));
                           if (!r.ok || j.code !== 0) throw new Error(j.message || `HTTP ${r.status}`);

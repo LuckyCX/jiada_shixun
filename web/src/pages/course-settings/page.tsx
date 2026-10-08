@@ -180,7 +180,7 @@ export default function CourseSettingsPage({ embedded = false, personalClass = n
           请先选择班级后再配置课程设置
         </div>
       ) : (
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {COURSE_SETTING_STAGES.map((stage, index) => {
             const setting = settingsByKey.get(stage.key) || emptySetting(stage.key);
             return (

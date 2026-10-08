@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { useEffect, useState } from 'react';
 import { Navigate } from 'react-router-dom';
-import { clearPortalToken } from '../lib/authApi';
+import { clearPortalToken, getPortalToken, jwtRequiresPasswordChange, notifyMustChangePasswordIfNeeded } from '../lib/authApi';
 import { fetchStudentPersonalEnrollments } from '../lib/studentPortalApi';
 
 type Props = {
@@ -17,7 +17,16 @@ export default function RequireStudentPersonalClass({ children }: Props) {
     fetchStudentPersonalEnrollments()
       .then((list) => {
         if (cancelled) return;
-        setGate(list.length > 0 ? 'ok' : 'denied');
+        if (list.length > 0) {
+          setGate('ok');
+          // 已进入学生首页后再提示改密；未入班被退回时不弹
+          const token = getPortalToken('student');
+          if (token && jwtRequiresPasswordChange(token)) {
+            notifyMustChangePasswordIfNeeded('student', token, true);
+          }
+          return;
+        }
+        setGate('denied');
       })
       .catch(() => {
         if (!cancelled) setGate('denied');

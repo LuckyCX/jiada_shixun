@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
-import { Drawer, Modal, notification, Tree, Upload, message as antdMessage, Input, Button } from 'antd';
+import { Drawer, Modal, notification, Tree, Upload, message as antdMessage, Button } from 'antd';
 import type { UploadFile } from 'antd';
 import { clearPortalToken, getPortalToken, parseJwtPayload } from '../../lib/authApi';
 import { useSearchParams, useNavigate } from 'react-router-dom';
@@ -54,11 +54,11 @@ import {
   fetchStudentPersonalEnrollments,
   getStudentProfile,
   updateStudentProfile,
-  sendStudentEmailCode,
   uploadStudentAvatar,
   type StudentPersonalEnrollment,
   type StudentProfile,
 } from '../../lib/studentPortalApi';
+import ProfileContactPanels from '../../components/ProfileContactPanels';
 import {
   fetchStudentMyTeam,
   fetchTeamSubmission,
@@ -341,6 +341,7 @@ export default function StudentCenterPage() {
 
   const [activeTab, setActiveTab] = useState<TabType>(getInitialTab());
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [knowledgeSubTab, setKnowledgeSubTab] = useState<'overview' | 'knowledge' | 'ability' | 'progress'>('overview');
   const [selectedModule, setSelectedModule] = useState<string>('ideation');
   const [selectedChapterId, setSelectedChapterId] = useState<string | null>(null);
@@ -379,12 +380,6 @@ export default function StudentCenterPage() {
   const [logoutModalOpen, setLogoutModalOpen] = useState(false);
   const [studentProfile, setStudentProfile] = useState<StudentProfile | null>(null);
   const [profileModalOpen, setProfileModalOpen] = useState(false);
-  const [profileSaving, setProfileSaving] = useState(false);
-  const [profileEmailDraft, setProfileEmailDraft] = useState('');
-  const [profileEmailCode, setProfileEmailCode] = useState('');
-  const [profileEmailSending, setProfileEmailSending] = useState(false);
-  const [profileOldPwd, setProfileOldPwd] = useState('');
-  const [profileNewPwd, setProfileNewPwd] = useState('');
   const [enrollments, setEnrollments] = useState<StudentPersonalEnrollment[]>([]);
   const [selectedClassId, setSelectedClassId] = useState<string>('');
   const [studentTodoTasks, setStudentTodoTasks] = useState<StudentTodoTask[]>([]);
@@ -429,7 +424,6 @@ export default function StudentCenterPage() {
     getStudentProfile()
       .then((p) => {
         setStudentProfile(p);
-        setProfileEmailDraft(p.email || '');
       })
       .catch(() => {
         /* 失败时下面仍用 JWT username 兜底 */
@@ -1092,6 +1086,7 @@ export default function StudentCenterPage() {
   };
 
   const changeActiveTab = (tab: TabType) => {
+    setMobileNavOpen(false);
     setActiveTab(tab);
     const params = new URLSearchParams(searchParams);
     params.set('tab', tab);
@@ -1762,6 +1757,7 @@ export default function StudentCenterPage() {
   };
 
   const handleModuleClick = (moduleKey: TabType) => {
+    setMobileNavOpen(false);
     const moduleId = TAB_TO_MODULE_ID[moduleKey];
     if (!moduleId) {
       changeActiveTab(moduleKey);
@@ -2046,9 +2042,21 @@ export default function StudentCenterPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-white flex">
-      {/* 左侧侧边栏：视口固定高度；主内容超长时由 body 滚动 */}
+      {mobileNavOpen ? (
+        <button
+          type="button"
+          className="md:hidden fixed inset-0 z-40 bg-black/40"
+          aria-label="关闭菜单"
+          onClick={() => setMobileNavOpen(false)}
+        />
+      ) : null}
+      {/* 左侧侧边栏：手机为抽屉；桌面仍可按原宽度停靠 */}
       <aside
-        className={`flex-shrink-0 self-start sticky top-0 z-30 h-screen max-h-screen bg-white border-r border-gray-100 shadow-sm flex flex-col transition-all duration-300 ${sidebarCollapsed ? 'w-16' : 'w-60'}`}
+        className={`flex-shrink-0 bg-white border-r border-gray-100 shadow-sm flex-col transition-all duration-300 ${
+          mobileNavOpen
+            ? 'fixed inset-y-0 left-0 z-50 flex w-72 max-w-[85vw]'
+            : 'hidden'
+        } md:sticky md:top-0 md:z-30 md:flex md:h-screen md:max-h-screen md:self-start ${sidebarCollapsed ? 'md:w-16' : 'md:w-60'}`}
       >
         <div className={`flex items-center gap-3 px-4 py-5 border-b border-gray-100 ${sidebarCollapsed ? 'justify-center' : ''}`}>
           {logoUrl ? (
@@ -2190,14 +2198,22 @@ export default function StudentCenterPage() {
       {/* 右侧主内容区 */}
       <div className="flex-1 min-w-0 flex flex-col">
         <header className="bg-white border-b border-gray-100 shadow-sm sticky top-0 z-20">
-          <div className="px-6 py-3 flex items-center justify-between">
-            <div className="flex items-center gap-2 text-sm">
-              <span className="text-gray-400">学生工作台</span>
-              <i className="ri-arrow-right-s-line text-gray-300"></i>
-              {activeTab.startsWith('module-') && (<><span className="text-gray-400">实训模块</span><i className="ri-arrow-right-s-line text-gray-300"></i></>)}
-              <span className="font-medium text-gray-700">{getCurrentLabel()}</span>
+          <div className="px-3 md:px-6 py-3 flex items-center justify-between gap-2 !flex-nowrap">
+            <div className="flex items-center gap-2 text-sm min-w-0 flex-1">
+              <button
+                type="button"
+                className="md:hidden w-9 h-9 flex items-center justify-center text-gray-700 hover:bg-gray-100 rounded-lg flex-shrink-0"
+                aria-label="打开菜单"
+                onClick={() => setMobileNavOpen(true)}
+              >
+                <i className="ri-menu-line text-xl" />
+              </button>
+              <span className="hidden sm:inline text-gray-400">学生工作台</span>
+              <i className="ri-arrow-right-s-line text-gray-300 hidden sm:inline"></i>
+              {activeTab.startsWith('module-') && (<><span className="hidden md:inline text-gray-400">实训模块</span><i className="ri-arrow-right-s-line text-gray-300 hidden md:inline"></i></>)}
+              <span className="font-medium text-gray-700 truncate">{getCurrentLabel()}</span>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 md:gap-3 flex-shrink-0 !flex-nowrap">
               <StudentClassSwitcher
                 enrollments={enrollments}
                 selectedClassId={selectedClassId}
@@ -2269,116 +2285,33 @@ export default function StudentCenterPage() {
               </div>
             </div>
 
-            <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-              <div className="text-sm font-semibold text-gray-900 mb-3">个性化班级</div>
-              <div className="space-y-2 max-h-40 overflow-y-auto">
-                {(enrollments || []).map((e) => (
-                  <div key={e.classId} className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2.5 min-w-0">
-                    <div className="text-sm text-gray-800 truncate">{e.className}</div>
-                    <div className="text-xs text-gray-500 truncate mt-0.5">教师：{e.teacherName || '-'}</div>
-                  </div>
-                ))}
-                {(!enrollments || enrollments.length === 0) && (
-                  <div className="text-sm text-gray-400 py-2">暂无加入的个性化班级</div>
-                )}
-              </div>
-            </div>
-
-            <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-              <div className="text-sm font-semibold text-gray-900 mb-3">邮箱</div>
-              <div className="space-y-3">
-                <Input value={profileEmailDraft} onChange={(e) => setProfileEmailDraft(e.target.value)} placeholder="绑定/修改邮箱" />
-                <div className="flex flex-col sm:flex-row gap-2">
-                  <Input
-                    className="min-w-0 flex-1"
-                    value={profileEmailCode}
-                    onChange={(e) => setProfileEmailCode(e.target.value)}
-                    placeholder="邮箱验证码"
-                  />
-                  <Button
-                    className="w-full sm:w-auto sm:flex-shrink-0"
-                    loading={profileEmailSending}
-                    onClick={async () => {
-                      setProfileEmailSending(true);
-                      try {
-                        await sendStudentEmailCode(profileEmailDraft);
-                        antdMessage.success('验证码已发送');
-                      } catch (e: any) {
-                        antdMessage.error(e?.message || '发送失败');
-                      } finally {
-                        setProfileEmailSending(false);
-                      }
-                    }}
-                  >
-                    获取验证码
-                  </Button>
-                </div>
-                <div className="flex justify-end">
-                  <Button
-                    type="primary"
-                    size="small"
-                    className="!bg-teal-500 !border-teal-500 hover:!bg-teal-600"
-                    loading={profileSaving}
-                    onClick={async () => {
-                      setProfileSaving(true);
-                      try {
-                        await updateStudentProfile({ email: profileEmailDraft, code: profileEmailCode });
-                        const p = await getStudentProfile();
-                        setStudentProfile(p);
-                        antdMessage.success('已保存');
-                      } catch (e: any) {
-                        antdMessage.error(e?.message || '保存失败');
-                      } finally {
-                        setProfileSaving(false);
-                      }
-                    }}
-                  >
-                    保存邮箱
-                  </Button>
-                </div>
-              </div>
-            </div>
-
-            <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-              <div className="text-sm font-semibold text-gray-900 mb-3">修改密码</div>
-              <div className="space-y-3">
-                <Input.Password value={profileOldPwd} onChange={(e) => setProfileOldPwd(e.target.value)} placeholder="旧密码" />
-                <Input.Password value={profileNewPwd} onChange={(e) => setProfileNewPwd(e.target.value)} placeholder="新密码（至少8位，含大小写与数字）" />
-                <div className="flex justify-end">
-                  <Button
-                    type="primary"
-                    size="small"
-                    className="!bg-teal-500 !border-teal-500 hover:!bg-teal-600"
-                    loading={profileSaving}
-                    onClick={async () => {
-                      setProfileSaving(true);
-                      try {
-                        const { validatePasswordStrength, PASSWORD_POLICY_HINT } = await import('../../lib/passwordPolicy');
-                        const strength = validatePasswordStrength(profileNewPwd);
-                        if (!strength.ok) {
-                          antdMessage.warning(PASSWORD_POLICY_HINT);
-                          return;
-                        }
-                        await updateStudentProfile({ oldPassword: profileOldPwd, newPassword: profileNewPwd });
-                        setProfileOldPwd('');
-                        setProfileNewPwd('');
-                        antdMessage.success('密码已更新');
-                      } catch (e: any) {
-                        antdMessage.error(e?.message || '保存失败');
-                      } finally {
-                        setProfileSaving(false);
-                      }
-                    }}
-                  >
-                    保存密码
-                  </Button>
-                </div>
-              </div>
-            </div>
+            <ProfileContactPanels
+              role="student"
+              email={studentProfile?.email || ''}
+              phone={studentProfile?.phone || ''}
+              classItems={(enrollments || []).map((e) => ({
+                id: e.classId,
+                title: e.className,
+                subtitle: `教师：${e.teacherName || '-'}`,
+              }))}
+              classEmptyText="暂无加入的个性化班级"
+              onSaveContact={async (payload) => {
+                if ('email' in payload) {
+                  await updateStudentProfile({ email: payload.email, code: payload.code });
+                } else {
+                  await updateStudentProfile({ phone: payload.phone, phoneCode: payload.phoneCode });
+                }
+                const p = await getStudentProfile();
+                setStudentProfile(p);
+              }}
+              onContactSaved={(next) => {
+                setStudentProfile((prev) => (prev ? { ...prev, email: next.email, phone: next.phone } : prev));
+              }}
+            />
           </div>
         </Drawer>
 
-        <main key={selectedClassId || 'student-no-class'} className="flex-1 p-6">
+        <main key={selectedClassId || 'student-no-class'} className="flex-1 p-4 md:p-6 min-w-0">
 
           {/* 进度看板 */}
           {activeTab === 'overview' && (
@@ -2387,7 +2320,46 @@ export default function StudentCenterPage() {
                 <div className="absolute inset-0 opacity-10">
                   <div className="absolute top-0 right-0 w-72 h-72 bg-white rounded-full blur-3xl transform translate-x-1/2 -translate-y-1/2"></div>
                 </div>
-                <div className="relative px-8 py-6 flex items-center gap-6">
+                {/* 手机端：标题与说明上下排列，进度指标单独两列，避免和桌面横排挤在一起 */}
+                <div className="relative px-4 py-5 md:hidden">
+                  <div className="flex items-center gap-3 !flex-nowrap">
+                    <div className="w-12 h-12 bg-white/20 backdrop-blur-md rounded-2xl flex items-center justify-center flex-shrink-0 border border-white/30">
+                      <i className="ri-rocket-line text-2xl text-white"></i>
+                    </div>
+                    <h1 className="flex-1 min-w-0 text-xl font-bold text-white leading-snug line-clamp-2" style={{ overflowWrap: 'normal' }}>
+                      {overviewHeroTitle}
+                    </h1>
+                  </div>
+                  <div className="mt-3 space-y-1.5 text-sm text-white/85">
+                    <p className="flex items-center gap-1.5 leading-5" style={{ overflowWrap: 'normal' }}>
+                      <i className="ri-team-line flex-shrink-0"></i>
+                      <span>
+                        {selectedEnrollment?.className ?? '未加入教学班级'}
+                        {enrollments.length > 1 ? ` · 已选 ${enrollments.length} 个班级` : ''}
+                      </span>
+                    </p>
+                    <p className="flex items-start gap-1.5 leading-5" style={{ overflowWrap: 'normal' }}>
+                      <i className="ri-map-pin-line mt-0.5 flex-shrink-0"></i>
+                      <span>当前阶段：{currentStageLabel}</span>
+                    </p>
+                  </div>
+                  <div className="mt-4 grid grid-cols-2 gap-3">
+                    <div className="bg-white/15 backdrop-blur-md rounded-2xl px-3 py-3 border border-white/20">
+                      <div className="text-2xl font-bold text-white leading-none">{overallProgressPercent}%</div>
+                      <div className="text-xs text-white/75 mt-1 mb-2">项目整体进度</div>
+                      <div className="h-1.5 bg-white/20 rounded-full overflow-hidden">
+                        <div className="h-full bg-white rounded-full" style={{ width: `${overallProgressPercent}%` }}></div>
+                      </div>
+                    </div>
+                    <div className="bg-white/15 backdrop-blur-md rounded-2xl px-3 py-3 border border-white/20">
+                      <div className="text-2xl font-bold text-white leading-none">
+                        {completedStagesCount}/{TRAINING_MODULE_ORDER.length}
+                      </div>
+                      <div className="text-xs text-white/75 mt-1">已完成阶段</div>
+                    </div>
+                  </div>
+                </div>
+                <div className="relative px-8 py-6 hidden md:flex items-center gap-6">
                   <div className="w-16 h-16 bg-white/20 backdrop-blur-md rounded-2xl flex items-center justify-center flex-shrink-0 border border-white/30">
                     <i className="ri-rocket-line text-3xl text-white"></i>
                   </div>
@@ -2423,14 +2395,63 @@ export default function StudentCenterPage() {
               </div>
 
               {/* 实训模块步骤条 */}
-              <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 overflow-hidden relative z-0">
-                <div className="flex items-center justify-between mb-5">
+              <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 md:p-6 overflow-hidden relative z-0">
+                <div className="flex flex-col gap-1 mb-4 md:mb-5 md:flex-row md:items-center md:justify-between">
                   <h3 className="text-base font-bold text-gray-900 flex items-center gap-2">
                     <i className="ri-layout-grid-line text-teal-600"></i>实训模块进度
                   </h3>
                   <span className="text-xs text-gray-400">{completedCount} 已完成 · {inProgressCount} 进行中</span>
                 </div>
-                <div className="flex items-start gap-0">
+                <p className="md:hidden text-xs text-gray-400 -mt-2 mb-3">点按阶段即可进入对应实训</p>
+                <div className="md:hidden flex flex-col gap-2">
+                  {moduleProgress.map((mod, index) => {
+                    const ui = getSidebarModuleUi(mod.moduleId);
+                    const isCompleted = ui.status === 'completed';
+                    const isCurrent = ui.status === 'in_progress';
+                    const tabMap: Record<string, TabType> = { team: 'module-team', ideation: 'module-ideation', market: 'module-market', product: 'module-product', business: 'module-business', simulation: 'module-simulation', plan: 'module-plan' };
+                    const icons = ['ri-team-line', 'ri-lightbulb-line', 'ri-search-line', 'ri-pencil-ruler-line', 'ri-pie-chart-line', 'ri-robot-line', 'ri-file-text-line'];
+                    const stepLabel =
+                      mod.moduleId === 'team'
+                        ? isCompleted
+                          ? '已完成'
+                          : '进行中'
+                        : isCompleted
+                          ? '已完成'
+                          : ui.locked
+                            ? '未解锁'
+                            : isCurrent
+                              ? `进行中 ${ui.displayPercent ?? 0}%`
+                              : '未开始';
+                    const barPercent = isCompleted ? 100 : ui.locked ? 0 : typeof ui.displayPercent === 'number' ? ui.displayPercent : 0;
+                    return (
+                      <button
+                        key={mod.moduleId}
+                        type="button"
+                        onClick={() => handleModuleClick(tabMap[mod.moduleId])}
+                        className={`w-full flex items-center gap-3 rounded-xl border px-3 py-3 text-left cursor-pointer ${ui.locked ? 'opacity-60' : ''} ${isCurrent ? 'border-teal-200 bg-teal-50' : isCompleted ? 'border-teal-100 bg-white' : 'border-gray-100 bg-gray-50/60'}`}
+                      >
+                        <span className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 ${isCompleted ? 'bg-teal-500 text-white' : isCurrent ? 'bg-white border-2 border-teal-500 text-teal-600' : 'bg-white border border-gray-200 text-gray-400'}`}>
+                          {isCompleted ? <i className="ri-check-line text-base"></i> : <i className={`${icons[index]} text-base`}></i>}
+                        </span>
+                        <span className="flex-1 min-w-0">
+                          <span className={`block text-sm font-semibold leading-5 ${isCurrent ? 'text-teal-800' : 'text-gray-800'}`} style={{ overflowWrap: 'normal' }}>
+                            {mod.moduleName}
+                          </span>
+                          <span className="mt-1.5 flex items-center gap-2">
+                            <span className="h-1 flex-1 rounded-full bg-gray-200 overflow-hidden">
+                              <span className={`block h-full rounded-full ${isCompleted || isCurrent ? 'bg-teal-500' : 'bg-gray-300'}`} style={{ width: `${barPercent}%` }}></span>
+                            </span>
+                            <span className={`text-xs flex-shrink-0 !whitespace-nowrap ${isCompleted || isCurrent ? 'text-teal-600 font-medium' : 'text-gray-400'}`}>
+                              {stepLabel}
+                            </span>
+                          </span>
+                        </span>
+                        <i className="ri-arrow-right-s-line text-lg text-gray-300 flex-shrink-0"></i>
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="hidden md:flex items-start gap-0">
                   {moduleProgress.map((mod, index) => {
                     const ui = getSidebarModuleUi(mod.moduleId);
                     const isCompleted = ui.status === 'completed';
@@ -2479,16 +2500,16 @@ export default function StudentCenterPage() {
               </div>
 
               {/* 待办任务 */}
-              <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 relative z-10">
-                <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
+              <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 md:p-6 relative z-10">
+                <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                   <h3 className="text-base font-bold text-gray-900 flex items-center gap-2">
                     <i className="ri-todo-line text-teal-600"></i>通知•待办任务
                   </h3>
-                  <div className="flex items-center gap-1 bg-gray-100 rounded-xl p-1">
+                  <div className="grid grid-cols-2 gap-1 bg-gray-100 rounded-xl p-1 md:flex md:items-center">
                     <button
                       type="button"
                       onClick={() => setOverviewPanelTab('notifications')}
-                      className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all whitespace-nowrap cursor-pointer ${
+                      className={`px-3 py-2 md:py-1.5 text-xs font-medium rounded-lg transition-all cursor-pointer !whitespace-nowrap ${
                         overviewPanelTab === 'notifications'
                           ? 'bg-white text-teal-600 shadow-sm'
                           : 'text-gray-500 hover:text-gray-700'
@@ -2499,7 +2520,7 @@ export default function StudentCenterPage() {
                     <button
                       type="button"
                       onClick={() => setOverviewPanelTab('tasks')}
-                      className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all whitespace-nowrap cursor-pointer ${
+                      className={`px-3 py-2 md:py-1.5 text-xs font-medium rounded-lg transition-all cursor-pointer !whitespace-nowrap ${
                         overviewPanelTab === 'tasks'
                           ? 'bg-white text-teal-600 shadow-sm'
                           : 'text-gray-500 hover:text-gray-700'
@@ -2524,7 +2545,7 @@ export default function StudentCenterPage() {
                         {overviewPagedNotifications.map((notice) => (
                           <div
                             key={notice.id}
-                            className={`flex items-start gap-3 p-3.5 rounded-xl border transition-all ${
+                            className={`flex flex-wrap items-start gap-3 p-3.5 rounded-xl border transition-all md:flex-nowrap ${
                               notice.isRead ? 'border-gray-100 bg-gray-50/50' : 'border-teal-200 bg-teal-50/50'
                             }`}
                           >
@@ -2544,7 +2565,7 @@ export default function StudentCenterPage() {
                               <p className="text-xs text-gray-500 line-clamp-2">{notice.content}</p>
                               <div className="text-xs text-gray-400 mt-1">{notice.timestamp}</div>
                             </div>
-                            <div className="flex items-center gap-2 flex-shrink-0 relative z-10">
+                            <div className="flex items-center gap-2 relative z-10 basis-full md:basis-auto w-full md:w-auto md:flex-shrink-0">
                               {!notice.isRead && (
                                 <button
                                   type="button"
@@ -2552,7 +2573,7 @@ export default function StudentCenterPage() {
                                     e.stopPropagation();
                                     markAsRead(notice.id);
                                   }}
-                                  className="px-2.5 py-1.5 bg-white border border-teal-200 text-teal-700 text-xs rounded-lg hover:bg-teal-50 cursor-pointer whitespace-nowrap"
+                                  className="flex-1 md:flex-none px-2.5 py-2 md:py-1.5 bg-white border border-teal-200 text-teal-700 text-xs rounded-lg hover:bg-teal-50 cursor-pointer !whitespace-nowrap"
                                 >
                                   已读
                                 </button>
@@ -2564,7 +2585,7 @@ export default function StudentCenterPage() {
                                     e.stopPropagation();
                                     handleOverviewNotificationView(notice);
                                   }}
-                                  className="px-2.5 py-1.5 bg-teal-500 text-white text-xs rounded-lg hover:bg-teal-600 cursor-pointer whitespace-nowrap"
+                                  className="flex-1 md:flex-none px-2.5 py-2 md:py-1.5 bg-teal-500 text-white text-xs rounded-lg hover:bg-teal-600 cursor-pointer !whitespace-nowrap"
                                 >
                                   查看
                                 </button>
@@ -2624,7 +2645,7 @@ export default function StudentCenterPage() {
                           return (
                             <div
                               key={task.id}
-                              className={`flex items-center gap-3 p-3.5 rounded-xl border transition-all ${actionDisabled ? 'opacity-80' : 'hover:shadow-sm'} ${isUrgent ? 'border-red-200 bg-red-50/40' : 'border-gray-100 bg-gray-50/50 hover:border-teal-200'}`}
+                              className={`flex flex-wrap items-center gap-3 p-3.5 rounded-xl border transition-all md:flex-nowrap ${actionDisabled ? 'opacity-80' : 'hover:shadow-sm'} ${isUrgent ? 'border-red-200 bg-red-50/40' : 'border-gray-100 bg-gray-50/50 hover:border-teal-200'}`}
                             >
                               <div
                                 className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${isUrgent ? 'bg-gradient-to-br from-red-500 to-orange-500' : 'bg-gradient-to-br from-orange-400 to-orange-500'}`}
@@ -2681,7 +2702,7 @@ export default function StudentCenterPage() {
                                     : undefined)
                                 }
                                 onClick={() => goTodo()}
-                                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all whitespace-nowrap flex-shrink-0 ${
+                                className={`basis-full md:basis-auto w-full md:w-auto px-3 py-2 md:py-1.5 rounded-lg text-xs font-medium transition-all !whitespace-nowrap md:flex-shrink-0 ${
                                   actionDisabled
                                     ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
                                     : isUrgent
@@ -2711,13 +2732,13 @@ export default function StudentCenterPage() {
               </div>
 
               {/* 我的团队 */}
-              <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+              <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 md:p-6">
                 <h3 className="text-base font-bold text-gray-900 mb-4 flex items-center gap-2">
                   <i className="ri-team-line text-teal-600"></i>我的团队
                 </h3>
                 {overviewMyTeam ? (
-                  <div className="bg-gradient-to-br from-teal-500 to-cyan-600 rounded-xl p-5 text-white">
-                    <div className="flex items-center justify-between flex-wrap gap-3">
+                  <div className="bg-gradient-to-br from-teal-500 to-cyan-600 rounded-xl p-4 md:p-5 text-white">
+                    <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                       <div className="flex items-center gap-3 min-w-0">
                         <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center backdrop-blur-sm flex-shrink-0">
                           <i className="ri-team-line text-xl"></i>
@@ -2735,7 +2756,7 @@ export default function StudentCenterPage() {
                       <button
                         type="button"
                         onClick={() => handleModuleClick('module-team')}
-                        className="px-3 py-1.5 bg-white/20 hover:bg-white/30 text-white rounded-lg text-sm font-medium transition-all whitespace-nowrap cursor-pointer"
+                        className="w-full md:w-auto px-3 py-2 md:py-1.5 bg-white/20 hover:bg-white/30 text-white rounded-lg text-sm font-medium transition-all !whitespace-nowrap cursor-pointer text-center"
                       >
                         <i className="ri-arrow-right-line mr-1"></i>进入团队管理
                       </button>

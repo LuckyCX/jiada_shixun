@@ -15,10 +15,14 @@ async function getJwtSecret() {
 const MUST_CHANGE_PASSWORD_ALLOW = [
   { method: 'POST', path: '/api/auth/change-password' },
   { method: 'POST', path: '/api/auth/refresh' },
+  { method: 'POST', path: '/api/auth/bind-email-code' },
+  { method: 'POST', path: '/api/auth/bind-phone-code' },
   { method: 'POST', path: '/api/admin/me/password' },
   { method: 'PATCH', path: '/api/student/me' },
   { method: 'PATCH', path: '/api/teacher/me' },
   { method: 'GET', path: '/api/auth/me' },
+  // 入班校验：弱口令学生须先确认能进入学生中心，再强制改密
+  { method: 'GET', path: '/api/student/personal-class-enrollments' },
 ];
 
 function isMustChangePasswordAllowed(req) {

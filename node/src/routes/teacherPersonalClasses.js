@@ -39,6 +39,13 @@ function normalizeEmail(value) {
   return s;
 }
 
+/** 中国大陆手机号：仅保留 11 位 */
+function normalizePhone(value) {
+  const digits = String(value || '').replace(/\D/g, '');
+  if (/^1\d{10}$/.test(digits)) return digits;
+  return '';
+}
+
 function extFromMime(mime) {
   const m = String(mime || '').toLowerCase();
   if (m === 'image/png') return '.png';
@@ -107,6 +114,33 @@ async function verifyBindEmailCode(pool, tid, email, code) {
   await pool.query(`UPDATE email_verification_codes SET used_at = now() WHERE id = $1`, [row.id]);
 }
 
+/** 校验手机绑定验证码（与 /api/auth/bind-phone-code 写入的 purpose 一致） */
+async function verifyBindPhoneCode(pool, tid, phone, code) {
+  const safeCode = String(code || '').trim();
+  if (!safeCode) throw new Error('请输入手机验证码');
+  const { rows } = await pool.query(
+    `SELECT id, code_hash, try_count
+     FROM email_verification_codes
+     WHERE role = 'teacher' AND purpose = 'bind_phone'
+       AND user_id = $1 AND phone = $2
+       AND used_at IS NULL
+       AND expires_at > now()
+     ORDER BY id DESC
+     LIMIT 1`,
+    [tid, phone]
+  );
+  if (!rows.length) throw new Error('验证码无效或已过期');
+  const row = rows[0];
+  const tryCount = Number(row.try_count || 0);
+  if (tryCount >= 5) throw new Error('验证码错误次数过多，请重新获取');
+  const ok = await bcrypt.compare(safeCode, row.code_hash);
+  if (!ok) {
+    await pool.query(`UPDATE email_verification_codes SET try_count = try_count + 1 WHERE id = $1`, [row.id]);
+    throw new Error('验证码不正确');
+  }
+  await pool.query(`UPDATE email_verification_codes SET used_at = now() WHERE id = $1`, [row.id]);
+}
+
 /**
  * 教师档案：院系与 admin 用户管理一致，users.department 存学院 colleges.id 的字符串。
  */
@@ -116,7 +150,7 @@ router.get('/teacher/me', requireAuth(), requireTeacher(), async (req, res) => {
     if (!tid) return bad(req, res, 400, 40001, '无效用户');
 
     const { rows } = await getPool().query(
-      `SELECT u.id, u.username, u.real_name AS "realName", u.email, u.department, u.major_id, u.avatar_url AS "avatarUrl",
+      `SELECT u.id, u.username, u.real_name AS "realName", u.email, u.phone, u.department, u.major_id, u.avatar_url AS "avatarUrl",
               col.name AS "collegeName",
               mj.name AS "majorName"
        FROM users u
@@ -137,6 +171,7 @@ router.get('/teacher/me', requireAuth(), requireTeacher(), async (req, res) => {
       username: r.username || '',
       realName: r.realName || '',
       email: r.email || '',
+      phone: r.phone || '',
       avatarUrl: r.avatarUrl || '',
       departmentCollegeId: r.department != null ? String(r.department).trim() : '',
       collegeName: r.collegeName || '',
@@ -169,6 +204,9 @@ router.patch('/teacher/me', requireAuth(), requireTeacher(), async (req, res) =>
     if (!tid) return bad(req, res, 400, 40001, '无效用户');
     const emailRaw = req.body?.email;
     const emailCode = req.body?.code ?? req.body?.emailCode;
+    const phoneRaw = req.body?.phone;
+    const phoneCode = req.body?.phoneCode;
+    // 主动改密请走 /api/auth/change-password（需邮箱/手机验证码）；此处仍兼容旧客户端仅旧密码改密
     const oldPassword = String(req.body?.oldPassword || '');
     const newPassword = String(req.body?.newPassword || '');
 
@@ -181,11 +219,31 @@ router.patch('/teacher/me', requireAuth(), requireTeacher(), async (req, res) =>
     if (emailRaw !== undefined) {
       const normalized = normalizeEmail(emailRaw);
       if (!normalized) return bad(req, res, 400, 40002, '邮箱格式错误');
+      const { rows: taken } = await getPool().query(
+        `SELECT id FROM users WHERE lower(COALESCE(email, '')) = $1 AND id <> $2 LIMIT 1`,
+        [normalized, tid]
+      );
+      if (taken.length) return bad(req, res, 400, 40009, '该邮箱已被其他账号绑定');
       await verifyBindEmailCode(getPool(), tid, normalized, emailCode);
       sets.push(`email = $${i++}`);
       params.push(normalized);
       newEmail = normalized;
       emailChanged = true;
+    }
+
+    let phoneChanged = false;
+    if (phoneRaw !== undefined) {
+      const normalized = normalizePhone(phoneRaw);
+      if (!normalized) return bad(req, res, 400, 40002, '手机号格式错误');
+      const { rows: taken } = await getPool().query(
+        `SELECT id FROM users WHERE phone = $1 AND id <> $2 LIMIT 1`,
+        [normalized, tid]
+      );
+      if (taken.length) return bad(req, res, 400, 40009, '该手机号已被其他账号绑定');
+      await verifyBindPhoneCode(getPool(), tid, normalized, phoneCode);
+      sets.push(`phone = $${i++}`);
+      params.push(normalized);
+      phoneChanged = true;
     }
 
     if (newPassword || oldPassword) {
@@ -212,7 +270,7 @@ router.patch('/teacher/me', requireAuth(), requireTeacher(), async (req, res) =>
       });
     }
 
-    const out = { saved: true };
+    const out = { saved: true, emailChanged, phoneChanged };
     if (newPassword || oldPassword) {
       const { rows: urows } = await getPool().query(
         `SELECT id, username, role FROM users WHERE id = $1 AND role = 'teacher'`,

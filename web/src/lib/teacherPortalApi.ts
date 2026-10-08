@@ -9,6 +9,7 @@ export type TeacherProfile = {
   username: string;
   realName: string;
   email: string;
+  phone: string;
   avatarUrl: string;
   departmentCollegeId: string;
   collegeName: string;
@@ -18,7 +19,14 @@ export async function getTeacherProfile(): Promise<TeacherProfile> {
   return teacherFetch('/api/teacher/me') as Promise<TeacherProfile>;
 }
 
-export async function updateTeacherProfile(body: { email?: string; oldPassword?: string; newPassword?: string }) {
+export async function updateTeacherProfile(body: {
+  email?: string;
+  code?: string;
+  phone?: string;
+  phoneCode?: string;
+  oldPassword?: string;
+  newPassword?: string;
+}) {
   const data = (await teacherFetch('/api/teacher/me', {
     method: 'PATCH',
     body: JSON.stringify(body),
