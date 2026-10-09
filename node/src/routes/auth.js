@@ -134,10 +134,14 @@ function genVerifyCode() {
   return String(n).padStart(6, '0');
 }
 
-/** 按学号/工号/用户名/邮箱/手机解析账号（多匹配时取第一条，登录仍靠密码校验） */
-async function findUserByLoginAccount(accountRaw) {
+/**
+ * 按学号/工号/用户名/邮箱/手机解析账号候选列表。
+ * 历史数据可能出现同号多行（username / student_no 交叉命中），
+ * 须优先精确用户名，并在登录时对候选逐一校验密码，避免「重置了 A、登录命中 B」。
+ */
+async function findUsersByLoginAccount(accountRaw) {
   const account = String(accountRaw || '').trim();
-  if (!account) return null;
+  if (!account) return [];
   const email = normalizeEmail(account);
   const phone = normalizePhone(account);
   const { rows } = await query(
@@ -148,13 +152,14 @@ async function findUserByLoginAccount(accountRaw) {
         OR employee_no = $1
         OR ($2 <> '' AND lower(COALESCE(email, '')) = $2)
         OR ($3 <> '' AND phone = $3)
-     ORDER BY id ASC
-     LIMIT 2`,
+     ORDER BY
+       CASE WHEN username = $1 THEN 0 ELSE 1 END,
+       CASE WHEN status = 'active' THEN 0 ELSE 1 END,
+       id ASC
+     LIMIT 20`,
     [account, email, phone]
   );
-  if (!rows.length) return null;
-  // 多条命中仍允许尝试密码；若密码只对其中一个正确则后续 compare 失败即 401
-  return rows[0];
+  return rows;
 }
 
 async function assertCodeCooldownOk(role, purpose, userId, { email = null, phone = null } = {}) {
@@ -214,19 +219,30 @@ router.post('/login', loginRateLimit, async (req, res) => {
     if (!username || !password) {
       return res.status(400).json({ code: 40001, message: '缺少用户名或密码', data: null, traceId: req.traceId });
     }
-    const u = await findUserByLoginAccount(username);
-    // 账号不存在与密码错误统一文案，避免枚举；停用单独提示
+    const candidates = await findUsersByLoginAccount(username);
+    // 账号不存在与密码错误统一文案，避免枚举；全部命中均停用时单独提示
+    if (!candidates.length) {
+      return res.status(401).json({ code: 40103, message: '用户名或密码不正确', data: null, traceId: req.traceId });
+    }
+    const activeCandidates = candidates.filter((c) => c.status === 'active');
+    if (!activeCandidates.length) {
+      return res.status(403).json({ code: 40301, message: '该账号已停用', data: null, traceId: req.traceId });
+    }
+    // 多候选时逐一比对密码，命中即用该行（修复重置/挪班后登录打到旧行的问题）
+    let u = null;
+    for (const c of activeCandidates) {
+      if (!c.password_hash) continue;
+      const passOk = await bcrypt.compare(password, c.password_hash);
+      if (passOk) {
+        u = c;
+        break;
+      }
+    }
     if (!u) {
       return res.status(401).json({ code: 40103, message: '用户名或密码不正确', data: null, traceId: req.traceId });
     }
-    if (u.status !== 'active') {
-      return res.status(403).json({ code: 40301, message: '该账号已停用', data: null, traceId: req.traceId });
-    }
-    const ok = await bcrypt.compare(password, u.password_hash);
-    if (!ok) {
-      return res.status(401).json({ code: 40103, message: '用户名或密码不正确', data: null, traceId: req.traceId });
-    }
     // 仅账号+密码登录：用本次明文密码做强度检测（不得从 hash 反推）
+    // 旧 6 位等弱口令允许登录，但 mustChangePassword=true，进系统后强制改密
     const strength = validatePasswordStrength(password);
     const mustChangePassword = !strength.ok;
     const user = { id: u.id, username: u.username, role: u.role };

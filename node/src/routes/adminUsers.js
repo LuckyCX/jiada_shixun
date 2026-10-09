@@ -28,21 +28,30 @@ function fmtLoginAt(d) {
 }
 
 function mapUserRow(r) {
-  // department 仅在能 JOIN 到真实学院时采用；否则回退行政班学院（避免脏 id 如 "1" 导致专业列表为空）
-  const department =
-    r.user_college_id != null
-      ? String(r.user_college_id)
-      : r.class_college_id != null
-        ? String(r.class_college_id)
+  // 学生有行政班时，以当前班的学院/专业为准（挪班后 users 上旧字段可能未同步）
+  const hasAdminClass = r.class_id != null || r.class_college_id != null;
+  const department = hasAdminClass
+    ? r.class_college_id != null
+      ? String(r.class_college_id)
+      : r.user_college_id != null
+        ? String(r.user_college_id)
         : r.department != null && String(r.department).trim() !== ''
           ? String(r.department).trim()
-          : '';
-  const majorId =
-    r.major_id != null
-      ? String(r.major_id)
-      : r.class_major_id != null
-        ? String(r.class_major_id)
+          : ''
+    : r.user_college_id != null
+      ? String(r.user_college_id)
+      : r.department != null && String(r.department).trim() !== ''
+        ? String(r.department).trim()
         : '';
+  const majorId = hasAdminClass
+    ? r.class_major_id != null
+      ? String(r.class_major_id)
+      : r.major_id != null
+        ? String(r.major_id)
+        : ''
+    : r.major_id != null
+      ? String(r.major_id)
+      : '';
   return {
     id: String(r.id),
     username: r.username,
@@ -80,6 +89,52 @@ async function listStudentAdminClasses(poolOrClient, studentId) {
   }));
 }
 
+/** 与前端 initialPasswordFromIdNumber 一致：Jd + 学号后 6 位 */
+function initialPasswordFromIdNumber(idNumber) {
+  const s = String(idNumber || '').trim();
+  if (!s) return '';
+  return `Jd${s.slice(-6).padStart(6, '0')}`;
+}
+
+/**
+ * 挪班后重置为初始密码，避免沿用旧班未知口令导致无法登录
+ * @returns {Promise<string>} 明文初始密码（供提示）
+ */
+async function resetUserToInitialPassword(poolOrClient, userId, idNumber) {
+  const pwd = initialPasswordFromIdNumber(idNumber);
+  if (!pwd) throw new Error('无法生成初始密码');
+  const strength = validatePasswordStrength(pwd);
+  if (!strength.ok) throw new Error(strength.message);
+  const password_hash = await bcrypt.hash(pwd, 10);
+  await poolOrClient.query(`UPDATE users SET password_hash = $1, updated_at = now() WHERE id = $2`, [
+    password_hash,
+    userId,
+  ]);
+  return pwd;
+}
+
+/**
+ * 将学生 users.department / major_id 同步为目标行政班的学院、专业
+ * （department 存 colleges.id 字符串，与新建学生一致）
+ */
+async function syncStudentAffiliationToClass(poolOrClient, userId, targetClassId) {
+  const { rows } = await poolOrClient.query(
+    `SELECT college_id, major_id FROM classes WHERE id = $1`,
+    [targetClassId]
+  );
+  if (!rows.length) return;
+  const collegeId = rows[0].college_id;
+  const majorId = rows[0].major_id;
+  await poolOrClient.query(
+    `UPDATE users
+     SET department = COALESCE($1::text, department),
+         major_id = COALESCE($2::bigint, major_id),
+         updated_at = now()
+     WHERE id = $3 AND role = 'student'`,
+    [collegeId != null ? String(collegeId) : null, majorId != null ? Number(majorId) : null, userId]
+  );
+}
+
 /**
  * 将已有学生挂到目标行政班。
  * @returns {{ ok: true, action: 'already'|'linked'|'moved'|'skipped' } | { ok: false, conflict: object } | { ok: false, error: string }}
@@ -94,7 +149,11 @@ async function attachExistingStudentToClass(poolOrClient, {
 }) {
   const memberships = await listStudentAdminClasses(poolOrClient, userId);
   const inTarget = memberships.some((m) => m.classId === String(targetClassId));
-  if (inTarget) return { ok: true, action: 'already' };
+  if (inTarget) {
+    // 已在目标班：仍同步学院/专业，修复历史「只改班不改归属」脏数据
+    await syncStudentAffiliationToClass(poolOrClient, userId, targetClassId);
+    return { ok: true, action: 'already' };
+  }
 
   const others = memberships.filter((m) => m.classId !== String(targetClassId));
   if (!others.length) {
@@ -103,6 +162,7 @@ async function attachExistingStudentToClass(poolOrClient, {
        ON CONFLICT (class_id, student_id) DO NOTHING`,
       [targetClassId, userId]
     );
+    await syncStudentAffiliationToClass(poolOrClient, userId, targetClassId);
     return { ok: true, action: 'linked' };
   }
 
@@ -131,6 +191,7 @@ async function attachExistingStudentToClass(poolOrClient, {
        ON CONFLICT (class_id, student_id) DO NOTHING`,
       [targetClassId, userId]
     );
+    await syncStudentAffiliationToClass(poolOrClient, userId, targetClassId);
     return { ok: true, action: 'moved' };
   }
   return { ok: false, error: '无效的 otherClassPolicy' };
@@ -218,8 +279,9 @@ router.get('/admin/users', requireAuth(), requireAdmin(), async (req, res) => {
       `SELECT u.id, u.username, u.real_name, u.email, u.role, u.status, u.student_no, u.employee_no, u.department,
               COALESCE(u.avatar_url, '') AS avatar_url,
               u.major_id, u.last_login_at, u.created_at,
-              COALESCE(col_u.name, col_cls.name) AS college_name,
-              COALESCE(mj.name, mj_cls.name) AS major_name,
+              -- 有行政班时优先展示班所属学院/专业（与挪班后真实归属一致）
+              COALESCE(col_cls.name, col_u.name) AS college_name,
+              COALESCE(mj_cls.name, mj.name) AS major_name,
               col_u.id AS user_college_id,
               cls.class_id, cls.class_name, cls.college_id AS class_college_id, cls.major_id AS class_major_id
        FROM users u
@@ -368,22 +430,41 @@ router.post('/admin/users', requireAuth(), requireAdmin(), async (req, res) => {
         if (attach.action === 'skipped') {
           return bad(req, res, 400, 40016, '已按选择跳过该学号，未加入目标班级');
         }
-        const memberships = await listStudentAdminClasses(pool, exist.id);
-        const primary = memberships[0];
-        return ok(
-          req,
-          res,
-          mapUserRow({
-            ...exist,
-            class_id: primary ? Number(primary.classId) : null,
-            class_name: primary?.className || null,
-          }),
+        let tip =
           attach.action === 'moved'
             ? '已从原行政班挪入目标班级'
             : attach.action === 'already'
               ? '该生已在目标班级'
-              : '已将已有账号加入目标班级'
+              : '已将已有账号加入目标班级';
+        // 从旧班挪入：重置为 Jd+学号后6位，避免旧密码未知无法登录
+        if (attach.action === 'moved') {
+          const newPwd = await resetUserToInitialPassword(pool, exist.id, id);
+          tip = `${tip}；登录密码已重置为 ${newPwd}（首次登录后将提示修改）`;
+        }
+        if (attach.action === 'already') {
+          tip = '该生已在目标班级；已同步学院/专业归属为当前班级';
+        } else if (attach.action === 'linked' || attach.action === 'moved') {
+          tip = `${tip}；学院/专业已同步为当前班级归属`;
+        }
+        // 重新读取用户+当前班，保证返回的学院专业正确
+        const { rows: freshRows } = await pool.query(
+          `SELECT u.id, u.username, u.real_name, u.email, u.role, u.status, u.student_no, u.employee_no,
+                  u.department, u.major_id, u.last_login_at, u.created_at,
+                  COALESCE(u.avatar_url, '') AS avatar_url,
+                  c.id AS class_id, c.name AS class_name,
+                  c.college_id AS class_college_id, c.major_id AS class_major_id,
+                  col.name AS college_name, mj.name AS major_name,
+                  col.id AS user_college_id
+           FROM users u
+           LEFT JOIN class_students cs ON cs.student_id = u.id AND cs.class_id = $2
+           LEFT JOIN classes c ON c.id = cs.class_id
+           LEFT JOIN colleges col ON col.id = c.college_id
+           LEFT JOIN majors mj ON mj.id = c.major_id
+           WHERE u.id = $1`,
+          [exist.id, classIdNum]
         );
+        const fresh = freshRows[0] || exist;
+        return ok(req, res, mapUserRow(fresh), tip);
       }
       return bad(req, res, 409, 40901, '学号/工号已存在');
     }
@@ -640,10 +721,26 @@ router.patch('/admin/users/:id/password', requireAuth(), requireAdmin(), async (
     const strength = validatePasswordStrength(password);
     if (!strength.ok) return bad(req, res, 400, 40020, strength.message);
 
+    const pool = getPool();
+    const { rows: urows } = await pool.query(
+      `SELECT id, username, student_no, employee_no FROM users WHERE id = $1`,
+      [id]
+    );
+    if (!urows.length) return bad(req, res, 404, 40401, '用户不存在');
+    const u = urows[0];
     const password_hash = await bcrypt.hash(password, 10);
-    const { rowCount } = await getPool().query(`UPDATE users SET password_hash = $1 WHERE id = $2`, [password_hash, id]);
+    // 同步更新「同用户名/同学号/同工号」的其它行，避免历史脏数据导致重置成功却登不进
+    const { rowCount } = await pool.query(
+      `UPDATE users
+       SET password_hash = $1, updated_at = now()
+       WHERE id = $2
+          OR (username = $3 AND username <> '')
+          OR ($4::text IS NOT NULL AND $4 <> '' AND student_no = $4)
+          OR ($5::text IS NOT NULL AND $5 <> '' AND employee_no = $5)`,
+      [password_hash, id, u.username, u.student_no, u.employee_no]
+    );
     if (!rowCount) return bad(req, res, 404, 40401, '用户不存在');
-    return ok(req, res, { ok: true });
+    return ok(req, res, { ok: true, updated: rowCount });
   } catch (e) {
     logError(`PATCH /api/admin/users/:id/password traceId=${req.traceId}`, e);
     return bad(req, res, 500, 50000, e.message);
@@ -1011,7 +1108,18 @@ router.post('/admin/users/batch', requireAuth(), requireAdmin(), async (req, res
               continue;
             }
             if (attach.action === 'skipped') skipped++;
-            else success++;
+            else {
+              // 批量挪班：同步重置初始密码，与单条入班行为一致
+              if (attach.action === 'moved') {
+                try {
+                  await resetUserToInitialPassword(getPool(), exist.id, idNumber);
+                } catch (e) {
+                  errors.push({ row: rowNo, reason: e.message || '挪班成功但重置密码失败' });
+                  continue;
+                }
+              }
+              success++;
+            }
             seenInBatch.add(idNumber);
             continue;
           }

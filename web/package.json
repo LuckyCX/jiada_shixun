@@ -29,6 +29,7 @@
     "react-pdf": "^10.4.1",
     "react-router-dom": "^7.6.3",
     "recharts": "3.2.0",
+    "remixicon": "^4.9.1",
     "tdesign-icons-react": "^0.6.4",
     "tdesign-react": "^1.16.9"
   },
