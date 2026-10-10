@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { COURSE_SETTING_STAGES, type CourseSettingStageKey } from '../../../../lib/courseSettingsApi';
-import { DemoArchive, DemoOverview, DemoPracticeCourse } from './DemoLearning';
+import { DemoOverview, DemoPracticeCourse } from './DemoLearning';
 import TeamFormationModule from './mirror/TeamFormationModule';
 import IdeationModule from './mirror/IdeationModule';
 import MarketResearchModule from './mirror/MarketResearchModule';
@@ -11,11 +11,7 @@ import BusinessPlanModule from './mirror/BusinessPlanModule';
 import TopicReview from './topicReview';
 import BusinessPlanReview from './planReview';
 import BusinessPlanDetailPage from './planReview/DetailPage';
-import {
-  loadDemoState,
-  type DemoStageKey,
-  type DemoState,
-} from './demoStore';
+import { type DemoStageKey } from './demoStore';
 
 export default function ClassDemoPage({
   classId,
@@ -37,7 +33,6 @@ export default function ClassDemoPage({
   const learningMenus: { key: DemoStageKey; label: string; icon: string }[] = [
     { key: 'overview', label: '进度看板', icon: 'ri-dashboard-line' },
     { key: 'knowledge', label: '实践课程', icon: 'ri-book-2-line' },
-    { key: 'archive', label: '学习档案', icon: 'ri-folder-line' },
   ];
   const showTopicReview = stages.some((item) => item.key === 'ideation');
   const showPlanReview = stages.some((item) => item.key === 'plan');
@@ -45,22 +40,22 @@ export default function ClassDemoPage({
     ...(showTopicReview ? [{ key: 'topicReview' as const, label: '选题审核', icon: 'ri-checkbox-circle-line' }] : []),
     ...(showPlanReview ? [{ key: 'planReview' as const, label: '商业计划书审核', icon: 'ri-file-edit-line' }] : []),
   ];
-  const activeKey = (learningMenus.some((item) => item.key === stage) || stages.some((item) => item.key === stage) || reviewMenus.some((item) => item.key === stage)
+  const activeKey = (stage !== 'archive' && (learningMenus.some((item) => item.key === stage) || stages.some((item) => item.key === stage) || reviewMenus.some((item) => item.key === stage))
     ? stage
     : 'overview') as DemoStageKey;
-  const [state, setState] = useState<DemoState>(() => loadDemoState(classId));
   const [planDetailId, setPlanDetailId] = useState<string | null>(null);
 
   useEffect(() => {
-    setState(loadDemoState(classId));
+    if (stage === 'archive') onStageChange('overview');
+  }, [stage, onStageChange]);
+
+  useEffect(() => {
     setPlanDetailId(null);
   }, [classId]);
 
   useEffect(() => {
     setPlanDetailId(null);
   }, [activeKey]);
-
-  const refresh = () => setState(loadDemoState(classId));
 
   return (
     <div className="flex gap-4 min-h-[70vh]">
@@ -104,11 +99,12 @@ export default function ClassDemoPage({
       </aside>
       <div className="flex-1 min-w-0 space-y-4">
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
-          {activeKey === 'overview' ? <DemoOverview className={className} state={state} enabledModuleKeys={enabledModuleKeys} /> : null}
-          {activeKey === 'knowledge' ? <DemoPracticeCourse classId={classId} enabledModuleKeys={enabledModuleKeys} onChange={refresh} /> : null}
-          {activeKey === 'archive' ? <DemoArchive classId={classId} /> : null}
+          {activeKey === 'overview' ? (
+            <DemoOverview classId={classId} className={className} enabledModuleKeys={enabledModuleKeys} onOpenStage={onStageChange} />
+          ) : null}
+          {activeKey === 'knowledge' ? <DemoPracticeCourse classId={classId} enabledModuleKeys={enabledModuleKeys} /> : null}
           {activeKey === 'team' ? (
-            <TeamFormationModule classId={classId} className={className} onTeamUpdated={refresh} />
+            <TeamFormationModule classId={classId} className={className} />
           ) : null}
           {activeKey === 'ideation' ? <IdeationModule classId={classId} isTeamLeader /> : null}
           {activeKey === 'market' ? (
