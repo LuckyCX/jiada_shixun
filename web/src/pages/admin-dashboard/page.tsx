@@ -15,6 +15,7 @@ import DictTypeManage from './components/dictionary/DictTypeManage';
 import AiTutorAdmin from './components/aiTutor/AiTutorAdmin';
 import DictItemManage from './components/dictionary/DictItemManage';
 import AdminUsersPanel from './components/userManagement/AdminUsersPanel';
+import ClassDemoFiles from './components/classDemoFiles';
 import { clearAdminToken, getPortalToken, redirectAdminSessionExpired } from '../../lib/authApi';
 
 type TabType =
@@ -28,7 +29,8 @@ type TabType =
   | 'system-config'
   | 'dictionary'
   | 'dictionary-items'
-  | 'ai-model';
+  | 'ai-model'
+  | 'class-demo-files';
 
 const TAB_WHITELIST: TabType[] = [
   'overview',
@@ -42,6 +44,7 @@ const TAB_WHITELIST: TabType[] = [
   'dictionary',
   'dictionary-items',
   'ai-model',
+  'class-demo-files',
 ];
 
 export default function AdminDashboard() {
@@ -163,6 +166,7 @@ export default function AdminDashboard() {
     { id: 'system-config' as TabType, label: '系统配置', icon: 'ri-settings-3-line' },
     { id: 'ai-model' as TabType, label: 'AI 模型', icon: 'ri-robot-2-line' },
     { id: 'operation-log' as TabType, label: '操作日志', icon: 'ri-history-line' },
+    { id: 'class-demo-files' as TabType, label: '演示记录', icon: 'ri-folder-upload-line' },
   ];
 
   const getBreadcrumb = () => {
@@ -366,6 +370,7 @@ export default function AdminDashboard() {
             )}
           {activeTab === 'course-resource' && <CourseResourceManagement />}
           {activeTab === 'operation-log' && <OperationLog />}
+          {activeTab === 'class-demo-files' && <ClassDemoFiles />}
           {activeTab === 'system-config' && <SystemConfig />}
           {activeTab === 'ai-model' && <AiTutorAdmin />}
           {activeTab === 'dictionary' && <DictTypeManage />}

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Modal, message } from 'antd';
 import DeadlineSettings from './components/DeadlineSettings';
 import CourseManagement from '../admin-dashboard/components/courseResource/CourseManagement';
@@ -46,6 +46,8 @@ function emptySetting(moduleKey: CourseSettingStageKey): CourseStageSetting {
 }
 
 export default function CourseSettingsPage({ embedded = false, personalClass = null }: CourseSettingsPageProps) {
+  const navigate = useNavigate();
+  const [, setSearchParams] = useSearchParams();
   const [selectedStageKey, setSelectedStageKey] = useState<CourseSettingStageKey | null>(null);
   const [activeTab, setActiveTab] = useState<DetailTab>('deadline');
   const [settings, setSettings] = useState<CourseStageSetting[]>([]);
@@ -294,14 +296,35 @@ export default function CourseSettingsPage({ embedded = false, personalClass = n
           <div className="flex flex-wrap items-center gap-x-1.5 gap-y-2">
             {draftActiveStages.map((stage, idx) => (
               <div key={stage.key} className="flex items-center gap-1.5">
-                <div className="inline-flex items-center gap-2 pl-1.5 pr-3 py-1.5 rounded-xl bg-teal-50/80 border border-teal-100">
+                <button
+                  type="button"
+                  title="进入教学演示"
+                  className="inline-flex items-center gap-2 pl-1.5 pr-3 py-1.5 rounded-xl bg-teal-50/80 border border-teal-100 cursor-pointer hover:border-teal-300"
+                  onClick={() => {
+                    if (!classId) return;
+                    if (embedded) {
+                      setSearchParams((prev) => {
+                        const next = new URLSearchParams(prev);
+                        next.set('tab', 'classDemo');
+                        next.set('classId', classId);
+                        next.set('stage', stage.key);
+                        next.delete('teamId');
+                        next.delete('submissionId');
+                        next.delete('sub');
+                        return next;
+                      });
+                      return;
+                    }
+                    navigate(`/teacher-dashboard?tab=classDemo&classId=${encodeURIComponent(classId)}&stage=${encodeURIComponent(stage.key)}`);
+                  }}
+                >
                   <div
                     className={`w-7 h-7 rounded-lg bg-gradient-to-br ${stage.color} text-white flex items-center justify-center flex-shrink-0`}
                   >
                     <i className={`${stage.icon} text-sm`} />
                   </div>
                   <span className="text-sm font-semibold text-teal-900 whitespace-nowrap">{stage.shortName}</span>
-                </div>
+                </button>
                 {idx < draftActiveStages.length - 1 ? (
                   <i className="ri-arrow-right-s-line text-teal-300 text-lg flex-shrink-0" aria-hidden />
                 ) : null}

@@ -22,6 +22,7 @@ import BusinessPlanDetailPage from './components/businessPlanReview/DetailPage';
 import ClassProjectOverview from '../class-project-overview/page';
 import TeacherGuide from '../teacher-guide/page';
 import CourseSettings from '../course-settings/page';
+import ClassDemoPage from './components/classDemo/ClassDemoPage';
 import EvaluationPanel from './components/EvaluationPanel';
 import { usePublicDictOptions } from '../admin-dashboard/components/classManagement/usePublicDictOptions';
 import {
@@ -54,7 +55,8 @@ type TabKey =
   | 'businessPlanReview'
   | 'classProjectOverview'
   | 'teacherGuide'
-  | 'courseSettings';
+  | 'courseSettings'
+  | 'classDemo';
 
 type SidebarGroup = {
   groupLabel?: string;
@@ -78,6 +80,7 @@ const SIDEBAR_GROUPS_BASE: SidebarGroup[] = [
     groupLabel: '课程建设',
     items: [
       { key: 'courseSettings', label: '课程设置', icon: 'ri-book-open-line', type: 'tab' },
+      { key: 'classDemo', label: '教学演示', icon: 'ri-presentation-line', type: 'tab' },
     ],
   },
   {
@@ -116,7 +119,7 @@ const TEACHER_TEAM_PARAM = 'teamId';
 const TEACHER_STAGE_PARAM = 'stage';
 const TEACHER_SUBMISSION_PARAM = 'submissionId';
 
-const CLASS_CONTEXT_TABS: TabKey[] = ['guidance', 'teamReview', 'studentManagement', 'teamWorkspace'];
+const CLASS_CONTEXT_TABS: TabKey[] = ['guidance', 'teamReview', 'studentManagement', 'teamWorkspace', 'classDemo'];
 
 function earliestClass(list: TeacherPersonalClassRow[]): TeacherPersonalClassRow | null {
   if (!list.length) return null;
@@ -137,6 +140,7 @@ const ALL_TAB_KEYS: TabKey[] = [
   'classProjectOverview',
   'teacherGuide',
   'courseSettings',
+  'classDemo',
 ];
 
 function isTabKey(v: string): v is TabKey {
@@ -196,11 +200,13 @@ export default function TeacherDashboard() {
         } else if (tab !== 'teamReview') {
           next.delete(TEACHER_SUB_PARAM);
         }
-        // 团队实训详情页：保留 teamId / stage；离开该页时清理
-        if (tab === 'teamWorkspace') {
-          if (opts && 'teamId' in opts) {
+        // 团队实训详情保留 teamId；教学演示只保留 stage。离开这两页时清理。
+        if (tab === 'teamWorkspace' || tab === 'classDemo') {
+          if (tab === 'teamWorkspace' && opts && 'teamId' in opts) {
             if (opts.teamId != null && opts.teamId !== '') next.set(TEACHER_TEAM_PARAM, String(opts.teamId));
             else next.delete(TEACHER_TEAM_PARAM);
+          } else if (tab !== 'teamWorkspace') {
+            next.delete(TEACHER_TEAM_PARAM);
           }
           if (opts && 'stage' in opts) {
             if (opts.stage) next.set(TEACHER_STAGE_PARAM, opts.stage);
@@ -635,6 +641,24 @@ export default function TeacherDashboard() {
 
       case 'courseSettings':
         return <CourseSettings embedded={true} personalClass={selectedPersonalClass} />;
+
+      case 'classDemo':
+        if (!selectedPersonalClass) {
+          return (
+            <div className="bg-white rounded-xl border border-dashed border-gray-200 py-16 text-center text-gray-500 text-sm">
+              请先在右上角选择班级
+            </div>
+          );
+        }
+        return (
+          <ClassDemoPage
+            classId={selectedPersonalClass.id}
+            className={selectedPersonalClass.name}
+            enabledModuleKeys={enabledModuleKeys}
+            stage={workspaceStage}
+            onStageChange={(nextStage) => setTeacherTab('classDemo', { classId: selectedPersonalClass.id, stage: nextStage })}
+          />
+        );
 
       case 'evaluation':
         return <EvaluationPanel />;
