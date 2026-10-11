@@ -939,9 +939,9 @@ export default function MarketResearchModule({
       .finally(() => setChallengeRecordsLoading(false));
   };
 
-  const personaLocked = teamReportUploaded || trainingEnded;
-  /** 环节已完成（已上传调研报告）或实训已结束：问卷创建/撤回等写操作一并禁用 */
-  const surveyLocked = personaLocked;
+  // 演示不因未配置环节或已交报告锁操作，只保留实训结束这一个开关
+  const personaLocked = trainingEnded;
+  const surveyLocked = trainingEnded;
 
   const planUploadMethods = useMemo(
     () => filterPlanUploadMethods(plan.methods),
@@ -993,10 +993,14 @@ export default function MarketResearchModule({
       message.warning('请至少选择一种调研方法');
       return;
     }
-    if (!stagePeriod?.startDate || !stagePeriod?.deadlineDate) {
-      message.warning('本实训环节尚未配置开始与结束时间，请联系教师');
-      return;
-    }
+    const period =
+      stagePeriod?.startDate && stagePeriod?.deadlineDate
+        ? stagePeriod
+        : {
+            startDate: plan.startDate || new Date().toISOString().slice(0, 10),
+            deadlineDate:
+              plan.endDate || new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+          };
     if (!plan.assignments.length) {
       message.warning('请至少保留一项任务分工');
       return;
@@ -1010,8 +1014,8 @@ export default function MarketResearchModule({
       const res = await saveMarketResearchPlan(classId, {
         ...plan,
         methods: filterPlanUploadMethods(plan.methods),
-        startDate: stagePeriod.startDate,
-        endDate: stagePeriod.deadlineDate,
+        startDate: period.startDate,
+        endDate: period.deadlineDate,
       });
       if (res.plan) {
         setPlan({
@@ -1511,9 +1515,6 @@ export default function MarketResearchModule({
                 {hasConfirmedTeam && !canEditPlan && (
                   <Alert type="info" showIcon message="仅队长可编辑调研计划，当前为查看模式" />
                 )}
-                {hasConfirmedTeam && !stagePeriod && (
-                  <Alert type="warning" showIcon message="市场调研环节尚未配置开始与结束时间，请联系教师配置" />
-                )}
                 {stagePeriod && (
                   <Alert
                     type="info"
@@ -1621,7 +1622,6 @@ export default function MarketResearchModule({
                     block
                     size="large"
                     loading={saving}
-                    disabled={!stagePeriod}
                     onClick={() => void handleSavePlan()}
                     className="!bg-green-500 hover:!bg-green-600"
                   >
@@ -1635,16 +1635,9 @@ export default function MarketResearchModule({
           {/* ══ 调研数据上传 ══ */}
           {activeTab === 'methods' && (
             <div className="space-y-6">
-              {!plan.savedAt ? (
-                <Alert type="warning" showIcon message="请队长先在「调研计划」中保存计划后再上传调研数据" />
-              ) : (
-                <>
-                  {!planUploadMethods.length && (
-                    <Alert type="info" showIcon message="调研计划中未选择调研方法" />
-                  )}
-                  {planUploadMethods.length > 0 && classId && (
+              {classId && (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {planUploadMethods.map((method) => {
+                      {(planUploadMethods.length ? planUploadMethods : METHODS).map((method) => {
                         const guide = METHOD_FORMAT_GUIDES[method];
                         return (
                           <div
@@ -1662,8 +1655,6 @@ export default function MarketResearchModule({
                         );
                       })}
                     </div>
-                  )}
-                </>
               )}
             </div>
           )}
@@ -1671,10 +1662,6 @@ export default function MarketResearchModule({
           {/* ══ 线上问卷 ══ */}
           {activeTab === 'survey' && (
             <div className="space-y-8">
-              {!plan.savedAt ? (
-                <Alert type="warning" showIcon message="请队长先在「调研计划」中保存计划后再开展线上问卷" />
-              ) : (
-                <>
               <div className="flex items-center justify-between">
                 <h3 className="text-lg font-bold text-gray-900">问卷管理</h3>
                 <div className="flex gap-2">
@@ -1846,8 +1833,6 @@ export default function MarketResearchModule({
                 ))}
               </div>
               </Spin>
-                </>
-              )}
             </div>
           )}
 

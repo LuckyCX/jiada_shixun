@@ -9,7 +9,6 @@ import {
   type CourseResourceFile,
   type CourseResourceNode,
 } from '../../../../lib/courseResourceApi';
-import { COURSE_GATE_PERCENT } from '../../../../lib/trainingModulePrerequisite';
 import QuizModal, { type QuizConfig } from '../../../student-center/components/QuizModal';
 import DemoLearningDetail, { type LearningDetailResource } from './mirror/DemoLearningDetail';
 import { bindDemoCourseClass, readDemoResourceProgress } from './demoCourseProgress';
@@ -369,11 +368,7 @@ export function DemoPracticeCourse({
   };
 
   const startQuiz = async (point: CourseKnowledgePoint) => {
-    const ready = !chapterResources.length || chapterResources.every((file) => readDemoResourceProgress(classId, file.id).progressPercent >= COURSE_GATE_PERCENT);
-    if (!ready) {
-      message.warning(`请先完成对应小节课程学习至 ${COURSE_GATE_PERCENT}% 后再进行知识点检测。`);
-      return;
-    }
+    // 演示不卡学习进度门槛，可直接做知识点检测
     setQuizLoadingId(point.id);
     try {
       const questions = await listCourseQuizQuestions(point.id);

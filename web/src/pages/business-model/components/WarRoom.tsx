@@ -173,9 +173,9 @@ function delayMs(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+/** 上屏后的阅读间隔；勿在上屏前等待，否则接口返回后会空等约 1 秒 */
 function messageDelay(content: string) {
-  const len = content.length;
-  return Math.min(4000, Math.max(1200, 800 + len * 12));
+  return Math.min(1200, Math.max(280, String(content || '').length * 8));
 }
 
 function moduleTitle(key: string) {
@@ -312,13 +312,13 @@ export default function WarRoom({ classId, studentDisplayName = '同学', onReco
     for (const m of roundMsgs) {
       if (existingIds.has(m.id)) continue;
       setCurrentSpeaker(m.hat === 'user' ? 'user' : m.hat);
-      await delayMs(messageDelay(m.content));
+      // 先上屏，再短停顿（对齐六帽创想室「接口回来就能看见」的手感）
       setMessages((prev) => {
         if (prev.some((x) => x.id === m.id)) return prev;
         return [...prev, m];
       });
       if (m.targetModule) highlightModule(m.targetModule);
-      await delayMs(400);
+      await delayMs(messageDelay(m.content));
       setCurrentSpeaker(null);
     }
     setIsPlaying(false);

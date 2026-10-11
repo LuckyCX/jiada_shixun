@@ -236,31 +236,38 @@ function renderTeam(sub: string, team: any, members: any[]) {
   );
 }
 
-/** 与学生端创新方法工具内 methodTabs 一致 */
-const IDEATION_METHOD_TABS = [
+/** 与学生端当前入口一致；scamper/triz 仅在有历史创意时展示（只读） */
+const IDEATION_METHOD_TABS_CORE = [
+  { key: 'midwifery', label: '思辨助产启思' },
   { key: 'brainstorm', label: '头脑风暴' },
-  { key: 'scamper', label: 'SCAMPER' },
-  { key: 'triz', label: 'TRIZ' },
   { key: 'ai', label: 'AI创意' },
   { key: 'six_hats', label: '六帽创想室' },
+];
+const IDEATION_METHOD_TABS_LEGACY = [
+  { key: 'scamper', label: 'SCAMPER' },
+  { key: 'triz', label: 'TRIZ' },
 ];
 
 function IdeationMethodsPane({ team, members }: { team: any; members: any[] }) {
   const ideas = Array.isArray(team.ideas) ? team.ideas : [];
   const discussions = Array.isArray(team.discussions) ? team.discussions : [];
-  // 默认落到第一个「有记录」的方法，否则头脑风暴
+  const methodTabs = [
+    ...IDEATION_METHOD_TABS_CORE,
+    ...IDEATION_METHOD_TABS_LEGACY.filter((t) => ideas.some((i: any) => i.methodKey === t.key)),
+  ];
+  // 默认落到第一个「有记录」的方法，否则思辨助产
   const firstWithData =
-    IDEATION_METHOD_TABS.find((t) =>
+    methodTabs.find((t) =>
       t.key === 'six_hats'
         ? members.some((m) => m.hatStudio) || ideas.some((i: any) => i.methodKey === 'six_hats')
         : ideas.some((i: any) => i.methodKey === t.key)
-    )?.key || 'brainstorm';
+    )?.key || 'midwifery';
   const [method, setMethod] = useState(firstWithData);
   const filtered = ideas.filter((i: any) => i.methodKey === method);
 
   return (
     <div className="space-y-3">
-      <SubTabs tabs={IDEATION_METHOD_TABS} active={method} onChange={setMethod} />
+      <SubTabs tabs={methodTabs} active={method} onChange={setMethod} />
 
       {method === 'six_hats' ? (
         <div className="space-y-3">
@@ -298,6 +305,12 @@ function IdeationMethodsPane({ team, members }: { team: any; members: any[] }) {
         </div>
       ) : (
         <div className="space-y-3">
+          {method === 'midwifery' ? (
+            <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4">
+              <h4 className="text-sm font-bold text-indigo-900 mb-1">思辨助产启思</h4>
+              <p className="text-xs text-indigo-700">苏格拉底式多轮追问后生成的创意（只读）</p>
+            </div>
+          ) : null}
           {method === 'brainstorm' ? (
             <div className="bg-teal-50 border border-teal-200 rounded-xl p-4">
               <h4 className="text-sm font-bold text-teal-900 mb-1">头脑风暴法</h4>
@@ -306,14 +319,14 @@ function IdeationMethodsPane({ team, members }: { team: any; members: any[] }) {
           ) : null}
           {method === 'scamper' ? (
             <div className="bg-orange-50 border border-orange-200 rounded-xl p-4">
-              <h4 className="text-sm font-bold text-orange-900 mb-1">SCAMPER奔驰法</h4>
-              <p className="text-xs text-orange-700">从7个维度改进现有产品或服务</p>
+              <h4 className="text-sm font-bold text-orange-900 mb-1">SCAMPER奔驰法（历史）</h4>
+              <p className="text-xs text-orange-700">历史方法记录，仅只读展示</p>
             </div>
           ) : null}
           {method === 'triz' ? (
             <div className="bg-green-50 border border-green-200 rounded-xl p-4">
-              <h4 className="text-sm font-bold text-green-900 mb-1">TRIZ创新原理</h4>
-              <p className="text-xs text-green-700">基于40个创新原理解决技术矛盾</p>
+              <h4 className="text-sm font-bold text-green-900 mb-1">TRIZ创新原理（历史）</h4>
+              <p className="text-xs text-green-700">历史方法记录，仅只读展示</p>
             </div>
           ) : null}
           {method === 'ai' ? (
@@ -433,7 +446,7 @@ function renderIdeation(sub: string, team: any, members: any[]) {
       </div>
     );
   }
-  // 创新方法工具：内含头脑风暴 / SCAMPER / TRIZ / AI创意 / 六帽
+  // 创新方法工具：思辨助产 / 头脑风暴 / AI创意 / 六帽（历史 SCAMPER/TRIZ 只读）
   return <IdeationMethodsPane team={team} members={members} />;
 }
 

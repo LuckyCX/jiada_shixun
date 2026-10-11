@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import AppModalPortal from '../../../../../components/AppModalPortal';
+import { DemoMarkdown } from '../demoMarkdown';
 
 interface SimConfig {
   budget: number;
@@ -267,14 +268,11 @@ const RoleSimulationModule = ({ classId, onTaskComplete, trainingEnded = false }
       try {
         setEntryLoading(true);
         setEntryError('');
-        const { fetchRoleSimulationEntry, fetchRoleSimulationRecords } = await import(
-          '../demoSimulationApi'
-        );
-        const entry = await fetchRoleSimulationEntry(classId);
-        if (!mounted) return;
-        setEntryAllowed(Boolean(entry.allowed));
-        setPrerequisiteModuleKey(String(entry.prerequisiteModuleKey || ''));
-        if (!entry.allowed && entry.summary) setEntryError(entry.summary);
+        const { fetchRoleSimulationRecords } = await import('../demoSimulationApi');
+        // 演示始终放行，不卡实践课程前置
+        setEntryAllowed(true);
+        setPrerequisiteModuleKey('');
+        setEntryError('');
         // 同步个人有效轮次，避免「做了 2 次却像 0 进度」
         try {
           const sid = 'demo-student';
@@ -290,8 +288,8 @@ const RoleSimulationModule = ({ classId, onTaskComplete, trainingEnded = false }
         }
       } catch (e: any) {
         if (!mounted) return;
-        setEntryAllowed(false);
-        setEntryError(String(e?.message || '加载失败'));
+        setEntryAllowed(true);
+        setEntryError('');
       } finally {
         if (mounted) setEntryLoading(false);
       }
@@ -812,9 +810,9 @@ const RoleSimulationModule = ({ classId, onTaskComplete, trainingEnded = false }
           <div className="flex gap-3">
             <button
               onClick={startSimulation}
-              disabled={trainingEnded || entryLoading || !entryAllowed}
+              disabled={entryLoading || !entryAllowed}
               className={`flex-[3] py-3 rounded-xl font-bold text-sm transition-colors flex items-center justify-center gap-2 ${
-                trainingEnded || entryLoading || !entryAllowed
+                entryLoading || !entryAllowed
                   ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
                   : 'bg-emerald-500 text-white hover:bg-emerald-600'
               }`}
@@ -879,11 +877,7 @@ const RoleSimulationModule = ({ classId, onTaskComplete, trainingEnded = false }
               >
                 <div className="space-y-1">
                   {thinkingText ? (
-                    <div
-                      className="text-xs text-gray-600 leading-relaxed whitespace-pre-wrap break-words"
-                    >
-                      {thinkingText}
-                    </div>
+                    <DemoMarkdown text={thinkingText} className="text-xs text-gray-600 leading-relaxed" />
                   ) : (
                     <div className="text-xs text-gray-400">暂无内容</div>
                   )}

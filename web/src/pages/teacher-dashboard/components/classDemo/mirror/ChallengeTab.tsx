@@ -10,6 +10,7 @@ import {
   type ChallengeFinalReport,
   type MarketPersona,
 } from '../demoMarketApi';
+import { DemoMarkdown } from '../demoMarkdown';
 import MarketAnalysisStreamPanel from './MarketAnalysisStreamPanel';
 
 export type ChallengeProjectInfo = {
@@ -125,10 +126,23 @@ export default function ChallengeTab({ classId, personas, onOpenRecords, onMarke
             competitiveAdvantage: topic.competitiveAdvantage || '',
           });
           setAutoFilled(true);
+          return;
         }
       } catch {
-        /* 无选题 */
+        /* 无选题时使用演示项目，避免空白表单卡住对抗 */
       }
+      setProjectInfo({
+        projectName: '课后专注咖啡',
+        projectDirection: '校园新消费',
+        projectDescription: '面向课后自习场景的低糖咖啡，主打 10 分钟内取餐。',
+        targetUsers: '18-26 岁在校学生与刚工作的年轻用户',
+        coreValue: '课间不等队，也能喝到甜度可控的专注咖啡',
+        coreProblem: '校内窗口排队久、晚上买不到、口味不稳定',
+        solutionOverview: '预约取餐 + 低糖美式/拿铁，价格带 12-15 元',
+        marketSize: '本校及周边年轻用户周消费集中在 30-80 元',
+        competitiveAdvantage: '比食堂稳定，比连锁更靠近自习场景',
+      });
+      setAutoFilled(true);
     })();
   }, [classId]);
 
@@ -517,9 +531,9 @@ export default function ChallengeTab({ classId, personas, onOpenRecords, onMarke
             {messages.map((msg, idx) => (
               <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                 {msg.role === 'ai' && (
-                  <div className="max-w-[80%] bg-white rounded-xl px-4 py-3 border border-gray-200 text-sm whitespace-pre-wrap">
+                  <div className="max-w-[80%] bg-white rounded-xl px-4 py-3 border border-gray-200 text-sm">
                     {msg.agentName && <p className="text-xs font-bold text-indigo-600 mb-1">{msg.agentName}</p>}
-                    {msg.content}
+                    <DemoMarkdown text={msg.content} />
                   </div>
                 )}
                 {msg.role === 'user' && (

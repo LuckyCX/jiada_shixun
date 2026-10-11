@@ -9,6 +9,13 @@ export type DemoAiScene =
   | 'market-analysis'
   | 'product'
   | 'business'
+  | 'war-room-round'
+  | 'war-room-reply'
+  | 'hat-studio-round'
+  | 'hat-studio-reply'
+  | 'ideation-midwifery-turn'
+  | 'ideation-midwifery-generate'
+  | 'ideation-chat-generate'
   | 'simulation'
   | 'plan-comment';
 

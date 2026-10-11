@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { DemoMarkdown } from '../demoMarkdown';
 
 type Props = {
   status: string;
@@ -61,7 +62,7 @@ export default function MarketAnalysisStreamPanel({
       {hasContent && (
         <div>
           <div className="text-[11px] font-medium text-green-700 mb-1">流式输出</div>
-          <pre className="text-xs text-gray-700 whitespace-pre-wrap font-sans m-0">{content}</pre>
+          <DemoMarkdown text={content} className="text-xs text-gray-700" />
         </div>
       )}
     </div>

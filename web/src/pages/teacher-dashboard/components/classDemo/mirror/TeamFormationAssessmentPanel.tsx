@@ -18,6 +18,7 @@ import {
   type TeamDimensionProfile,
   fetchTeamFormationWithdrawEligibility,
 } from '../demoTeamApi';
+import { DemoMarkdown } from '../demoMarkdown';
 import { appAlert, appConfirm } from '../../../../../lib/appDialog';
 
 const MAX_VIDEO = 50 * 1024 * 1024;
@@ -668,7 +669,7 @@ export default function TeamFormationAssessmentPanel({ classId, onSubmitted, onP
                   className="min-h-[10rem] max-h-56 overflow-y-auto px-4 py-3"
                 >
                   {liveStreamText ? (
-                    <p className="text-xs text-gray-700 whitespace-pre-wrap leading-relaxed">{liveStreamText}</p>
+                    <DemoMarkdown text={liveStreamText} className="text-xs text-gray-700 leading-relaxed" />
                   ) : (
                     <p className="text-xs text-gray-500 animate-pulse">
                       正在连接大模型，思考过程将在此实时显示…

@@ -26,10 +26,8 @@ export default function ClassDemoPage({
   stage: string;
   onStageChange: (stage: DemoStageKey) => void;
 }) {
-  const stages = useMemo(
-    () => COURSE_SETTING_STAGES.filter((item) => item.key === 'team' || enabledModuleKeys.includes(item.key)),
-    [enabledModuleKeys]
-  );
+  // 演示侧栏固定展示实训流程 1–7，不随课程设置开关隐藏
+  const stages = useMemo(() => COURSE_SETTING_STAGES, []);
   const learningMenus: { key: DemoStageKey; label: string; icon: string }[] = [
     { key: 'overview', label: '进度看板', icon: 'ri-dashboard-line' },
     { key: 'knowledge', label: '实践课程', icon: 'ri-book-2-line' },
@@ -44,6 +42,8 @@ export default function ClassDemoPage({
     ? stage
     : 'overview') as DemoStageKey;
   const [planDetailId, setPlanDetailId] = useState<string | null>(null);
+  /** 进入过创新模块后保活，避免侧栏切走卸载导致对话丢失 */
+  const [keepIdeation, setKeepIdeation] = useState(false);
 
   useEffect(() => {
     if (stage === 'archive') onStageChange('overview');
@@ -56,6 +56,14 @@ export default function ClassDemoPage({
   useEffect(() => {
     setPlanDetailId(null);
   }, [activeKey]);
+
+  useEffect(() => {
+    if (activeKey === 'ideation') setKeepIdeation(true);
+  }, [activeKey]);
+
+  useEffect(() => {
+    setKeepIdeation(false);
+  }, [classId]);
 
   return (
     <div className="flex gap-4 min-h-[70vh]">
@@ -106,7 +114,11 @@ export default function ClassDemoPage({
           {activeKey === 'team' ? (
             <TeamFormationModule classId={classId} className={className} />
           ) : null}
-          {activeKey === 'ideation' ? <IdeationModule classId={classId} isTeamLeader /> : null}
+          {keepIdeation ? (
+            <div className={activeKey === 'ideation' ? undefined : 'hidden'} aria-hidden={activeKey !== 'ideation'}>
+              <IdeationModule key={classId} classId={classId} isTeamLeader />
+            </div>
+          ) : null}
           {activeKey === 'market' ? (
             <MarketResearchModule
               classId={classId}

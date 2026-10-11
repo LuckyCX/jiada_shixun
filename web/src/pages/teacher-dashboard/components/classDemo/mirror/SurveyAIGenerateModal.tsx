@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Alert, Button, Checkbox, InputNumber, Modal, message } from 'antd';
+import { Button, Checkbox, InputNumber, Modal, message } from 'antd';
 import {
   SURVEY_QUESTION_TYPES,
   createMarketSurvey,
@@ -36,8 +36,6 @@ export default function SurveyAIGenerateModal({
   const [editorOpen, setEditorOpen] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  const planReady = Boolean(plan.savedAt && plan.goal.trim());
-
   useEffect(() => {
     if (open) return;
     setEditorOpen(false);
@@ -48,10 +46,6 @@ export default function SurveyAIGenerateModal({
   }, [open]);
 
   const handleGenerate = async () => {
-    if (!planReady) {
-      message.warning('请先保存调研计划');
-      return;
-    }
     if (!includeTypes.length) {
       message.warning('请至少选择一种题型');
       return;
@@ -108,7 +102,6 @@ export default function SurveyAIGenerateModal({
             key="gen"
             type="primary"
             loading={generating}
-            disabled={!planReady}
             onClick={() => void handleGenerate()}
           >
             AI 生成
@@ -116,14 +109,10 @@ export default function SurveyAIGenerateModal({
         ]}
         destroyOnClose
       >
-        {!planReady ? (
-          <Alert type="warning" showIcon message="请队长先在「调研计划」中保存计划后再使用 AI 生成" />
-        ) : (
           <div className="bg-green-50 border border-green-200 rounded-xl p-4 mb-4">
             <p className="text-xs font-medium text-green-700 mb-1">基于调研计划</p>
-            <p className="text-sm text-green-800">{plan.goal}</p>
+            <p className="text-sm text-green-800">{plan.goal.trim() || '课堂演示：可直接生成问卷，不要求先保存计划'}</p>
           </div>
-        )}
         <div className="space-y-4">
           <div>
             <div className="text-sm font-medium mb-1">题目数量</div>

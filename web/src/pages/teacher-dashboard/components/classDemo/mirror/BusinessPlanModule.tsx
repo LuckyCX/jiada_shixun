@@ -5,7 +5,6 @@ import RichTextEditor from '../../../../../components/RichTextEditor';
 import {
   acquireBusinessPlanSectionLock,
   BusinessPlanConflictError,
-  fetchBusinessPlanEntry,
   fetchBusinessPlanWorkspace,
   fillBusinessPlanSection,
   generateBusinessPlanOutline,
@@ -300,25 +299,22 @@ export default function BusinessPlanModule({
     if (!classId) {
       setLoading(false);
       setEntryAllowed(false);
-      setEntryHint('请先加入教学班级并完成组队');
+      setEntryHint('请先选择班级');
       return;
     }
     let cancelled = false;
     (async () => {
       setLoading(true);
       try {
-        const entry = await fetchBusinessPlanEntry(classId);
-        if (cancelled) return;
-        setEntryAllowed(entry.allowed);
-        if (!entry.allowed) {
-          setEntryHint(entry.summary || '请先完成关联课程学习及知识点检测后再开始撰写商业计划书。');
-          return;
-        }
+        // 演示不校验实践课程前置，直接进入撰写
+        setEntryAllowed(true);
+        setEntryHint('');
         await loadWorkspace();
       } catch (e) {
         if (!cancelled) {
-          setEntryAllowed(false);
-          setEntryHint(e instanceof Error ? e.message : '加载失败');
+          setEntryAllowed(true);
+          setEntryHint('');
+          message.error(e instanceof Error ? e.message : '加载失败');
         }
       } finally {
         if (!cancelled) setLoading(false);

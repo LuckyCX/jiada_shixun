@@ -14,7 +14,12 @@ import {
   getIdeationMethodPrompt,
   IDEATION_METHOD_LABELS,
   padIdeationStringList,
+  pickTopicMappedFields,
 } from '../lib/ideationPrompts.js';
+import {
+  getMidwiferyGeneratePrompt,
+  getMidwiferyTurnPrompt,
+} from '../lib/ideationMidwiferyPrompts.js';
 import {
   HAT_STUDIO_DRAFT_KEYS,
   HAT_STUDIO_DRAFT_LABELS,
@@ -28,6 +33,9 @@ import {
   parseMentionedHatFromText,
 } from '../lib/ideationHatStudioPrompts.js';
 import { evaluateModulePrerequisiteForStudent } from '../lib/trainingModulePrerequisite.js';
+
+/** 对话方法可写入创意库的 methodKey（含历史只读键，analyze 仍可入库） */
+const CHAT_GENERATE_METHODS = new Set(['brainstorm', 'ai', 'midwifery', 'six_hats', 'scamper', 'triz']);
 
 const router = Router();
 
@@ -147,9 +155,11 @@ function normalizeAnalysis(parsed) {
   const summary =
     String(parsed.summary || '').trim() ||
     '当前创意描述信息较少，建议补充问题背景、目标用户与初步方案后再评估。';
+  const topic = pickTopicMappedFields(parsed);
   return {
     title: String(parsed.title || '').trim(),
     description: String(parsed.description || '').trim(),
+    ...topic,
     overallScore: overallScore ?? 40,
     novelty: novelty ?? 2,
     feasibility: feasibility ?? 2,
@@ -161,6 +171,61 @@ function normalizeAnalysis(parsed) {
     suggestions: textArray(parsed.suggestions),
     tags: textArray(parsed.tags),
   };
+}
+
+function analysisScoresPayload(analysis) {
+  return {
+    overallScore: analysis.overallScore,
+    novelty: analysis.novelty,
+    feasibility: analysis.feasibility,
+    marketPotential: analysis.marketPotential,
+    innovation: analysis.innovation,
+    summary: analysis.summary,
+    strengths: analysis.strengths,
+    weaknesses: analysis.weaknesses,
+    suggestions: analysis.suggestions,
+    tags: analysis.tags,
+  };
+}
+
+/** 合并选题映射字段到 form_payload，便于「从创意库填入」 */
+function enrichFormPayload(formPayload, analysis, title, description) {
+  const topic = pickTopicMappedFields(analysis);
+  return {
+    ...(formPayload && typeof formPayload === 'object' ? formPayload : {}),
+    title,
+    description,
+    ...topic,
+  };
+}
+
+function normalizeChatMessages(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((m) => ({
+      role: m?.role === 'assistant' ? 'assistant' : m?.role === 'user' ? 'user' : '',
+      content: String(m?.content || '').trim(),
+    }))
+    .filter((m) => m.role && m.content)
+    .slice(-40);
+}
+
+async function runIdeationLlmJson({ provider, system, user }) {
+  logPromptToConsole(provider, system, user);
+  let raw;
+  try {
+    raw = await chatCompletion({ provider, system, user, jsonMode: true });
+  } catch (e) {
+    const sm = String(e?.message || '');
+    if (!/response_format|json_object|json mode/i.test(sm)) throw e;
+    raw = await chatCompletion({ provider, system, user, jsonMode: false });
+  }
+  const parsed = extractJsonObject(raw);
+  if (!parsed) {
+    logError(`ideation llm parse-fail preview=${String(raw || '').slice(0, 500)}`, new Error('parse'));
+    throw new Error('AI 返回无法解析为 JSON，请重试');
+  }
+  return parsed;
 }
 
 function mapIdeaRow(row) {
@@ -722,13 +787,100 @@ router.post('/teacher/personal-classes/:classId/ideation/topics/:topicId/review'
   }
 });
 
+/** 运行方法分析，返回 title/description/analysis/storePayload（不入库） */
+async function buildIdeationAnalysisResult(methodKey, formPayload) {
+  const prompt = getIdeationMethodPrompt(methodKey);
+  const provider = await getEnabledProvider('multimodal');
+  if (!prompt || !provider) {
+    const err = new Error('未配置已启用的多模态模型');
+    err.status = 400;
+    err.code = 40011;
+    throw err;
+  }
+
+  let userPrompt;
+  if (methodKey === 'six_hats') {
+    const notes = {
+      ideaTitle: String(formPayload.ideaTitle || formPayload.title || '').trim(),
+      problemInsight: String(formPayload.problemInsight || '').trim(),
+      userValue: String(formPayload.userValue || '').trim(),
+      solutionPoints: String(formPayload.solutionPoints || '').trim(),
+      riskDiff: String(formPayload.riskDiff || '').trim(),
+    };
+    const filled = Object.values(notes).filter(Boolean).length;
+    if (filled < 2) {
+      const err = new Error('请先完善至少 2 个工作区字段，再让 AI 汇总入库');
+      err.status = 400;
+      err.code = 40016;
+      throw err;
+    }
+    userPrompt = `方法：六帽创想室
+任务：根据下列「工作区原始笔记」汇总成可入库的创业创意，并完成评分分析。
+要求：title 必须是简短创意名；description 必须是你重写的结构化概述，禁止整段复制笔记原文。
+
+工作区原始笔记：
+${JSON.stringify(notes, null, 2)}`;
+  } else {
+    userPrompt = `方法：${IDEATION_METHOD_LABELS[methodKey]}\n学生原始表单：\n${JSON.stringify(formPayload, null, 2)}`;
+  }
+
+  const parsed = await runIdeationLlmJson({ provider, system: prompt, user: userPrompt });
+  const analysis = normalizeAnalysis(parsed);
+
+  const submittedTitle = String(formPayload.title || formPayload.ideaTitle || '').trim();
+  const submittedDescription = String(formPayload.description || formPayload.solution || formPayload.chatTranscript || '').trim();
+  // AI / 六帽 / 助产 / 对话生成：标题描述优先用模型结果
+  const useAiCopy = methodKey === 'ai' || methodKey === 'six_hats' || methodKey === 'midwifery' || Boolean(formPayload.chatTranscript);
+  let title = useAiCopy ? analysis.title || submittedTitle : submittedTitle || analysis.title;
+  let description = useAiCopy ? analysis.description || submittedDescription : submittedDescription || analysis.description;
+  if (!title || !description) {
+    const err = new Error('AI 未返回有效创意内容');
+    err.status = 400;
+    err.code = 40016;
+    throw err;
+  }
+  if (methodKey === 'six_hats' && title.length > 40) {
+    title = `${title.slice(0, 40).replace(/[，。；、\s]+$/, '')}…`;
+  }
+
+  let storePayload;
+  if (methodKey === 'six_hats') {
+    storePayload = enrichFormPayload(
+      {
+        ...formPayload,
+        workspaceNotes: {
+          ideaTitle: String(formPayload.ideaTitle || '').trim(),
+          problemInsight: String(formPayload.problemInsight || '').trim(),
+          userValue: String(formPayload.userValue || '').trim(),
+          solutionPoints: String(formPayload.solutionPoints || '').trim(),
+          riskDiff: String(formPayload.riskDiff || '').trim(),
+        },
+        aiSummarized: true,
+      },
+      analysis,
+      title,
+      description
+    );
+  } else {
+    storePayload = enrichFormPayload(formPayload, analysis, title, description);
+  }
+
+  return { title, description, analysis, storePayload };
+}
+
 router.post('/student/personal-classes/:classId/ideation/ideas/analyze', requireAuth(), requireStudent(), async (req, res) => {
   try {
     const sid = studentIdFromReq(req);
     const classId = parseId(req.params.classId);
     const methodKey = String(req.body?.methodKey || '').trim();
     const formPayload = req.body?.formPayload && typeof req.body.formPayload === 'object' ? req.body.formPayload : {};
-    if (!sid || !classId || !IDEATION_METHOD_LABELS[methodKey]) return bad(req, res, 400, 40003, '参数无效');
+    const previewOnly = Boolean(req.body?.previewOnly);
+    if (!sid || !classId || !IDEATION_METHOD_LABELS[methodKey] || !CHAT_GENERATE_METHODS.has(methodKey)) {
+      return bad(req, res, 400, 40003, '参数无效');
+    }
+    if (methodKey === 'midwifery') {
+      return bad(req, res, 400, 40003, '思辨助产启思请使用专用生成接口');
+    }
 
     const pool = getPool();
     if (!(await studentEnrolledInClass(pool, sid, classId))) {
@@ -737,87 +889,20 @@ router.post('/student/personal-classes/:classId/ideation/ideas/analyze', require
     const team = await getConfirmedTeam(pool, sid, classId);
     if (!team) return bad(req, res, 400, 40014, '教师确认组队后可提交创意分析');
 
-    const prompt = getIdeationMethodPrompt(methodKey);
-    const provider = await getEnabledProvider('multimodal');
-    if (!prompt || !provider) return bad(req, res, 400, 40011, '未配置已启用的多模态模型');
+    const { title, description, analysis, storePayload } = await buildIdeationAnalysisResult(methodKey, formPayload);
 
-    // 六帽创想室：只把工作区笔记交给模型汇总，避免把拼接长文当最终创意
-    let userPrompt;
-    if (methodKey === 'six_hats') {
-      const notes = {
-        ideaTitle: String(formPayload.ideaTitle || formPayload.title || '').trim(),
-        problemInsight: String(formPayload.problemInsight || '').trim(),
-        userValue: String(formPayload.userValue || '').trim(),
-        solutionPoints: String(formPayload.solutionPoints || '').trim(),
-        riskDiff: String(formPayload.riskDiff || '').trim(),
-      };
-      const filled = Object.values(notes).filter(Boolean).length;
-      if (filled < 2) return bad(req, res, 400, 40016, '请先完善至少 2 个工作区字段，再让 AI 汇总入库');
-      userPrompt = `方法：六帽创想室
-任务：根据下列「工作区原始笔记」汇总成可入库的创业创意，并完成评分分析。
-要求：title 必须是简短创意名；description 必须是你重写的结构化概述，禁止整段复制笔记原文。
-
-工作区原始笔记：
-${JSON.stringify(notes, null, 2)}`;
-    } else {
-      userPrompt = `方法：${IDEATION_METHOD_LABELS[methodKey]}\n学生原始表单：\n${JSON.stringify(formPayload, null, 2)}`;
-    }
-    logPromptToConsole(provider, prompt, userPrompt);
-
-    let raw;
-    try {
-      raw = await chatCompletion({
-        provider,
-        system: prompt,
-        user: userPrompt,
-        jsonMode: true,
-      });
-    } catch (e) {
-      // 部分模型不支持 json_object；降级为普通文本再抽 JSON
-      const sm = String(e?.message || '');
-      if (!/response_format|json_object|json mode/i.test(sm)) throw e;
-      raw = await chatCompletion({
-        provider,
-        system: prompt,
-        user: userPrompt,
-        jsonMode: false,
+    // 对话预览：只返回结构化结果，不入库
+    if (previewOnly) {
+      return ok(req, res, {
+        methodKey,
+        method: IDEATION_METHOD_LABELS[methodKey],
+        title,
+        description,
+        formPayload: storePayload,
+        aiAnalysis: analysisScoresPayload(analysis),
+        topicFields: pickTopicMappedFields(analysis),
       });
     }
-    const parsed = extractJsonObject(raw);
-    if (!parsed) {
-      logError(`POST ideation analyze parse-fail preview=${String(raw || '').slice(0, 500)}`, new Error('parse'));
-      return bad(req, res, 500, 50011, 'AI 返回无法解析为 JSON，请重试');
-    }
-    const analysis = normalizeAnalysis(parsed);
-
-    const submittedTitle = String(formPayload.title || formPayload.ideaTitle || '').trim();
-    const submittedDescription = String(formPayload.description || formPayload.solution || '').trim();
-    // AI创意 / 六帽创想室：入库标题与描述一律用模型汇总结果
-    const useAiCopy = methodKey === 'ai' || methodKey === 'six_hats';
-    let title = useAiCopy ? analysis.title : submittedTitle;
-    let description = useAiCopy ? analysis.description : submittedDescription;
-    if (!title || !description) return bad(req, res, 400, 40016, 'AI 未返回有效创意内容');
-    // 六帽：标题过长时截断，避免模型偶发把长笔记当成标题
-    if (methodKey === 'six_hats' && title.length > 40) {
-      title = `${title.slice(0, 40).replace(/[，。；、\s]+$/, '')}…`;
-    }
-    // 六帽入库：form_payload 保留工作区原文 + AI 汇总；列表展示用 title/description
-    const storePayload =
-      methodKey === 'six_hats'
-        ? {
-            ...formPayload,
-            workspaceNotes: {
-              ideaTitle: String(formPayload.ideaTitle || '').trim(),
-              problemInsight: String(formPayload.problemInsight || '').trim(),
-              userValue: String(formPayload.userValue || '').trim(),
-              solutionPoints: String(formPayload.solutionPoints || '').trim(),
-              riskDiff: String(formPayload.riskDiff || '').trim(),
-            },
-            aiSummarized: true,
-            title,
-            description,
-          }
-        : formPayload;
 
     const { rows } = await pool.query(
       `INSERT INTO teacher_personal_class_team_ideas
@@ -831,28 +916,183 @@ ${JSON.stringify(notes, null, 2)}`;
         title,
         description,
         JSON.stringify(storePayload),
-        JSON.stringify({
-          overallScore: analysis.overallScore,
-          novelty: analysis.novelty,
-          feasibility: analysis.feasibility,
-          marketPotential: analysis.marketPotential,
-          innovation: analysis.innovation,
-          summary: analysis.summary,
-          strengths: analysis.strengths,
-          weaknesses: analysis.weaknesses,
-          suggestions: analysis.suggestions,
-          tags: analysis.tags,
-        }),
+        JSON.stringify(analysisScoresPayload(analysis)),
         sid,
       ]
     );
     const idea = await loadIdea(pool, rows[0].id, Number(team.id), sid);
     return ok(req, res, idea);
   } catch (e) {
+    if (e?.status) return bad(req, res, e.status, e.code || 40000, e.message);
     logError(`POST ideation analyze traceId=${req.traceId}`, e);
     return bad(req, res, 500, 50000, friendlyLlmErrorMessage(e));
   }
 });
+
+/** 将预览创意写入团队创意库 */
+router.post('/student/personal-classes/:classId/ideation/ideas', requireAuth(), requireStudent(), async (req, res) => {
+  try {
+    const sid = studentIdFromReq(req);
+    const classId = parseId(req.params.classId);
+    const methodKey = String(req.body?.methodKey || '').trim();
+    const title = String(req.body?.title || '').trim();
+    const description = String(req.body?.description || '').trim();
+    const formPayload = req.body?.formPayload && typeof req.body.formPayload === 'object' ? req.body.formPayload : {};
+    const aiAnalysis = req.body?.aiAnalysis && typeof req.body.aiAnalysis === 'object' ? req.body.aiAnalysis : {};
+    if (!sid || !classId || !IDEATION_METHOD_LABELS[methodKey] || !title || !description) {
+      return bad(req, res, 400, 40003, '参数无效');
+    }
+
+    const pool = getPool();
+    if (!(await studentEnrolledInClass(pool, sid, classId))) {
+      return bad(req, res, 403, 40301, '未加入该班级');
+    }
+    const team = await getConfirmedTeam(pool, sid, classId);
+    if (!team) return bad(req, res, 400, 40014, '教师确认组队后可提交创意');
+
+    const analysis = normalizeAnalysis({ ...aiAnalysis, title, description, ...pickTopicMappedFields(formPayload) });
+    const storePayload = enrichFormPayload(formPayload, analysis, title, description);
+
+    const { rows } = await pool.query(
+      `INSERT INTO teacher_personal_class_team_ideas
+       (team_id, method_key, method_name, title, description, form_payload, ai_analysis, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8)
+       RETURNING id`,
+      [
+        Number(team.id),
+        methodKey,
+        IDEATION_METHOD_LABELS[methodKey],
+        title,
+        description,
+        JSON.stringify(storePayload),
+        JSON.stringify(analysisScoresPayload(analysis)),
+        sid,
+      ]
+    );
+    const idea = await loadIdea(pool, rows[0].id, Number(team.id), sid);
+    return ok(req, res, idea);
+  } catch (e) {
+    logError(`POST ideation ideas commit traceId=${req.traceId}`, e);
+    return bad(req, res, 500, 50000, e.message);
+  }
+});
+
+/** 思辨助产启思：多轮对话 */
+router.post(
+  '/student/personal-classes/:classId/ideation/methods/midwifery/turn',
+  requireAuth(),
+  requireStudent(),
+  async (req, res) => {
+    try {
+      const sid = studentIdFromReq(req);
+      const classId = parseId(req.params.classId);
+      const messages = normalizeChatMessages(req.body?.messages);
+      const roundIndex = Math.max(0, Number(req.body?.roundIndex) || 0);
+      if (!sid || !classId) return bad(req, res, 400, 40003, '参数无效');
+
+      const pool = getPool();
+      if (!(await studentEnrolledInClass(pool, sid, classId))) {
+        return bad(req, res, 403, 40301, '未加入该班级');
+      }
+      const team = await getConfirmedTeam(pool, sid, classId);
+      if (!team) return bad(req, res, 400, 40014, '教师确认组队后可使用思辨助产启思');
+
+      const provider = await getEnabledProvider('multimodal');
+      if (!provider) return bad(req, res, 400, 40011, '未配置已启用的多模态模型');
+
+      const userPrompt = `当前已知轮次（学生侧）：${roundIndex}
+对话历史（JSON）：
+${JSON.stringify(messages.length ? messages : [{ role: 'system', content: '（新会话，请发起第 1 轮提问）' }], null, 2)}
+
+请输出本轮助创智能体回复 JSON。`;
+
+      const parsed = await runIdeationLlmJson({
+        provider,
+        system: getMidwiferyTurnPrompt(),
+        user: userPrompt,
+      });
+
+      // 开场/确认想法阶段允许 roundIndex=0；正式追问从 1 起
+      const parsedRound = Number(parsed.roundIndex);
+      const nextRound = Number.isFinite(parsedRound)
+        ? Math.max(0, Math.floor(parsedRound))
+        : messages.some((m) => m.role === 'user')
+          ? Math.max(1, roundIndex + 1)
+          : 0;
+      // 请求携带的 roundIndex 是「学生已看到的轮次」：>=3 表示第 3 轮提问已展示且学生已提交回答，才允许生成
+      const canGenerate = Boolean(parsed.canGenerate) && roundIndex >= 3;
+      const doneHint = canGenerate ? String(parsed.doneHint || '').trim() : '';
+      return ok(req, res, {
+        assistantText:
+          String(parsed.assistantText || '').trim() ||
+          (nextRound === 0
+            ? '你好！我是助创智能体。先用自己的话聊聊：你想解决什么问题、给谁用？想清楚一点后我们再深入追问。'
+            : '请继续补充你的想法。'),
+        roundIndex: nextRound,
+        canGenerate,
+        doneHint,
+      });
+    } catch (e) {
+      logError(`POST ideation midwifery turn traceId=${req.traceId}`, e);
+      return bad(req, res, 500, 50000, friendlyLlmErrorMessage(e));
+    }
+  }
+);
+
+/** 思辨助产启思：基于对话生成可入库预览创意 */
+router.post(
+  '/student/personal-classes/:classId/ideation/methods/midwifery/generate',
+  requireAuth(),
+  requireStudent(),
+  async (req, res) => {
+    try {
+      const sid = studentIdFromReq(req);
+      const classId = parseId(req.params.classId);
+      const messages = normalizeChatMessages(req.body?.messages);
+      if (!sid || !classId) return bad(req, res, 400, 40003, '参数无效');
+      if (messages.length < 2) return bad(req, res, 400, 40016, '请先完成至少一轮对话再生成创意');
+
+      const pool = getPool();
+      if (!(await studentEnrolledInClass(pool, sid, classId))) {
+        return bad(req, res, 403, 40301, '未加入该班级');
+      }
+      const team = await getConfirmedTeam(pool, sid, classId);
+      if (!team) return bad(req, res, 400, 40014, '教师确认组队后可生成创意');
+
+      const provider = await getEnabledProvider('multimodal');
+      if (!provider) return bad(req, res, 400, 40011, '未配置已启用的多模态模型');
+
+      const userPrompt = `请根据下列思辨助产对话提炼创业创意：\n${JSON.stringify(messages, null, 2)}`;
+      const parsed = await runIdeationLlmJson({
+        provider,
+        system: getMidwiferyGeneratePrompt(),
+        user: userPrompt,
+      });
+      const analysis = normalizeAnalysis(parsed);
+      if (!analysis.title || !analysis.description) {
+        return bad(req, res, 400, 40016, 'AI 未返回有效创意内容');
+      }
+      const storePayload = enrichFormPayload(
+        { chatTranscript: messages.map((m) => `${m.role}: ${m.content}`).join('\n') },
+        analysis,
+        analysis.title,
+        analysis.description
+      );
+      return ok(req, res, {
+        methodKey: 'midwifery',
+        method: IDEATION_METHOD_LABELS.midwifery,
+        title: analysis.title,
+        description: analysis.description,
+        formPayload: storePayload,
+        aiAnalysis: analysisScoresPayload(analysis),
+        topicFields: pickTopicMappedFields(analysis),
+      });
+    } catch (e) {
+      logError(`POST ideation midwifery generate traceId=${req.traceId}`, e);
+      return bad(req, res, 500, 50000, friendlyLlmErrorMessage(e));
+    }
+  }
+);
 
 router.post('/student/personal-classes/:classId/ideation/ideas/:ideaId/like', requireAuth(), requireStudent(), async (req, res) => {
   try {

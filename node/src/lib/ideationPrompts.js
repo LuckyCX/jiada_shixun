@@ -3,6 +3,13 @@ import { buildStructuredSystemPrompt, padStringList } from './llmJsonOutputRules
 const IDEATION_SCHEMA = `{
   "title": "字符串",
   "description": "字符串",
+  "projectDirection": "项目方向短标签，不确定写「综合创新」",
+  "coreValue": "核心价值主张",
+  "targetUsers": "目标用户",
+  "coreProblem": "核心问题",
+  "solutionOverview": "解决方案概述",
+  "marketSize": "市场规模或机会简述",
+  "competitiveAdvantage": "竞争优势",
   "overallScore": 0-100 整数,
   "novelty": 0-5 数字,
   "feasibility": 0-5 数字,
@@ -15,11 +22,11 @@ const IDEATION_SCHEMA = `{
   "tags": ["标签1", "标签2", "标签3"]
 }
 固定数量：strengths / weaknesses / suggestions / tags 均恰好 3 项（不得 2 项、不得 4 项以上）。
-评分须体现差异，禁止全部满分。`;
+评分须体现差异，禁止全部满分。选题映射字段（projectDirection 等）须根据材料填写，信息不足时用「材料不足，暂按合理假设：…」。`;
 
 const IDEATION_EXAMPLE = `Input 摘要：标题「校园二手教材流转」、描述「同学间按需交换教材」
 Output：
-{"title":"校园二手教材流转","description":"同学间按需交换教材","overallScore":62,"novelty":3.2,"feasibility":3.5,"marketPotential":3.0,"innovation":3.1,"summary":"方向贴近校园刚需，但差异化与履约机制仍需打磨。","strengths":["场景清晰、用户可达","交易成本较低","利于循环利用"],"weaknesses":["供给不稳定","信任与品控不足","变现路径弱"],"suggestions":["先做单学院试点","建立品相分级与担保","补充履约与售后规则"],"tags":["校园","二手","共享"]}`;
+{"title":"校园二手教材流转","description":"同学间按需交换教材","projectDirection":"校园服务","coreValue":"降低教材成本与闲置浪费","targetUsers":"在校大学生","coreProblem":"教材供需错配与流转低效","solutionOverview":"院系内按需匹配与品相分级交易","marketSize":"高校教材年流转需求可观","competitiveAdvantage":"场景近、履约成本低","overallScore":62,"novelty":3.2,"feasibility":3.5,"marketPotential":3.0,"innovation":3.1,"summary":"方向贴近校园刚需，但差异化与履约机制仍需打磨。","strengths":["场景清晰、用户可达","交易成本较低","利于循环利用"],"weaknesses":["供给不稳定","信任与品控不足","变现路径弱"],"suggestions":["先做单学院试点","建立品相分级与担保","补充履约与售后规则"],"tags":["校园","二手","共享"]}`;
 
 function methodPrompt(roleLine, focusLine) {
   return buildStructuredSystemPrompt({
@@ -32,11 +39,13 @@ function methodPrompt(roleLine, focusLine) {
 }
 
 export const IDEATION_METHOD_LABELS = {
+  midwifery: '思辨助产启思',
   brainstorm: '头脑风暴',
-  scamper: 'SCAMPER',
-  triz: 'TRIZ',
   ai: 'AI创意',
   six_hats: '六帽创想室',
+  // 历史库只读兼容（前端已无入口）
+  scamper: 'SCAMPER',
+  triz: 'TRIZ',
 };
 
 export const IDEATION_METHOD_PROMPTS = {
@@ -70,6 +79,20 @@ export const IDEATION_METHOD_PROMPTS = {
 
 export function getIdeationMethodPrompt(methodKey) {
   return IDEATION_METHOD_PROMPTS[methodKey] || null;
+}
+
+/** 从分析结果抽取可映射选题字段（写入 form_payload / 前端填表） */
+export function pickTopicMappedFields(parsed = {}) {
+  const str = (k, alt = '') => String(parsed?.[k] ?? alt ?? '').trim();
+  return {
+    projectDirection: str('projectDirection') || str('direction'),
+    coreValue: str('coreValue'),
+    targetUsers: str('targetUsers'),
+    coreProblem: str('coreProblem'),
+    solutionOverview: str('solutionOverview'),
+    marketSize: str('marketSize'),
+    competitiveAdvantage: str('competitiveAdvantage'),
+  };
 }
 
 /** 供路由 normalize 时对齐「恰好 3 项」 */

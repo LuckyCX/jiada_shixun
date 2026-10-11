@@ -4,6 +4,7 @@
 import { generateDemoAi, uploadDemoFile } from './demoApi';
 import { DEMO_STUDENT_ID, DEMO_STUDENT_NAME, demoId, nowIso, patchFlow, readFlow } from './demoFlow';
 import {
+  MARKET_UPLOAD_METHODS,
   buildPublicSurveyUrl,
   totalChallengeRounds,
   type ChallengeFinalReport,
@@ -51,6 +52,8 @@ export type {
 type StoredUpload = MethodUploadItem & { method: string; url: string };
 
 type MarketBag = {
+  /** 是否已经写入过演示预制，避免老师删掉后再次自动补回 */
+  seeded?: boolean;
   plan: MarketResearchPlan | null;
   surveys: MarketSurvey[];
   responses: Record<string, SurveyResponseItem[]>;
@@ -92,14 +95,317 @@ function emptyBag(): MarketBag {
   };
 }
 
-function read(classId: string) {
+function pad2(n: number) {
+  return String(n).padStart(2, '0');
+}
+
+function formatDate(d: Date) {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+function formatDateTime(d: Date) {
+  return `${formatDate(d)} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
+/** 演示不读课程环节配置，固定给一段可编辑的时间窗 */
+function demoStagePeriod(plan?: MarketResearchPlan | null) {
+  if (plan?.startDate && plan?.endDate) {
+    return { startDate: plan.startDate, deadlineDate: plan.endDate };
+  }
+  const start = new Date();
+  start.setDate(start.getDate() - 7);
+  const end = new Date();
+  end.setDate(end.getDate() + 60);
+  return { startDate: formatDate(start), deadlineDate: formatDate(end) };
+}
+
+function textFileUrl(body: string) {
+  return `data:text/plain;charset=utf-8,${encodeURIComponent(body)}`;
+}
+
+function presetUpload(method: string, filename: string, body: string, daysAgo: number): StoredUpload {
+  const created = new Date();
+  created.setDate(created.getDate() - daysAgo);
+  return {
+    id: demoId(),
+    originalFilename: filename,
+    fileSize: body.length,
+    createdAt: created.toISOString(),
+    uploaderName: DEMO_STUDENT_NAME,
+    uploadedBy: DEMO_STUDENT_ID,
+    method,
+    url: textFileUrl(body),
+  };
+}
+
+function presetResponses(
+  surveyId: string,
+  questions: MarketSurveyQuestion[],
+  rows: Array<Record<string, string | number | string[]>>
+): SurveyResponseItem[] {
+  return rows.map((answers, index) => {
+    const submitted = new Date();
+    submitted.setDate(submitted.getDate() - (index + 1));
+    const mapped: Record<string, string | number | string[]> = {};
+    questions.forEach((q, qi) => {
+      mapped[q.id] = answers[String(qi)] ?? '';
+    });
+    return {
+      id: demoId(),
+      respondentToken: `demo-${surveyId}-${index + 1}`,
+      submittedAt: submitted.toISOString(),
+      answers: mapped,
+    };
+  });
+}
+
+/**
+ * 课堂演示第一次打开市场调研时写入预制：
+ * 已保存的调研计划、各方法上传记录、线上问卷（含回收）、用户画像和一份可直接看的分析结果。
+ */
+function presetBag(): MarketBag {
+  const period = demoStagePeriod();
+  const published = new Date();
+  published.setDate(published.getDate() - 3);
+  const closes = new Date();
+  closes.setDate(closes.getDate() + 21);
+
+  const coffeeQuestions: MarketSurveyQuestion[] = [
+    { id: demoId(), text: '您的年龄段是？', type: '单选', options: ['18岁以下', '18-22岁', '23-26岁', '27岁以上'] },
+    { id: demoId(), text: '您平均每周在咖啡或茶饮上的花费是？', type: '单选', options: ['30元以下', '30-80元', '80-150元', '150元以上'] },
+    { id: demoId(), text: '您对现有校园饮品的整体满意度是？', type: '评分' },
+    { id: demoId(), text: '您最希望改进的是哪些方面？', type: '多选', options: ['价格', '出餐速度', '口味', '营业时间', '座位环境'] },
+    { id: demoId(), text: '如果有一款「课后专注套餐」，您愿意尝试的原因是？', type: '填空' },
+  ];
+  const rivalQuestions: MarketSurveyQuestion[] = [
+    { id: demoId(), text: '您最近一个月最常去的饮品店是？', type: '单选', options: ['校内食堂窗口', '瑞幸', '蜜雪冰城', '独立咖啡馆'] },
+    { id: demoId(), text: '选择时您更看重？', type: '多选', options: ['价格', '距离', '口味稳定', '会员优惠'] },
+    { id: demoId(), text: '对该店的满意度打几分？', type: '评分' },
+    { id: demoId(), text: '您的年龄段是？', type: '单选', options: ['18-22岁', '23-26岁', '27岁以上'] },
+  ];
+  const priceQuestions: MarketSurveyQuestion[] = [
+    { id: demoId(), text: '一杯美式您能接受的最高价格是？', type: '单选', options: ['8元', '12元', '15元', '18元以上'] },
+    { id: demoId(), text: '什么情况下您愿意多付 3 元？', type: '多选', options: ['更好的豆子', '更快取餐', '可预约座位', '环保杯折扣'] },
+    { id: demoId(), text: '请补充您对定价的看法', type: '填空' },
+  ];
+
+  const coffeeId = 'demo-survey-coffee';
+  const rivalId = 'demo-survey-rival';
+  const priceId = 'demo-survey-price';
+  const coffeeResponses = presetResponses(coffeeId, coffeeQuestions, [
+    { 0: '18-22岁', 1: '30-80元', 2: 4, 3: ['价格', '出餐速度'], 4: '课间十分钟能取到，不想排队' },
+    { 0: '23-26岁', 1: '80-150元', 2: 3, 3: ['口味', '座位环境'], 4: '自习时需要稳定的插座和安静座位' },
+    { 0: '18-22岁', 1: '30元以下', 2: 2, 3: ['价格', '营业时间'], 4: '晚上图书馆闭馆前还想买一杯' },
+    { 0: '27岁以上', 1: '80-150元', 2: 5, 3: ['口味'], 4: '豆子新鲜、少糖就愿意复购' },
+  ]);
+  const rivalResponses = presetResponses(rivalId, rivalQuestions, [
+    { 0: '瑞幸', 1: ['价格', '会员优惠'], 2: 4, 3: '23-26岁' },
+    { 0: '校内食堂窗口', 1: ['距离', '价格'], 2: 3, 3: '18-22岁' },
+    { 0: '独立咖啡馆', 1: ['口味稳定'], 2: 5, 3: '27岁以上' },
+  ]);
+
+  const surveys: MarketSurvey[] = [
+    {
+      id: coffeeId,
+      title: '校园咖啡消费习惯问卷',
+      status: '进行中',
+      questions: coffeeQuestions,
+      collected: coffeeResponses.length,
+      link: buildPublicSurveyUrl('demo-coffee'),
+      publicSlug: 'demo-coffee',
+      fromPlan: false,
+      createdAt: published.toISOString(),
+      publishedAt: published.toISOString(),
+      publishedAtDisplay: formatDateTime(published),
+      closesAt: closes.toISOString(),
+      closesAtDisplay: formatDateTime(closes),
+    },
+    {
+      id: rivalId,
+      title: '竞品门店体验问卷',
+      status: '进行中',
+      questions: rivalQuestions,
+      collected: rivalResponses.length,
+      link: buildPublicSurveyUrl('demo-rival'),
+      publicSlug: 'demo-rival',
+      fromPlan: true,
+      createdAt: published.toISOString(),
+      publishedAt: published.toISOString(),
+      publishedAtDisplay: formatDateTime(published),
+      closesAt: closes.toISOString(),
+      closesAtDisplay: formatDateTime(closes),
+    },
+    {
+      id: priceId,
+      title: '价格敏感度问卷（草稿）',
+      status: '草稿',
+      questions: priceQuestions,
+      collected: 0,
+      link: '',
+      createdAt: nowIso(),
+      closesAt: closes.toISOString(),
+      closesAtDisplay: formatDateTime(closes),
+    },
+  ];
+
+  const personas: MarketPersona[] = [
+    {
+      id: 'demo-persona-lin',
+      name: '林晓晨',
+      age: 21,
+      occupation: '在校本科生',
+      major: '市场营销',
+      painPoints: ['课间排队超过 8 分钟就会放弃购买', '校内窗口口味不稳定', '晚上 9 点后几乎买不到热饮'],
+      needs: ['10 分钟内可取的专注套餐', '明确的低糖选项', '自习区附近的取餐点'],
+      habits: ['工作日下午买 1 杯', '更看重价格和距离', '愿意为会员第二杯半价复购'],
+      borderColor: 'border-green-400',
+      accentColor: 'text-green-600',
+      fromSurvey: true,
+      source: '校园咖啡消费习惯问卷',
+    },
+    {
+      id: 'demo-persona-zhou',
+      name: '周子涵',
+      age: 27,
+      occupation: '互联网产品经理',
+      major: '工商管理',
+      painPoints: ['连锁品牌同质化严重', '座位嘈杂，不适合线上会议', '会员券规则复杂'],
+      needs: ['安静角落和电源', '风味稳定的单品', '可提前预约取餐'],
+      habits: ['工作日早晚各一杯', '月消费 150 元左右', '优先选择评分高的独立店'],
+      borderColor: 'border-teal-400',
+      accentColor: 'text-teal-600',
+      fromSurvey: true,
+      source: '竞品门店体验问卷',
+    },
+    {
+      id: 'demo-persona-chen',
+      name: '陈一诺',
+      age: 34,
+      occupation: '自由职业者',
+      major: '计算机',
+      painPoints: ['找不到能久坐的位置', '甜度默认偏高', '高峰期出餐慢'],
+      needs: ['可久坐的下午茶场景', '豆子产地信息透明', '支持自带杯折扣'],
+      habits: ['下午集中工作 3 小时', '对价格不敏感、对口味敏感', '愿意为环保杯再付 2 元'],
+      borderColor: 'border-blue-400',
+      accentColor: 'text-blue-600',
+      fromSurvey: false,
+      source: '课堂演示预制',
+    },
+  ];
+
+  return {
+    seeded: true,
+    plan: {
+      goal: '验证「课后专注咖啡」在本校及周边年轻用户中的需求：弄清价格带、取餐时效、竞品差距，并形成可写进商业计划书的用户画像。',
+      methods: [...MARKET_UPLOAD_METHODS],
+      startDate: period.startDate,
+      endDate: period.deadlineDate,
+      assignments: [
+        { role: '问卷设计', memberIds: [DEMO_STUDENT_ID] },
+        { role: '数据收集', memberIds: [DEMO_STUDENT_ID] },
+        { role: '报告撰写', memberIds: [DEMO_STUDENT_ID] },
+      ],
+      savedAt: formatDateTime(published),
+    },
+    surveys,
+    responses: {
+      [coffeeId]: coffeeResponses,
+      [rivalId]: rivalResponses,
+    },
+    personas,
+    analysis: {
+      generatedAt: nowIso(),
+      result: {
+        score: 82,
+        conclusions: [
+          '18-26 岁用户是主力，价格带集中在 30-80 元/周',
+          '放弃购买的首要原因是排队和晚上买不到',
+          '竞品里连锁靠优惠、校内窗口靠距离，口味稳定性是空隙',
+        ],
+        opportunities: ['课间 10 分钟取餐', '低糖专注套餐', '晚间延时供应'],
+        risks: ['价格高于食堂窗口时转化下降', '座位供给不足会拉低复购'],
+        suggestions: ['先做单一美式和低糖拿铁', '用预约取餐避开课间高峰', '把画像写进计划书的目标客户章节'],
+        stats: {
+          totalCollected: coffeeResponses.length + rivalResponses.length,
+          validSamples: coffeeResponses.length + rivalResponses.length,
+          activeSurveyCount: 2,
+        },
+        charts: {
+          ageDistribution: [
+            { label: '18-22岁', value: 3 },
+            { label: '23-26岁', value: 2 },
+            { label: '27岁以上', value: 2 },
+          ],
+          spendingDistribution: [
+            { label: '30元以下', value: 1 },
+            { label: '30-80元', value: 1 },
+            { label: '80-150元', value: 2 },
+          ],
+          satisfactionDistribution: [
+            { label: '2分', value: 1 },
+            { label: '3分', value: 2 },
+            { label: '4分', value: 2 },
+            { label: '5分', value: 2 },
+          ],
+          improvementRanking: [
+            { label: '价格', value: 3 },
+            { label: '出餐速度', value: 2 },
+            { label: '口味', value: 2 },
+            { label: '营业时间', value: 1 },
+          ],
+        },
+        keyFindings: [
+          { title: '时效优先', desc: '课间场景里，超过 8 分钟排队就会流失。' },
+          { title: '价格带清晰', desc: '学生用户周消费多在 80 元以内，套餐定价宜落在 12-15 元。' },
+          { title: '竞品空隙', desc: '连锁靠优惠、食堂靠距离，稳定低糖和安静座位尚未被占住。' },
+        ],
+      },
+    },
+    uploads: [
+      presetUpload('用户访谈', '用户访谈-林同学.txt', '受访者：林晓晨，大三。课间只接受 8 分钟内取餐，晚上图书馆附近没有热饮。愿意为第二杯半价办会员。', 2),
+      presetUpload('用户访谈', '用户访谈-周先生.txt', '受访者：周子涵，产品经理。工作日两杯，在意座位是否安静、能否开会。会员规则复杂会直接换店。', 1),
+      presetUpload('竞品分析', '竞品分析-校内与连锁.txt', '食堂窗口：距离近、均价 8 元，口味波动大。瑞幸：优惠多、出餐快、座位少。独立咖啡馆：口味好、客单 22 元、高峰排队 15 分钟。', 2),
+      presetUpload('竞品分析', '竞品分析-价格带.txt', '本校周边美式价格：食堂 6-8 元，连锁 9.9-15 元，独立店 18-28 元。12-15 元有明确空档。', 1),
+      presetUpload('行业报告', '行业报告-校园饮品摘要.txt', '校园即时饮品复购看取餐时长和甜度可选。晚间档供给不足，专注学习场景的套餐尚未标准化。', 3),
+      presetUpload('数据爬取', '数据爬取-评论关键词.txt', '近 30 天公开评论高频词：排队、太甜、没座位、会员、出餐快。负面集中在高峰时段。', 2),
+      presetUpload('实地观察', '实地观察-食堂窗口.txt', '周二 12:10-12:30 观察：窗口排队 11 人，平均等待 9 分钟，3 人放弃。座位占用率约 90%。', 1),
+    ],
+    sessions: [],
+    report: { uploaded: false, uploadedAt: '', uploadedBy: '', payload: null },
+  };
+}
+
+function loadBag(classId: string) {
   const bag = readFlow(classId, 'market', emptyBag());
   bag.surveys = bag.surveys || [];
   bag.responses = bag.responses || {};
   bag.personas = bag.personas || [];
   bag.uploads = bag.uploads || [];
   bag.sessions = bag.sessions || [];
+  bag.analysis = bag.analysis || { result: null, generatedAt: '' };
+  bag.report = bag.report || { uploaded: false, uploadedAt: '', uploadedBy: '', payload: null };
   return bag;
+}
+
+/** 缺哪块补哪块；老师改过或删过之后不再自动补回 */
+function ensureSeed(classId: string) {
+  const bag = loadBag(classId);
+  if (bag.seeded) return bag;
+  const preset = presetBag();
+  if (!bag.plan) bag.plan = preset.plan;
+  if (!bag.surveys.length) {
+    bag.surveys = preset.surveys;
+    bag.responses = { ...preset.responses, ...bag.responses };
+  }
+  if (!bag.personas.length) bag.personas = preset.personas;
+  if (!bag.uploads.length) bag.uploads = preset.uploads;
+  if (!bag.analysis?.result) bag.analysis = preset.analysis;
+  bag.seeded = true;
+  return write(classId, bag);
+}
+
+function read(classId: string) {
+  return ensureSeed(classId);
 }
 
 function write(classId: string, bag: MarketBag) {
@@ -111,7 +417,7 @@ function planResponse(bag: MarketBag): MarketPlanResponse {
     plan: bag.plan,
     isTeamLeader: true,
     teamMembers: [{ id: DEMO_STUDENT_ID, name: DEMO_STUDENT_NAME }],
-    stagePeriod: null,
+    stagePeriod: demoStagePeriod(bag.plan),
   };
 }
 

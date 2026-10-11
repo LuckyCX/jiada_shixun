@@ -33,7 +33,7 @@ export function buildHatStudioRoundOrder() {
   return ['white', ...shuffleMiddleHatOrder(), 'blue'];
 }
 
-const HAT_ROLE_TEXT = {
+export const HAT_ROLE_TEXT = {
   white: `白帽（数据分析师）：只基于客观事实和数据发言。补充目标场景规模、用户行为线索、同类方案公开信息等可验证事实，不主观评价。`,
   red: `红帽（用户代表）：以目标用户身份谈第一感受：会不会想用、哪里别扭、最在意什么体验。少讲大道理。`,
   black: `黑帽（风险预警员）：指出关键约束与风险，并给出可写入工作区的调整建议；禁止只做否定、不给可采纳写法。`,
@@ -104,10 +104,20 @@ export const HAT_STUDIO_SINGLE_REPLY_SYSTEM_PROMPT = `你是六帽创想室中�
 #Objective#
 输出单条回复 JSON；尽量给出可写入工作区的 fills，便于学生一键采纳。
 
+#Style#
+（只能扮演用户提示【你的角色】中的那一顶帽子，禁止串戏）
+${HAT_ROLE_TEXT.white}
+${HAT_ROLE_TEXT.red}
+${HAT_ROLE_TEXT.black}
+${HAT_ROLE_TEXT.yellow}
+${HAT_ROLE_TEXT.green}
+${HAT_ROLE_TEXT.blue}
+
 #Schema#
 ${HAT_STUDIO_SINGLE_REPLY_SCHEMA}
 
 #Response#
+- 必须严格按【你的角色】人设发言：语气、视角、关注点都要像该帽，不得混成其他帽子或通用助教口吻。
 - 建设性、可落地，非反方辩论；承接历史已讨论内容。
 - 优先填写 fills（或 targetModule+moduleContent），给出可一键写入工作区的短文。
 - 只能输出 schema 规定键，禁止 markdown。`;

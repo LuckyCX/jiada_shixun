@@ -12,6 +12,19 @@ import multer from 'multer';
 import { getPool } from '../lib/db.js';
 import { logError } from '../lib/logError.js';
 import { chatCompletion, getEnabledProvider } from '../lib/llmGateway.js';
+import {
+  WAR_ROOM_ROUND_SYSTEM_PROMPT,
+  WAR_ROOM_SINGLE_REPLY_SYSTEM_PROMPT,
+} from '../lib/businessModelWarRoomPrompts.js';
+import {
+  HAT_STUDIO_ROUND_SYSTEM_PROMPT,
+  HAT_STUDIO_SINGLE_REPLY_SYSTEM_PROMPT,
+} from '../lib/ideationHatStudioPrompts.js';
+import {
+  getMidwiferyGeneratePrompt,
+  getMidwiferyTurnPrompt,
+} from '../lib/ideationMidwiferyPrompts.js';
+import { PRODUCT_DESIGN_SUGGESTION_JSON_SCHEMA } from '../lib/productDesignPrompts.js';
 import { normalizeUploadFileName } from '../lib/uploadFileName.js';
 import { requireAdmin, requireAuth, requireTeacher } from '../middleware/auth.js';
 
@@ -20,17 +33,45 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEMO_UPLOAD_ROOT = path.join(__dirname, '../../uploads/class-demo');
 const ALLOWED_EXT = new Set(['.pdf', '.png', '.jpg', '.jpeg', '.webp', '.gif', '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx', '.zip', '.txt', '.mp4', '.webm', '.mov']);
 
+/** 进卡片/字段的场景禁止 Markdown，避免演示页露出 ** / ### */
+const NO_MD = '不要使用 Markdown 符号（不要 **、###、---），用纯中文短句。';
+
 const SCENES = {
   team: '根据能力测评回答，用中文写一段组队分析，并给出建议角色。只返回 JSON：summary、role（ceo/product_rd/market_director/marketing_ops/sales/finance 之一）、roleLabel、strategic、market、techRisk（0-100 的数字）。',
-  ideation: '根据教师给出的课堂创意笔记，用中文写出 2～3 条可讲解的创业点子，每条包含名称、一句话描述、新颖性和可行性。',
+  ideation: `根据教师给出的课堂创意笔记，用中文写出 2～3 条可讲解的创业点子，每条包含名称、一句话描述、新颖性和可行性。${NO_MD}`,
   'market-persona': '根据调研笔记，用中文输出 2 个用户画像。只返回 JSON 数组，元素字段为 name、age、occupation、major、painPoints、needs、habits，值都是中文短句。',
-  'market-challenge': '扮演挑剔的评审，用中文指出这份调研的 3 个漏洞，并各给一条改法。',
-  'market-analysis': '用中文写一份简短调研结论，分「需求判断」「竞品差异」「建议动作」三节，不要英文键名。',
-  product: '用中文给出产品设计建议，分「核心功能」「体验要点」「迭代顺序」三节。',
-  business: '根据已有商业模式笔记，用中文补全或点评，分节输出，不要英文键名。',
+  'market-challenge': `扮演挑剔的评审，用中文指出这份调研的 3 个漏洞，并各给一条改法。${NO_MD}`,
+  'market-analysis': `用中文写一份简短调研结论，分「需求判断」「竞品差异」「建议动作」三节，不要英文键名。${NO_MD}`,
+  product: `只返回可直接渲染的产品设计建议 JSON，不要其它说明。Schema：${PRODUCT_DESIGN_SUGGESTION_JSON_SCHEMA}`,
+  business: `根据已有商业模式笔记，用中文补全或点评，分节输出，不要英文键名。${NO_MD}`,
+  /** 演示虚拟董事会：整轮六帽 / 单帽 @ 回复，人设与学生端同一套提示 */
+  'war-room-round': `${WAR_ROOM_ROUND_SYSTEM_PROMPT}\n（课堂演示：结果只显示在当前页，勿声称已写入学生档案。）`,
+  'war-room-reply': `${WAR_ROOM_SINGLE_REPLY_SYSTEM_PROMPT}\n（课堂演示：必须严格按用户给出的【你的角色】人设回复，禁止串戏。）`,
+  /** 演示六帽创想室：整轮 / 单帽 */
+  'hat-studio-round': `${HAT_STUDIO_ROUND_SYSTEM_PROMPT}\n（课堂演示：结果只显示在当前页，勿声称已写入学生档案。）`,
+  'hat-studio-reply': `${HAT_STUDIO_SINGLE_REPLY_SYSTEM_PROMPT}\n（课堂演示：必须严格按用户给出的【你的角色】人设回复，禁止串戏。）`,
+  /** 演示思辨助产：与学生端同源提示词 */
+  'ideation-midwifery-turn': `${getMidwiferyTurnPrompt()}\n（课堂演示：结果只显示在当前页，勿声称已写入学生档案。）`,
+  'ideation-midwifery-generate': `${getMidwiferyGeneratePrompt()}\n（课堂演示：结果只显示在当前页，勿声称已写入学生档案。）`,
+  /** 头脑风暴 / AI 创意对话生成结构化创意 JSON */
+  'ideation-chat-generate': `根据课堂对话笔记生成一条可讲解的创业创意。只返回 JSON，键齐全：title、description、projectDirection、coreValue、targetUsers、coreProblem、solutionOverview、marketSize、competitiveAdvantage、overallScore(0-100)、novelty、feasibility、marketPotential、innovation(0-5)、summary、strengths/weaknesses/suggestions/tags（各恰好 3 项字符串）。${NO_MD}`,
   simulation: '根据投入配置做一轮课堂用的经营推演。只返回 JSON：summary（中文一段）、users、revenue、cac、ltv（数字），series 为 7 项 {day,users,revenue}。',
-  'plan-comment': '用中文给这份商业计划书要点写一段课堂点评，并给出 0～100 的建议分，格式为「建议分：N」开头。',
+  'plan-comment': `用中文给这份商业计划书要点写一段课堂点评，并给出 0～100 的建议分，格式为「建议分：N」开头。${NO_MD}`,
 };
+
+const JSON_MODE_SCENES = new Set([
+  'simulation',
+  'market-persona',
+  'team',
+  'product',
+  'war-room-round',
+  'war-room-reply',
+  'hat-studio-round',
+  'hat-studio-reply',
+  'ideation-midwifery-turn',
+  'ideation-midwifery-generate',
+  'ideation-chat-generate',
+]);
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -141,7 +182,7 @@ router.post('/teacher/personal-classes/:classId/demo/ai', requireAuth(), require
       provider,
       system: `你是创新创业实训的课堂演示助教。教师正在演示学生操作，结果只显示在当前页面，不会写入学生成绩或团队档案。请用中文。不要声称已经保存到数据库。${SCENES[scene]}`,
       user: context,
-      jsonMode: scene === 'simulation' || scene === 'market-persona' || scene === 'team',
+      jsonMode: JSON_MODE_SCENES.has(scene),
     });
     return ok(req, res, { text });
   } catch (e) {

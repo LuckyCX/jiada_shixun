@@ -4,7 +4,6 @@ import { Button, Form, Input, Modal, Select, message } from 'antd';
 import VersionControl, { Version } from '../../../components/feature/VersionControl';
 import { sanitizeRichText } from '../../../lib/richText';
 import {
-  analyzeStudentIdeationIdea,
   fetchStudentIdeationProjectTopic,
   fetchStudentIdeationWorkspace,
   likeStudentIdeationIdea,
@@ -15,7 +14,7 @@ import {
   type IdeationProjectTopic,
   type IdeationProjectTopicDraft,
   type IdeationProjectTopicInput,
-  type IdeationMethodKey,
+  type IdeationChatMethodKey,
   type StudentIdeationAnalysis,
   type StudentIdeationDiscussion,
   type StudentIdeationIdea,
@@ -30,6 +29,7 @@ import {
   type InstanceLibraryCategory,
 } from '../../../lib/teacherInstanceLibraryApi';
 import IdeationHatStudio from './IdeationHatStudio';
+import IdeationMethodChat from './IdeationMethodChat';
 
 type AiAnalysis = StudentIdeationAnalysis;
 
@@ -47,29 +47,8 @@ export type IdeationLearningResource = {
   chapterTags: string[];
 };
 
-type IdeationFormValues = {
-  title?: string;
-  description?: string;
-  scamperDimension?: string;
-  problem?: string;
-  solution?: string;
-  domain?: string;
-  targetUser?: string;
-  need?: string;
-};
-
 type IdeationTopicFormValues = IdeationProjectTopicInput;
 export type IdeationModuleTab = 'examples' | 'methods' | 'confirm';
-
-const SCAMPER_OPTIONS = [
-  { label: '替代 - 可以用什么替代？', value: '替代 - 可以用什么替代？' },
-  { label: '组合 - 可以和什么组合？', value: '组合 - 可以和什么组合？' },
-  { label: '调整 - 可以如何调整？', value: '调整 - 可以如何调整？' },
-  { label: '修改 - 可以如何修改？', value: '修改 - 可以如何修改？' },
-  { label: '用途 - 还有什么用途？', value: '用途 - 还有什么用途？' },
-  { label: '消除 - 可以消除什么？', value: '消除 - 可以消除什么？' },
-  { label: '重组 - 可以如何重组？', value: '重组 - 可以如何重组？' },
-];
 
 const AVATAR_GRADIENTS = [
   'from-teal-500 to-cyan-500',
@@ -179,6 +158,29 @@ function applyTopicFormFromServer(topic: IdeationProjectTopic | null, draft: Ide
   return null;
 }
 
+/** 从创意库记录映射到选题表单字段 */
+function ideaToTopicFormValues(idea: Idea): IdeationTopicFormValues {
+  const fp = (idea.formPayload || {}) as Record<string, unknown>;
+  const str = (...keys: string[]) => {
+    for (const k of keys) {
+      const v = fp[k];
+      if (typeof v === 'string' && v.trim()) return v.trim();
+    }
+    return '';
+  };
+  return {
+    projectName: String(idea.title || str('title') || '').trim(),
+    projectDirection: str('projectDirection', 'direction'),
+    projectDescription: String(idea.description || str('description') || '').trim(),
+    coreValue: str('coreValue'),
+    targetUsers: str('targetUsers', 'targetUser'),
+    coreProblem: str('coreProblem', 'problem'),
+    solutionOverview: str('solutionOverview', 'solution'),
+    marketSize: str('marketSize'),
+    competitiveAdvantage: str('competitiveAdvantage'),
+  };
+}
+
 export default function IdeationModule({
   classId,
   learningResources = [],
@@ -188,18 +190,18 @@ export default function IdeationModule({
   onOpenLearningResource,
   onTaskComplete,
 }: IdeationModuleProps) {
-  const [form] = Form.useForm<IdeationFormValues>();
   const [topicForm] = Form.useForm<IdeationTopicFormValues>();
-  const methodDraftsRef = useRef<Partial<Record<IdeationMethodKey, IdeationFormValues>>>({});
-  const prevIdeationTabRef = useRef<IdeationModuleTab | null>(null);
   const [activeTab, setActiveTab] = useState<IdeationModuleTab>(initialTab || 'examples');
-  const [activeMethod, setActiveMethod] = useState<IdeationMethodKey>('brainstorm');
+  const [activeMethod, setActiveMethod] = useState<IdeationChatMethodKey>('midwifery');
+  /** 进过「创新方法工具」后保活对话，避免切到实例库/选题时卸载 */
+  const [keepMethodsChat, setKeepMethodsChat] = useState(() => (initialTab || 'examples') === 'methods');
   const [ideas, setIdeas] = useState<Idea[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [messages, setMessages] = useState<StudentIdeationDiscussion[]>([]);
   const [teamName, setTeamName] = useState('');
+  const [ideaPickOpen, setIdeaPickOpen] = useState(false);
+  const [pickedIdeaId, setPickedIdeaId] = useState<string | null>(null);
   const [workspaceLoading, setWorkspaceLoading] = useState(false);
-  const [submittingIdea, setSubmittingIdea] = useState(false);
   const [sendingDiscussion, setSendingDiscussion] = useState(false);
   const [checkingConfirmTab, setCheckingConfirmTab] = useState(false);
   const [expandedAnalysis, setExpandedAnalysis] = useState<string | null>(null);
@@ -233,6 +235,10 @@ export default function IdeationModule({
   useEffect(() => {
     if (initialTab) setActiveTab(initialTab);
   }, [initialTab]);
+
+  useEffect(() => {
+    if (activeTab === 'methods') setKeepMethodsChat(true);
+  }, [activeTab]);
 
   useEffect(() => {
     if (exampleCategories.length === 0) return;
@@ -341,40 +347,6 @@ export default function IdeationModule({
     };
   }, [classId]);
 
-  const persistMethodDraft = (method: IdeationMethodKey) => {
-    methodDraftsRef.current[method] = form.getFieldsValue(true);
-  };
-
-  const applyMethodDraft = (method: IdeationMethodKey) => {
-    form.resetFields();
-    const draft = methodDraftsRef.current[method];
-    if (draft) {
-      form.setFieldsValue(draft);
-    }
-    if (method === 'scamper' && !draft?.scamperDimension) {
-      form.setFieldValue('scamperDimension', SCAMPER_OPTIONS[0].value);
-    }
-  };
-
-  const switchMethod = (key: IdeationMethodKey) => {
-    if (key === activeMethod) return;
-    if (activeTab === 'methods') {
-      persistMethodDraft(activeMethod);
-    }
-    setActiveMethod(key);
-  };
-
-  useEffect(() => {
-    const prevTab = prevIdeationTabRef.current;
-    if (prevTab === 'methods' && activeTab !== 'methods') {
-      persistMethodDraft(activeMethod);
-    }
-    if (activeTab === 'methods') {
-      applyMethodDraft(activeMethod);
-    }
-    prevIdeationTabRef.current = activeTab;
-  }, [activeTab, activeMethod]);
-
   // 保存当前版本
   const handleSaveVersion = (summary: string) => {
     const newVersion: Version = {
@@ -403,7 +375,9 @@ export default function IdeationModule({
     setIdeas(data.ideas || []);
     if (data.topicDraft) topicForm.setFieldsValue(data.topicDraft);
     setMessages(data.messages || []);
-    setActiveMethod(data.activeMethod || 'brainstorm');
+    const restored = data.activeMethod as IdeationChatMethodKey | undefined;
+    const allowed: IdeationChatMethodKey[] = ['midwifery', 'brainstorm', 'ai', 'six_hats'];
+    setActiveMethod(restored && allowed.includes(restored) ? restored : 'midwifery');
     setCurrentVersion(version.versionNumber);
   };
 
@@ -422,53 +396,28 @@ export default function IdeationModule({
     }
   };
 
-  const buildFormPayload = (values: IdeationFormValues) => {
-    if (activeMethod === 'brainstorm') {
-      return {
-        title: values.title?.trim(),
-        description: values.description?.trim(),
-      };
+  const handleFillTopicFromIdea = () => {
+    if (!pickedIdeaId) {
+      message.warning('请先选择一条创意');
+      return;
     }
-    if (activeMethod === 'scamper') {
-      return {
-        scamperDimension: values.scamperDimension,
-        title: values.title?.trim(),
-        description: values.description?.trim(),
-      };
+    const idea = ideas.find((item) => item.id === pickedIdeaId);
+    if (!idea) {
+      message.error('创意不存在');
+      return;
     }
-    if (activeMethod === 'triz') {
-      return {
-        title: values.title?.trim(),
-        problem: values.problem?.trim(),
-        solution: values.solution?.trim(),
-        description: values.solution?.trim(),
-      };
+    const values = ideaToTopicFormValues(idea);
+    const directionOk =
+      !values.projectDirection ||
+      projectDirectionOptions.some((opt) => opt.value === values.projectDirection);
+    if (values.projectDirection && !directionOk) {
+      message.info('创意中的项目方向与实例库选项不匹配，请手动选择项目方向');
+      values.projectDirection = '';
     }
-    return {
-      domain: values.domain?.trim(),
-      targetUser: values.targetUser?.trim(),
-      need: values.need?.trim(),
-    };
-  };
-
-  const handleSubmitIdea = async (values: IdeationFormValues) => {
-    setSubmittingIdea(true);
-    try {
-      const idea = await analyzeStudentIdeationIdea(classId, {
-        methodKey: activeMethod,
-        formPayload: buildFormPayload(values),
-      });
-      setIdeas((prev) => [idea, ...prev.filter((item) => item.id !== idea.id)]);
-      setExpandedAnalysis(idea.id);
-      delete methodDraftsRef.current[activeMethod];
-      form.resetFields();
-      if (activeMethod === 'scamper') form.setFieldValue('scamperDimension', SCAMPER_OPTIONS[0].value);
-      message.success('创意分析已完成');
-    } catch (e) {
-      message.error(e instanceof Error ? e.message : '提交创意失败');
-    } finally {
-      setSubmittingIdea(false);
-    }
+    topicForm.setFieldsValue(values);
+    setIdeaPickOpen(false);
+    setPickedIdeaId(null);
+    message.success('已从创意库填入选题表单');
   };
 
   const handleVote = async (id: string) => {
@@ -585,14 +534,6 @@ export default function IdeationModule({
       : projectTopic?.status === 'rejected'
         ? '请根据教师意见修改后重新提交。'
         : '你的项目选题正在等待教师审核，审核通过后即可进入下一阶段。';
-
-  const methodTabs = [
-    { key: 'brainstorm' as const, label: '头脑风暴', icon: 'ri-lightbulb-flash-line', color: 'from-teal-500 to-cyan-500' },
-    { key: 'scamper' as const, label: 'SCAMPER', icon: 'ri-compass-3-line', color: 'from-orange-500 to-amber-500' },
-    { key: 'triz' as const, label: 'TRIZ', icon: 'ri-puzzle-line', color: 'from-green-500 to-emerald-500' },
-    { key: 'ai' as const, label: 'AI创意', icon: 'ri-sparkling-line', color: 'from-rose-500 to-pink-500' },
-    { key: 'six_hats' as const, label: '六帽创想室', icon: 'ri-user-voice-line', color: 'from-violet-500 to-fuchsia-500' },
-  ];
 
   const scoreBg = (score: number) => {
     if (score >= 90) return 'from-emerald-500 to-green-500';
@@ -772,37 +713,26 @@ export default function IdeationModule({
         </div>
       )}
 
-      {/* 创新方法工具 Tab */}
-      {activeTab === 'methods' && (
-        <div className="grid grid-cols-3 gap-6">
-         
-
-          {/* 左侧栏 */}
-          <div className="col-span-2 space-y-5">
-            {/* 创新方法工具 */}
-            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
-              <h3 className="text-base font-bold text-gray-900 mb-4">创新方法工具</h3>
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 mb-5">
-                {methodTabs.map((tab) => (
-                  <button
-                    key={tab.key}
-                    onClick={() => switchMethod(tab.key)}
-                    className={`px-3 py-2.5 text-xs font-semibold rounded-xl transition-all whitespace-nowrap cursor-pointer flex items-center justify-center gap-1.5 ${
-                      activeMethod === tab.key
-                        ? `bg-gradient-to-br ${tab.color} text-white shadow-md`
-                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                    }`}
-                  >
-                    <i className={tab.icon}></i>
-                    {tab.label}
-                  </button>
-                ))}
-              </div>
-
-              {activeMethod === 'six_hats' ? (
+      {/* 创新方法工具 Tab：首次进入后 hidden 保活，切换实例库/选题不丢对话 */}
+      {keepMethodsChat ? (
+      <div
+        className={activeTab === 'methods' ? 'space-y-5' : 'hidden'}
+        aria-hidden={activeTab !== 'methods'}
+      >
+            <IdeationMethodChat
+              classId={classId}
+              disabled={!teamName}
+              method={activeMethod}
+              onMethodChange={setActiveMethod}
+              onIdeaCreated={(idea) => {
+                setIdeas((prev) => [idea, ...prev.filter((item) => item.id !== idea.id)]);
+                setExpandedAnalysis(idea.id);
+              }}
+              hatStudioSlot={
                 <IdeationHatStudio
                   classId={classId}
                   disabled={!teamName}
+                  embedded
                   onIdeaCreated={() => {
                     void fetchStudentIdeationWorkspace(classId)
                       .then((ws) => {
@@ -811,141 +741,12 @@ export default function IdeationModule({
                       .catch(() => {});
                   }}
                 />
-              ) : (
-              <Form form={form} layout="vertical" onFinish={handleSubmitIdea} className="space-y-4">
-                {activeMethod === 'brainstorm' && (
-                  <div className="bg-teal-50 border border-teal-200 rounded-xl p-4">
-                    <h4 className="text-sm font-bold text-teal-900 mb-1">头脑风暴法</h4>
-                    <p className="text-xs text-teal-700 mb-2">自由发散思维，不限制创意方向，鼓励大胆想象</p>
-                    <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-teal-700">
-                      <span>延迟判断，先发散后收敛</span>
-                      <span>鼓励自由联想和组合</span>
-                      <span>追求数量，不限质量</span>
-                    </div>
-                  </div>
-                )}
+              }
+            />
 
-                {activeMethod === 'scamper' && (
-                  <>
-                    <div className="bg-orange-50 border border-orange-200 rounded-xl p-4">
-                      <h4 className="text-sm font-bold text-orange-900 mb-1">SCAMPER奔驰法</h4>
-                      <p className="text-xs text-orange-700 mb-2">从7个维度改进现有产品或服务</p>
-                      <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-orange-700">
-                        <span>S - 替代 (Substitute)</span>
-                        <span>C - 组合 (Combine)</span>
-                        <span>A - 调整 (Adapt)</span>
-                        <span>M - 修改 (Modify)</span>
-                        <span>P - 用途 (Put to other uses)</span>
-                        <span>E - 消除 (Eliminate)</span>
-                        <span>R - 重组 (Rearrange)</span>
-                      </div>
-                    </div>
-                    <Form.Item
-                      label="选择改进维度"
-                      name="scamperDimension"
-                      initialValue={SCAMPER_OPTIONS[0].value}
-                      rules={[{ required: true, message: '请选择改进维度' }]}
-                    >
-                      <Select options={SCAMPER_OPTIONS} />
-                    </Form.Item>
-                  </>
-                )}
-
-                {activeMethod === 'triz' && (
-                  <div className="bg-green-50 border border-green-200 rounded-xl p-4">
-                    <h4 className="text-sm font-bold text-green-900 mb-1">TRIZ创新原理</h4>
-                    <p className="text-xs text-green-700">基于40个创新原理解决技术矛盾，识别问题中的矛盾，运用TRIZ原理找到创新解决方案</p>
-                  </div>
-                )}
-
-                {activeMethod === 'ai' && (
-                  <div className="bg-rose-50 border border-rose-200 rounded-xl p-4">
-                    <h4 className="text-sm font-bold text-rose-900 mb-1">AI智能创意生成</h4>
-                    <p className="text-xs text-rose-700">基于市场趋势和用户需求，AI为你生成创新创意</p>
-                  </div>
-                )}
-
-                {activeMethod !== 'ai' && (
-                  <Form.Item
-                    label="创意标题"
-                    name="title"
-                    rules={[{ required: true, whitespace: true, message: '请输入创意标题' }]}
-                  >
-                    <Input maxLength={80} placeholder="用一句话描述你的创意" />
-                  </Form.Item>
-                )}
-
-                {(activeMethod === 'brainstorm' || activeMethod === 'scamper') && (
-                  <Form.Item
-                    label="创意描述"
-                    name="description"
-                    rules={[{ required: true, whitespace: true, message: '请输入创意描述' }]}
-                  >
-                    <Input.TextArea rows={4} maxLength={500} showCount placeholder="详细描述你的创意，包括核心亮点和初步可行性分析" />
-                  </Form.Item>
-                )}
-
-                {activeMethod === 'triz' && (
-                  <>
-                    <Form.Item
-                      label="问题描述"
-                      name="problem"
-                      rules={[{ required: true, whitespace: true, message: '请输入问题描述' }]}
-                    >
-                      <Input.TextArea rows={3} maxLength={500} showCount placeholder="描述你想解决的问题或技术矛盾" />
-                    </Form.Item>
-                    <Form.Item
-                      label="解决方案"
-                      name="solution"
-                      rules={[{ required: true, whitespace: true, message: '请输入解决方案' }]}
-                    >
-                      <Input.TextArea rows={3} maxLength={500} showCount placeholder="运用TRIZ原理提出的解决方案" />
-                    </Form.Item>
-                  </>
-                )}
-
-                {activeMethod === 'ai' && (
-                  <>
-                    <Form.Item
-                      label="目标领域"
-                      name="domain"
-                      rules={[{ required: true, whitespace: true, message: '请输入目标领域' }]}
-                    >
-                      <Input maxLength={80} placeholder="例如：教育科技、智慧校园、健康管理" />
-                    </Form.Item>
-                    <Form.Item
-                      label="目标用户"
-                      name="targetUser"
-                      rules={[{ required: true, whitespace: true, message: '请输入目标用户' }]}
-                    >
-                      <Input maxLength={80} placeholder="例如：大学生、上班族、老年人" />
-                    </Form.Item>
-                    <Form.Item
-                      label="核心需求"
-                      name="need"
-                      rules={[{ required: true, whitespace: true, message: '请输入核心需求' }]}
-                    >
-                      <Input.TextArea rows={3} maxLength={500} showCount placeholder="描述目标用户的核心痛点和需求" />
-                    </Form.Item>
-                  </>
-                )}
-
-                <Button
-                  htmlType="submit"
-                  type="primary"
-                  loading={submittingIdea}
-                  block
-                  className="!h-10 !rounded-xl !font-semibold !border-0 !bg-gradient-to-r !from-teal-500 !to-cyan-600 hover:!from-teal-600 hover:!to-cyan-700 !shadow-sm hover:!shadow-md"
-                >
-                  <i className="ri-sparkling-line text-white"></i>
-                  {activeMethod === 'ai' ? 'AI生成创意并分析' : '提交创意并获取AI分析'}
-                </Button>
-              </Form>
-              )}
-            </div>
-
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             {/* 团队创意库 */}
-            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+            <div className="lg:col-span-2 bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-base font-bold text-gray-900 flex items-center gap-2">
                   <i className="ri-archive-line text-teal-600"></i>
@@ -1197,9 +998,9 @@ export default function IdeationModule({
                 ))}
               </div>
             </div>
-          </div>
-           {/* 右侧主内容 */}
-           <div className="col-span-1 space-y-5">
+
+           {/* 团队创意库右侧：讨论 + 学习资源 */}
+           <div className="space-y-5">
               {/* 团队讨论 */}
               <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
               <h3 className="text-base font-bold text-gray-900 mb-4 flex items-center gap-2">
@@ -1292,11 +1093,10 @@ export default function IdeationModule({
                 ))}
               </div>
             </div>
-
-          
           </div>
         </div>
-      )}
+      </div>
+      ) : null}
 
       {/* 确定项目选题 Tab */}
       {activeTab === 'confirm' && (
@@ -1324,6 +1124,21 @@ export default function IdeationModule({
                   disabled={isSubmitting}
                   requiredMark={false}
                 >
+                  <div className="flex items-center justify-between gap-3 mb-4">
+                    <h3 className="text-base font-bold text-gray-900 m-0">填写项目选题</h3>
+                    <Button
+                      type="link"
+                      className="!px-0"
+                      disabled={!canEditTopic || ideas.length === 0}
+                      onClick={() => {
+                        setPickedIdeaId(ideas[0]?.id || null);
+                        setIdeaPickOpen(true);
+                      }}
+                    >
+                      <i className="ri-archive-drawer-line mr-1" />
+                      从创意库填入
+                    </Button>
+                  </div>
                   <Form.Item name="projectName" label="项目名称" rules={[{ required: true, message: '请输入项目名称' }, { min: 15, message: '项目名称至少需要15个字' }]}>
                     <Input placeholder="为你的项目起一个响亮的名字" />
                   </Form.Item>
@@ -1525,6 +1340,52 @@ export default function IdeationModule({
                 ))}
               </div>
             )}
+          </div>
+        )}
+      </Modal>
+
+      <Modal
+        title="从团队创意库填入选题"
+        open={ideaPickOpen}
+        onCancel={() => {
+          setIdeaPickOpen(false);
+          setPickedIdeaId(null);
+        }}
+        onOk={handleFillTopicFromIdea}
+        okText="填入表单"
+        cancelText="取消"
+        okButtonProps={{ className: '!bg-teal-500 !border-teal-500', disabled: !pickedIdeaId }}
+        width={560}
+      >
+        {ideas.length === 0 ? (
+          <p className="text-sm text-gray-500 py-6 text-center">暂无创意，请先在「创新方法工具」中生成并加入创意库</p>
+        ) : (
+          <div className="space-y-2 max-h-[420px] overflow-y-auto pr-1">
+            {ideas.map((idea) => {
+              const selected = pickedIdeaId === idea.id;
+              return (
+                <button
+                  key={idea.id}
+                  type="button"
+                  onClick={() => setPickedIdeaId(idea.id)}
+                  className={`w-full text-left rounded-xl border px-3 py-3 transition-all cursor-pointer ${
+                    selected ? 'border-teal-400 bg-teal-50' : 'border-gray-100 hover:border-teal-200'
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold text-gray-900 truncate">{idea.title}</div>
+                      <div className="text-xs text-gray-500 mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
+                        <span>{idea.method || idea.methodKey}</span>
+                        <span>{idea.author}</span>
+                        <span>{formatMessageTime(idea.createdAt)}</span>
+                      </div>
+                    </div>
+                    {selected && <i className="ri-checkbox-circle-fill text-teal-500 text-lg shrink-0" />}
+                  </div>
+                </button>
+              );
+            })}
           </div>
         )}
       </Modal>

@@ -1,6 +1,9 @@
 import { portalAuthenticatedFetch } from './authApi';
 
-export type IdeationMethodKey = 'brainstorm' | 'scamper' | 'triz' | 'ai' | 'six_hats';
+/** 当前入口方法；scamper/triz 仅兼容历史创意库只读展示 */
+export type IdeationMethodKey = 'midwifery' | 'brainstorm' | 'ai' | 'six_hats' | 'scamper' | 'triz';
+
+export type IdeationChatMethodKey = 'midwifery' | 'brainstorm' | 'ai' | 'six_hats';
 
 export type HatStudioHat = 'white' | 'red' | 'black' | 'yellow' | 'green' | 'blue' | 'user';
 
@@ -134,6 +137,17 @@ export type IdeationProjectTopicDraft = IdeationProjectTopicInput & {
   savedAt: string;
 };
 
+/** 对话生成后的预览创意（未入库） */
+export type IdeationIdeaPreview = {
+  methodKey: IdeationMethodKey;
+  method: string;
+  title: string;
+  description: string;
+  formPayload: Record<string, unknown>;
+  aiAnalysis: StudentIdeationAnalysis;
+  topicFields?: Partial<IdeationProjectTopicInput>;
+};
+
 export async function fetchStudentIdeationWorkspace(classId: string): Promise<StudentIdeationWorkspace> {
   return portalAuthenticatedFetch(
     'student',
@@ -143,7 +157,7 @@ export async function fetchStudentIdeationWorkspace(classId: string): Promise<St
 
 export async function analyzeStudentIdeationIdea(
   classId: string,
-  body: { methodKey: IdeationMethodKey; formPayload: Record<string, unknown> }
+  body: { methodKey: IdeationMethodKey; formPayload: Record<string, unknown>; previewOnly?: boolean }
 ): Promise<StudentIdeationIdea> {
   return portalAuthenticatedFetch(
     'student',
@@ -153,6 +167,77 @@ export async function analyzeStudentIdeationIdea(
       body: JSON.stringify(body),
     }
   ) as Promise<StudentIdeationIdea>;
+}
+
+/** 对话生成创意预览（不入库） */
+export async function previewStudentIdeationIdea(
+  classId: string,
+  body: { methodKey: IdeationMethodKey; formPayload: Record<string, unknown> }
+): Promise<IdeationIdeaPreview> {
+  return portalAuthenticatedFetch(
+    'student',
+    `/api/student/personal-classes/${encodeURIComponent(classId)}/ideation/ideas/analyze`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ ...body, previewOnly: true }),
+    }
+  ) as Promise<IdeationIdeaPreview>;
+}
+
+/** 将预览创意写入团队创意库 */
+export async function commitStudentIdeationIdea(
+  classId: string,
+  body: {
+    methodKey: IdeationMethodKey;
+    title: string;
+    description: string;
+    formPayload: Record<string, unknown>;
+    aiAnalysis: StudentIdeationAnalysis;
+  }
+): Promise<StudentIdeationIdea> {
+  return portalAuthenticatedFetch(
+    'student',
+    `/api/student/personal-classes/${encodeURIComponent(classId)}/ideation/ideas`,
+    {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }
+  ) as Promise<StudentIdeationIdea>;
+}
+
+export type MidwiferyTurnResult = {
+  assistantText: string;
+  roundIndex: number;
+  canGenerate: boolean;
+  doneHint: string;
+};
+
+export async function midwiferyTurn(
+  classId: string,
+  body: { messages: { role: 'user' | 'assistant'; content: string }[]; roundIndex: number }
+): Promise<MidwiferyTurnResult> {
+  return portalAuthenticatedFetch(
+    'student',
+    `/api/student/personal-classes/${encodeURIComponent(classId)}/ideation/methods/midwifery/turn`,
+    {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }
+  ) as Promise<MidwiferyTurnResult>;
+}
+
+export async function midwiferyGenerate(
+  classId: string,
+  body: { messages: { role: 'user' | 'assistant'; content: string }[] }
+): Promise<IdeationIdeaPreview> {
+  return portalAuthenticatedFetch(
+    'student',
+    `/api/student/personal-classes/${encodeURIComponent(classId)}/ideation/methods/midwifery/generate`,
+    {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }
+  ) as Promise<IdeationIdeaPreview>;
 }
 
 function hatStudioBase(classId: string) {
@@ -173,7 +258,7 @@ export async function hatStudioDebateStart(
   }) as Promise<{ roundMessages: HatStudioDebateMessage[]; studio: HatStudioPayload }>;
 }
 
-/** 清空本轮讨论并重新引导开场（默认保留右侧工作区） */
+/** 清空本轮讨论并重新引导开场；opts.clearDraft=true 时同时清空右侧创意工作区 */
 export async function hatStudioReset(
   classId: string,
   studentDisplayName: string,

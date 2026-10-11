@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Modal, message, Spin } from 'antd';
+import { Alert, Modal, message, Spin } from 'antd';
 import VersionControl, { Version } from '../../../../../components/feature/VersionControl';
 import { sanitizeRichText } from '../../../../../lib/richText';
 import {
@@ -30,7 +30,8 @@ interface DesignTool {
   color: string;
 }
 
-const MIN_PROJECT_CONTEXT_CHARS = 30;
+const DEFAULT_DEMO_CONTEXT =
+  '课堂演示项目：面向校园用户的轻量工具型产品，解决课后学习场景中的效率与体验问题。';
 
 const designTools: DesignTool[] = [
   {
@@ -346,15 +347,9 @@ export default function ProductDesignModule({
       message.warning('请先选择班级');
       return;
     }
-    const text = projectContext.trim();
-    if (!text) {
-      message.warning('请先输入项目背景信息');
-      return;
-    }
-    if (text.length < MIN_PROJECT_CONTEXT_CHARS) {
-      message.warning(`项目背景不少于 ${MIN_PROJECT_CONTEXT_CHARS} 字`);
-      return;
-    }
+    // 演示不卡字数：空背景用默认文案即可生成
+    const text = projectContext.trim() || DEFAULT_DEMO_CONTEXT;
+    if (!projectContext.trim()) setProjectContext(text);
     setIsGeneratingSuggestions(true);
     setStreamVisible(true);
     setStreamStatus('准备生成…');
@@ -520,9 +515,7 @@ export default function ProductDesignModule({
                 />
                 <div className="flex justify-between items-center mt-3">
                   <span className="text-xs text-gray-500">保存背景并生成建议时，将同步至全组</span>
-                  <span className="text-xs text-gray-500">
-                    {projectContext.length}/2000（至少{MIN_PROJECT_CONTEXT_CHARS}字）
-                  </span>
+                  <span className="text-xs text-gray-500">{projectContext.length}/2000</span>
                 </div>
               </div>
 
@@ -551,12 +544,7 @@ export default function ProductDesignModule({
                 <button
                   type="button"
                   onClick={() => void handleGenerateAISuggestions()}
-                  disabled={
-                    trainingEnded ||
-                    isGeneratingSuggestions ||
-                    projectContext.trim().length < MIN_PROJECT_CONTEXT_CHARS ||
-                    !classId
-                  }
+                  disabled={isGeneratingSuggestions || !classId}
                   className="flex-1 px-6 py-4 bg-gradient-to-r from-orange-500 to-red-500 text-white text-base font-medium rounded-xl hover:from-orange-600 hover:to-red-600 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
                 >
                   {isGeneratingSuggestions ? (
@@ -596,6 +584,16 @@ export default function ProductDesignModule({
           {/* 原型案例库 */}
           {activeTab === 'cases' && (
             <div className="space-y-6">
+              <Alert
+                type="info"
+                showIcon
+                message="正式开课请先维护原型案例库"
+                description={
+                  <span>
+                    本页展示为课堂演示用示例数据。正式班级需由老师在「课程设置」中进入「产品设计与迭代」详情，打开「原型案例库」维护案例后，学生端才能查看并参考原型案例。
+                  </span>
+                }
+              />
               {casesLoading ? (
                 <div className="flex justify-center py-16">
                   <Spin size="large" />
@@ -731,7 +729,7 @@ export default function ProductDesignModule({
                 type="file"
                 accept=".zip,application/zip"
                 className="hidden"
-                disabled={trainingEnded}
+                disabled={false}
                 onChange={handleZipInputChange}
               />
 
@@ -755,7 +753,7 @@ export default function ProductDesignModule({
                   <button
                     type="button"
                     onClick={() => void handleLeaderPickZip()}
-                    disabled={trainingEnded || uploadingZip || !classId}
+                    disabled={uploadingZip || !classId}
                     className="inline-flex items-center px-6 py-3 bg-orange-500 text-white text-sm font-medium rounded-lg hover:bg-orange-600 disabled:opacity-50"
                   >
                     {uploadingZip ? (
