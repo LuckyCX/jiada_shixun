@@ -33,7 +33,11 @@ import type { HatStudioComposerBind } from './IdeationHatStudio';
 export type IdeationMethodChatApi = {
   midwiferyTurn: (
     classId: string,
-    body: { messages: { role: 'user' | 'assistant'; content: string }[]; roundIndex: number }
+    body: {
+      messages: { role: 'user' | 'assistant'; content: string }[];
+      roundIndex: number;
+      threadId?: string;
+    }
   ) => Promise<MidwiferyTurnResult>;
   midwiferyGenerate: (
     classId: string,
@@ -41,7 +45,11 @@ export type IdeationMethodChatApi = {
   ) => Promise<IdeationIdeaPreview>;
   previewIdea: (
     classId: string,
-    body: { methodKey: IdeationMethodKey; formPayload: Record<string, unknown> }
+    body: {
+      methodKey: IdeationMethodKey;
+      formPayload: Record<string, unknown>;
+      threadId?: string;
+    }
   ) => Promise<IdeationIdeaPreview>;
   commitIdea: (
     classId: string,
@@ -54,6 +62,13 @@ export type IdeationMethodChatApi = {
     }
   ) => Promise<StudentIdeationIdea>;
 };
+
+function newThreadId(prefix: string) {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `${prefix}-${crypto.randomUUID()}`;
+  }
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
 
 const defaultApi: IdeationMethodChatApi = {
   midwiferyTurn,
@@ -327,6 +342,12 @@ export default function IdeationMethodChat({
   const [input, setInput] = useState('');
   /** 按方法隔离 loading：等待接口时仅锁定当前方法输入，仍可切换其他方法 */
   const [busyMap, setBusyMap] = useState<Partial<Record<IdeationChatMethodKey, boolean>>>({});
+  /** 会话线程 ID：随对话落库，供驾驶舱取证 */
+  const threadIdsRef = useRef<Partial<Record<IdeationChatMethodKey, string>>>({});
+  const ensureThreadId = (key: IdeationChatMethodKey) => {
+    if (!threadIdsRef.current[key]) threadIdsRef.current[key] = newThreadId(key);
+    return threadIdsRef.current[key] as string;
+  };
   const [joiningId, setJoiningId] = useState<string | null>(null);
   const [hatComposer, setHatComposer] = useState<HatStudioComposerBind | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -381,6 +402,9 @@ export default function IdeationMethodChat({
 
   const thread = threads[method] || emptyThread();
   const busy = Boolean(busyMap[method]) || (method === 'six_hats' && Boolean(hatComposer?.busy));
+  // 任一方法思考中（含六帽）时锁定底部方法切换，避免对话中途乱切
+  const methodSwitchLocked =
+    Object.values(busyMap).some(Boolean) || Boolean(hatComposer?.busy);
 
   const patchThread = (key: IdeationChatMethodKey, updater: (prev: ThreadState) => ThreadState) => {
     setThreads((prev) => {
@@ -407,7 +431,11 @@ export default function IdeationMethodChat({
       if (method === 'midwifery') {
         setMethodBusy('midwifery', true);
         try {
-          const res = await api.midwiferyTurn(classId, { messages: [], roundIndex: 0 });
+          const res = await api.midwiferyTurn(classId, {
+            messages: [],
+            roundIndex: 0,
+            threadId: ensureThreadId('midwifery'),
+          });
           // 过期请求（Strict Mode 第一次 effect）直接丢弃
           if (gen !== bootGenRef.current) return;
           const text = String(res?.assistantText || '').trim();
@@ -473,8 +501,12 @@ export default function IdeationMethodChat({
   }, [classId, method, disabled]);
 
   const handleSwitch = (key: IdeationChatMethodKey) => {
-    // 等待接口时仍允许切换方法，避免整页卡死在当前对话
     if (key === method) return;
+    // 思考中禁止切换方法，避免中断当前对话上下文
+    if (methodSwitchLocked) {
+      message.info('思考中，请稍候再切换方法');
+      return;
+    }
     setInput('');
     onMethodChange(key);
   };
@@ -544,15 +576,17 @@ export default function IdeationMethodChat({
         const res = await api.midwiferyTurn(classId, {
           messages: toApiMessages(nextMsgs),
           roundIndex: cur.roundIndex,
+          threadId: ensureThreadId('midwifery'),
         });
-        const canGen = Boolean(res.canGenerate);
+        // 一旦解锁「生成创意」则保持，避免第 4 轮及以后按钮消失
+        const canGen = Boolean(res.canGenerate) || Boolean(cur.canGenerate);
         const bodyText = sanitizeMidwiferyText(res.assistantText, canGen);
         const withHint =
           canGen && res.doneHint?.trim() ? `${bodyText}\n\n> ${res.doneHint.trim()}` : bodyText;
         patchThread('midwifery', (prev) => ({
           ...prev,
           roundIndex: res.roundIndex,
-          canGenerate: canGen,
+          canGenerate: canGen || prev.canGenerate,
           messages: [
             ...prev.messages,
             {
@@ -560,7 +594,7 @@ export default function IdeationMethodChat({
               id: `a-${Date.now()}`,
               role: 'assistant',
               content: withHint,
-              showGenerate: canGen,
+              showGenerate: canGen || prev.canGenerate,
             },
           ],
         }));
@@ -582,6 +616,7 @@ export default function IdeationMethodChat({
       const preview = await api.previewIdea(classId, {
         methodKey,
         formPayload: buildChatFormPayload(methodKey, nextMsgs),
+        threadId: ensureThreadId(methodKey),
       });
       patchThread(methodKey, (prev) => ({
         ...prev,
@@ -728,19 +763,28 @@ export default function IdeationMethodChat({
           />
           <div className="flex items-end gap-2 mt-1.5">
             <div className="flex flex-wrap gap-1.5 flex-1 min-w-0">
-              {IDEATION_CHAT_METHODS.map((tab) => (
-                <button
-                  key={tab.key}
-                  type="button"
-                  onClick={() => handleSwitch(tab.key)}
-                  className={`px-2.5 py-1.5 text-[11px] font-semibold rounded-lg transition-all cursor-pointer flex items-center gap-1 ${
-                    method === tab.key ? tab.activeClass : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                  }`}
-                >
-                  <i className={tab.icon} />
-                  {tab.label}
-                </button>
-              ))}
+              {IDEATION_CHAT_METHODS.map((tab) => {
+                const active = method === tab.key;
+                const switchDisabled = methodSwitchLocked && !active;
+                return (
+                  <button
+                    key={tab.key}
+                    type="button"
+                    disabled={switchDisabled}
+                    onClick={() => handleSwitch(tab.key)}
+                    className={`px-2.5 py-1.5 text-[11px] font-semibold rounded-lg transition-all flex items-center gap-1 ${
+                      active
+                        ? tab.activeClass
+                        : switchDisabled
+                          ? 'bg-gray-100 text-gray-400 opacity-60 cursor-not-allowed'
+                          : 'bg-gray-100 text-gray-600 hover:bg-gray-200 cursor-pointer'
+                    }`}
+                  >
+                    <i className={tab.icon} />
+                    {tab.label}
+                  </button>
+                );
+              })}
             </div>
             <button
               type="button"

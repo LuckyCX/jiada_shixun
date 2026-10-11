@@ -5,7 +5,13 @@ import { getPool } from '../lib/db.js';
 import { logError } from '../lib/logError.js';
 import { requireAuth, requireStudent } from '../middleware/auth.js';
 import { chatCompletionStream, friendlyLlmErrorMessage, getEnabledProvider } from '../lib/llmGateway.js';
-import { ROLE_SIMULATION_SYSTEM_PROMPT, buildRoleSimulationUserPrompt } from '../lib/roleSimulationPrompts.js';
+import {
+  ROLE_SIMULATION_SYSTEM_PROMPT,
+  buildRoleSimulationUserPrompt,
+  extractJsonObjectsFromBuffer,
+  normalizeSimulationDays,
+  rollSimulationScenario,
+} from '../lib/roleSimulationPrompts.js';
 import { assembleBusinessModelAiBundle } from '../lib/businessModelContext.js';
 import { evaluateModulePrerequisiteForStudent } from '../lib/trainingModulePrerequisite.js';
 
@@ -120,6 +126,8 @@ async function countPassedKnowledgePoints(pool, studentId, knowledgePointIds) {
 function sseWrite(res, event, data) {
   res.write(`event: ${event}\n`);
   res.write(`data: ${JSON.stringify(data)}\n\n`);
+  // 尽量立刻刷到客户端，避免被代理/压缩缓冲导致「不流式」
+  if (typeof res.flush === 'function') res.flush();
 }
 
 function truncateMiddle(s, max) {
@@ -361,7 +369,8 @@ router.post('/student/personal-classes/:classId/role-simulation/simulate/stream'
     const days = [...existingDays].filter((d) => d && typeof d === 'object');
     let finalOptimize = null;
     const thinkingLines = [];
-    let lineBuffer = '';
+    let jsonBuffer = '';
+    const seenDayNos = new Set(days.map((d) => Number(d?.day || 0)).filter((n) => n > 0));
     const bundle = await assembleBusinessModelAiBundle(ctx.pool, ctx.team.id, UPLOAD_ROOT);
     const [analysisText, personasText] = await Promise.all([
       loadMarketAnalysisText(ctx.pool, ctx.team.id),
@@ -370,6 +379,37 @@ router.post('/student/personal-classes/:classId/role-simulation/simulate/stream'
     const contextText = [bundle, analysisText, personasText].filter(Boolean).join('\n\n');
     const businessModelWorkspaceText = await loadBusinessModelWorkspaceText(ctx.pool, ctx.team.id);
 
+    const applyParsedObject = (j, { emit = true } = {}) => {
+      if (!j || typeof j !== 'object') return;
+      if (j.type === 'day' && Number.isFinite(Number(j.day))) {
+        const dayNo = Number(j.day);
+        if (resumeFromDay > 0 && dayNo <= resumeFromDay) return;
+        const existingIdx = days.findIndex((x) => Number(x?.day || 0) === dayNo);
+        if (existingIdx >= 0) days[existingIdx] = j;
+        else days.push(j);
+        const isNew = !seenDayNos.has(dayNo);
+        seenDayNos.add(dayNo);
+        if (emit && isNew) {
+          sseWrite(res, 'day_result', j);
+          const tracking = {
+            days,
+            users: j?.users ?? 0,
+            revenue: j?.revenue ?? 0,
+            cac: j?.cac ?? 0,
+            ltv: j?.ltv ?? 0,
+          };
+          void updateRunTracking(ctx, created.runId, tracking, thinkingLines).catch(() => {});
+        }
+        return;
+      }
+      if (j.type === 'final') {
+        finalOptimize = j?.optimize || null;
+        if (emit && finalOptimize) sseWrite(res, 'final_snapshot', { optimize: finalOptimize });
+      }
+    };
+
+    // 每轮抽样主基调，避免模型默认「一路上涨」；温度略提高以增加轨迹多样性
+    const scenario = rollSimulationScenario();
     const mergedText = await chatCompletionStream({
       provider,
       system: ROLE_SIMULATION_SYSTEM_PROMPT,
@@ -380,12 +420,13 @@ router.post('/student/personal-classes/:classId/role-simulation/simulate/stream'
         contextText,
         businessModelWorkspaceText,
         resumeFromDay,
+        scenario,
       }),
+      temperature: 0.75,
       onEvent: (ev) => {
         if (!ev?.text) return;
         if (ev.kind === 'thinking') {
           const text = String(ev.text);
-          // 以换行切分后保留最后 5 行
           const parts = text.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
           for (const p of parts) {
             thinkingLines.push(p);
@@ -395,74 +436,62 @@ router.post('/student/personal-classes/:classId/role-simulation/simulate/stream'
           return;
         }
         if (ev.kind === 'content') {
-          lineBuffer += String(ev.text);
-          const lines = lineBuffer.split(/\r?\n/);
-          lineBuffer = lines.pop() || '';
-          for (const rawLine of lines) {
-            const trimmed = String(rawLine || '').trim();
-            if (!trimmed) continue;
-            let j = null;
-            try {
-              j = JSON.parse(trimmed);
-            } catch {
-              continue;
-            }
-            if (j?.type === 'day' && Number.isFinite(Number(j.day))) {
-              const dayNo = Number(j.day);
-              if (resumeFromDay > 0 && dayNo <= resumeFromDay) {
-                // 忽略重复天
-                return;
-              }
-              const existingIdx = days.findIndex((x) => Number(x?.day || 0) === dayNo);
-              if (existingIdx >= 0) days[existingIdx] = j;
-              else days.push(j);
-              sseWrite(res, 'day_result', j);
-              // 每天增量更新一次，刷新页面可看到最新进度
-              const tracking = {
-                days,
-                users: j?.users ?? 0,
-                revenue: j?.revenue ?? 0,
-                cac: j?.cac ?? 0,
-                ltv: j?.ltv ?? 0,
-              };
-              void updateRunTracking(ctx, created.runId, tracking, thinkingLines).catch(() => {});
-            } else if (j?.type === 'final') {
-              finalOptimize = j?.optimize || null;
-              sseWrite(res, 'final_snapshot', { optimize: finalOptimize });
-            }
-          }
+          // 兼容「单行 NDJSON」与「多行美化 JSON」两种模型输出
+          jsonBuffer += String(ev.text);
+          const { objects, rest } = extractJsonObjectsFromBuffer(jsonBuffer);
+          jsonBuffer = rest;
+          for (const j of objects) applyParsedObject(j, { emit: true });
         }
       },
     });
 
-    // 尝试解析末尾 buffer
-    const last = String(lineBuffer || '').trim();
-    if (last) {
-      try {
-        const j = JSON.parse(last);
-        if (j?.type === 'day') {
-          days.push(j);
-          sseWrite(res, 'day_result', j);
-        } else if (j?.type === 'final') {
-          finalOptimize = j?.optimize || null;
-          sseWrite(res, 'final_snapshot', { optimize: finalOptimize });
-        }
-      } catch {
-        /* ignore */
-      }
+    // 冲刷缓冲 + 若流式阶段一个 day 都没解析到，再从全文兜底解析并补推
+    if (jsonBuffer.trim()) {
+      const { objects, rest } = extractJsonObjectsFromBuffer(jsonBuffer);
+      jsonBuffer = rest;
+      for (const j of objects) applyParsedObject(j, { emit: true });
+    }
+    if (days.length <= existingDays.length && mergedText) {
+      const { objects } = extractJsonObjectsFromBuffer(String(mergedText));
+      for (const j of objects) applyParsedObject(j, { emit: true });
     }
 
-    const day30 = days.find((d) => Number(d?.day) === 30) || null;
+    // 落库前整形：去锯齿、补平台期；summary.revenue 用累计营收末日值
+    const normalizedDays = normalizeSimulationDays(days, {
+      price: Number(config?.price || 0),
+      tone: scenario.tone,
+    });
+    days.length = 0;
+    days.push(...normalizedDays);
+    const lastDay = normalizedDays[normalizedDays.length - 1] || null;
     const tracking = {
-      days,
-      users: day30?.users ?? 0,
-      revenue: day30?.revenue ?? 0,
-      cac: day30?.cac ?? 0,
-      ltv: day30?.ltv ?? 0,
+      days: normalizedDays,
+      users: lastDay?.users ?? 0,
+      revenue: lastDay?.revenue ?? 0,
+      cac: lastDay?.cac ?? 0,
+      ltv: lastDay?.ltv ?? 0,
       raw: mergedText ? String(mergedText).slice(0, 20000) : '',
     };
 
     await updateRunFinalize(ctx, created.runId, tracking, finalOptimize || {}, thinkingLines);
+
+    try {
+      const { scheduleScoreTeamStage } = await import('../lib/teamCockpitScoring.js');
+      const { insertTeamAiInteractionLog } = await import('../lib/teamAiInteractionLog.js');
+      await insertTeamAiInteractionLog({
+        classId: ctx.classId,
+        teamId: ctx.team.id,
+        studentId: ctx.sid,
+        moduleKey: 'simulation',
+        scene: 'simulation_run',
+        role: 'event',
+        content: `完成仿真运行 #${created.runIndex}`,
+        meta: { runId: created.runId, runIndex: created.runIndex },
+      });
+      scheduleScoreTeamStage(ctx.classId, ctx.team.id, 'simulation');
+    } catch (hookErr) {
+      logError('role-simulation cockpit hook', hookErr);
+    }
 
     sseWrite(res, 'done', {
       runId: created.runId,

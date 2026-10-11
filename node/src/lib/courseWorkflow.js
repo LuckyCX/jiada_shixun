@@ -60,6 +60,23 @@ export async function wipeClassModuleData(client, classId, moduleKey) {
 
   const teamIdsSql = `SELECT id FROM teacher_personal_class_teams WHERE teacher_personal_class_id = $1`;
 
+  // 驾驶舱：清空该环节过程分与交互日志；总评依赖全阶段，一并清除以便重算
+  await client.query(
+    `DELETE FROM teacher_personal_class_team_stage_process_scores
+     WHERE module_key = $2 AND team_id IN (${teamIdsSql})`,
+    [classId, key]
+  ).catch(() => {});
+  await client.query(
+    `DELETE FROM teacher_personal_class_team_ai_interaction_logs
+     WHERE module_key = $2 AND team_id IN (${teamIdsSql})`,
+    [classId, key]
+  ).catch(() => {});
+  await client.query(
+    `DELETE FROM teacher_personal_class_team_final_evaluations
+     WHERE team_id IN (${teamIdsSql})`,
+    [classId]
+  ).catch(() => {});
+
   if (key === 'ideation') {
     await client.query(
       `DELETE FROM teacher_personal_class_team_project_topics WHERE teacher_personal_class_id = $1`,

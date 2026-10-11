@@ -178,13 +178,18 @@ export default defineConfig(({ mode }) => {
     port: 3000,
     host: "0.0.0.0",
     proxy: {
+      // AI 生成类接口可能数分钟才返回，需拉长代理超时，避免浏览器一直 pending
       "/api": {
         target: "http://127.0.0.1:4000",
         changeOrigin: true,
+        timeout: 600_000,
+        proxyTimeout: 600_000,
       },
       "/uploads": {
         target: "http://127.0.0.1:4000",
         changeOrigin: true,
+        timeout: 600_000,
+        proxyTimeout: 600_000,
       },
     },
   },

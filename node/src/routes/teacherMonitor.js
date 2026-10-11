@@ -17,6 +17,7 @@ import {
   STAGE_META,
   MARKET_UPLOAD_ROOT,
 } from '../lib/teacherTeamWorkspace.js';
+import { loadTeamCockpit } from '../lib/teamCockpitScoring.js';
 
 const router = Router();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -921,6 +922,31 @@ router.get(
       });
     } catch (e) {
       logError(`GET workspace-summary traceId=${req.traceId}`, e);
+      return bad(req, res, 500, 50000, e.message);
+    }
+  }
+);
+
+/** 团队实训驾驶舱：成员画像、过程分、总评 */
+router.get(
+  '/teacher/personal-classes/:classId/monitor/teams/:teamId/cockpit',
+  requireAuth(),
+  requireTeacher(),
+  async (req, res) => {
+    try {
+      const tid = teacherIdFromReq(req);
+      const classId = parseId(req.params.classId);
+      const teamId = parseId(req.params.teamId);
+      if (!tid || !classId || !teamId) return bad(req, res, 400, 40003, '参数无效');
+      const pool = getPool();
+      if (!(await ownsPersonalClass(pool, tid, classId))) {
+        return bad(req, res, 404, 40402, '班级不存在或无权操作');
+      }
+      const data = await loadTeamCockpit(pool, classId, teamId);
+      if (!data) return bad(req, res, 404, 40403, '团队不存在');
+      return ok(req, res, data);
+    } catch (e) {
+      logError(`GET team cockpit traceId=${req.traceId}`, e);
       return bad(req, res, 500, 50000, e.message);
     }
   }

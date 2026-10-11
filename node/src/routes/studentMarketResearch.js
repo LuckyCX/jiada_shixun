@@ -605,6 +605,12 @@ router.post(
   requireAuth(),
   requireStudent(),
   async (req, res) => {
+    // 长耗时 LLM：关闭 socket 空闲超时；客户端断开则取消上游调用
+    req.setTimeout(0);
+    res.setTimeout(0);
+    const abort = new AbortController();
+    const onClientGone = () => abort.abort();
+    req.on('close', onClientGone);
     try {
       const ctx = await requireTeamContext(req, res);
       if (!ctx) return;
@@ -626,12 +632,28 @@ router.post(
       if (!provider) return bad(req, res, 400, 40011, '未配置已启用的多模态模型');
 
       logPromptToConsole(provider, MARKET_SURVEY_SYSTEM_PROMPT, userPrompt);
-      const raw = await chatCompletion({
-        provider,
-        system: MARKET_SURVEY_SYSTEM_PROMPT,
-        user: userPrompt,
-        jsonMode: true,
-      });
+      let raw;
+      try {
+        raw = await chatCompletion({
+          provider,
+          system: MARKET_SURVEY_SYSTEM_PROMPT,
+          user: userPrompt,
+          jsonMode: true,
+          signal: abort.signal,
+        });
+      } catch (e) {
+        // 部分模型对 response_format / 非流式偶发挂起或报错，取消后勿重试；其余回退非 jsonMode
+        if (abort.signal.aborted || /abort|cancel/i.test(String(e?.name || e?.message || ''))) throw e;
+        logError('market survey ai-generate jsonMode failed, retry without', e);
+        raw = await chatCompletion({
+          provider,
+          system: MARKET_SURVEY_SYSTEM_PROMPT,
+          user: userPrompt,
+          jsonMode: false,
+          signal: abort.signal,
+        });
+      }
+      if (abort.signal.aborted || res.writableEnded) return;
       const parsed = extractJsonObject(raw);
       const normalized = normalizeLlmSurveyPayload(parsed, params.includeTypes, params.questionCount);
       if (normalized.error) return bad(req, res, 400, 40016, normalized.error);
@@ -644,11 +666,18 @@ router.post(
           type: q.type,
           options: q.options,
         })),
-        promptEcho: { system: MARKET_SURVEY_SYSTEM_PROMPT, user: userPrompt },
+        // 不回传完整 prompt，避免超大响应卡在代理层
+        promptEcho: {
+          system: MARKET_SURVEY_SYSTEM_PROMPT.slice(0, 500),
+          user: userPrompt.slice(0, 500),
+        },
       });
     } catch (e) {
+      if (abort.signal.aborted || res.writableEnded) return;
       logError(`POST market-research ai-generate traceId=${req.traceId}`, e);
       return bad(req, res, 500, 50000, friendlyLlmErrorMessage(e));
+    } finally {
+      req.off('close', onClientGone);
     }
   }
 );
@@ -1134,6 +1163,21 @@ router.post(
            generated_at = now()`,
         [ctx.team.id, JSON.stringify(norm.result), ctx.sid]
       );
+      try {
+        const { insertTeamAiInteractionLog } = await import('../lib/teamAiInteractionLog.js');
+        await insertTeamAiInteractionLog({
+          classId: ctx.classId,
+          teamId: ctx.team.id,
+          studentId: ctx.sid,
+          moduleKey: 'market',
+          scene: 'market_analysis_generate',
+          role: 'event',
+          content: 'AI 生成市场调研分析报告',
+          meta: { summary: String(norm.result?.summary || '').slice(0, 300) },
+        });
+      } catch (logErr) {
+        logError('market analysis interaction log', logErr);
+      }
       sseWrite(res, 'done', { result: norm.result });
       res.end();
     } catch (e) {
@@ -1334,6 +1378,21 @@ router.post(
           [ctx.team.id, JSON.stringify(p), ctx.sid]
         );
         inserted.push(mapPersonaRow(rows[0]));
+      }
+      try {
+        const { insertTeamAiInteractionLog } = await import('../lib/teamAiInteractionLog.js');
+        await insertTeamAiInteractionLog({
+          classId: ctx.classId,
+          teamId: ctx.team.id,
+          studentId: ctx.sid,
+          moduleKey: 'market',
+          scene: 'persona_generate',
+          role: 'event',
+          content: `AI 生成用户画像 ${inserted.length} 个`,
+          meta: { count: inserted.length, ids: inserted.map((p) => p.id) },
+        });
+      } catch (logErr) {
+        logError('persona generate interaction log', logErr);
       }
       sseWrite(res, 'done', { personas: inserted });
       res.end();
@@ -1824,6 +1883,24 @@ router.post(
            payload = EXCLUDED.payload`,
         [ctx.team.id, ctx.sid, JSON.stringify(payload)]
       );
+
+      try {
+        const { scheduleScoreTeamStage } = await import('../lib/teamCockpitScoring.js');
+        const { insertTeamAiInteractionLog } = await import('../lib/teamAiInteractionLog.js');
+        await insertTeamAiInteractionLog({
+          classId: ctx.classId,
+          teamId: ctx.team.id,
+          studentId: ctx.sid,
+          moduleKey: 'market',
+          scene: 'market_report_upload',
+          role: 'event',
+          content: '团队已上传市场调研报告',
+          meta: { surveyCount: rawSurveyIds.length, personaCount: personaRows.length },
+        });
+        scheduleScoreTeamStage(ctx.classId, ctx.team.id, 'market');
+      } catch (hookErr) {
+        logError('market report cockpit hook', hookErr);
+      }
 
       return ok(req, res, { uploaded: true });
     } catch (e) {

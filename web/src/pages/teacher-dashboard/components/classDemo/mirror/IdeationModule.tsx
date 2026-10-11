@@ -1185,7 +1185,7 @@ export default function IdeationModule({
                       从创意库填入
                     </Button>
                   </div>
-                  <Form.Item name="projectName" label="项目名称" rules={[{ required: true, message: '请输入项目名称' }, { min: 15, message: '项目名称至少需要15个字' }]}>
+                  <Form.Item name="projectName" label="项目名称" rules={[{ required: true, message: '请输入项目名称' }, { min: 5, message: '项目名称至少需要5个字' }]}>
                     <Input placeholder="为你的项目起一个响亮的名字" />
                   </Form.Item>
                   <Form.Item name="projectDirection" label="项目方向" rules={[{ required: true, message: '请选择项目方向' }]}>

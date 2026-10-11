@@ -848,7 +848,7 @@ export default function TeacherDashboard() {
             </h1>
             <p className="hidden md:block text-xs text-gray-400 mt-0.5">
               {activeTab === 'monitor' && `共 ${monitorTeams.length} 个团队 · ${monitorTeams.filter(t => t.status !== 'on-track').length} 个需关注`}
-              {activeTab === 'teamWorkspace' && '查看各环节过程记录与提交内容（只读）'}
+              {activeTab === 'teamWorkspace' && '实训驾驶舱 · 实训流程各环节只读详情'}
               {activeTab === 'analysis' && '智能分析学生学习数据'}
               {activeTab === 'guidance' && selectedPersonalClass && '发送引导与管理实训任务'}
               {activeTab === 'guidance' && !selectedPersonalClass && '动态引导工具'}

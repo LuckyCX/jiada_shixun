@@ -26,8 +26,11 @@ export default function ClassDemoPage({
   stage: string;
   onStageChange: (stage: DemoStageKey) => void;
 }) {
-  // 演示侧栏固定展示实训流程 1–7，不随课程设置开关隐藏
-  const stages = useMemo(() => COURSE_SETTING_STAGES, []);
+  // 实训模块侧栏与课程设置一致：略过模块不展示
+  const stages = useMemo(
+    () => COURSE_SETTING_STAGES.filter((s) => enabledModuleKeys.includes(s.key)),
+    [enabledModuleKeys]
+  );
   const learningMenus: { key: DemoStageKey; label: string; icon: string }[] = [
     { key: 'overview', label: '进度看板', icon: 'ri-dashboard-line' },
     { key: 'knowledge', label: '实践课程', icon: 'ri-book-2-line' },
@@ -48,6 +51,23 @@ export default function ClassDemoPage({
   useEffect(() => {
     if (stage === 'archive') onStageChange('overview');
   }, [stage, onStageChange]);
+
+  // 指向已略过模块或不可用审核入口时回退 overview
+  useEffect(() => {
+    if (!stage || stage === 'archive' || stage === 'overview' || stage === 'knowledge') return;
+    if (stage === 'topicReview' && !showTopicReview) {
+      onStageChange('overview');
+      return;
+    }
+    if (stage === 'planReview' && !showPlanReview) {
+      onStageChange('overview');
+      return;
+    }
+    const isCourseStage = COURSE_SETTING_STAGES.some((s) => s.key === stage);
+    if (isCourseStage && !enabledModuleKeys.includes(stage as CourseSettingStageKey)) {
+      onStageChange('overview');
+    }
+  }, [stage, enabledModuleKeys, showTopicReview, showPlanReview, onStageChange]);
 
   useEffect(() => {
     setPlanDetailId(null);

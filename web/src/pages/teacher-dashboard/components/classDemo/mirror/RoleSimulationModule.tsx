@@ -457,6 +457,7 @@ const RoleSimulationModule = ({ classId, onTaskComplete, trainingEnded = false }
               setOptimize(data?.optimize || null);
               setIsRunning(false);
               setSimDay(30);
+              syncTrackingFromRecord({ tracking: data?.tracking || {} });
               setLatestSnapshot({
                 runId: String(data?.runId || ''),
                 runIndex: Number(data?.runIndex || activeRunIndex || 0),
@@ -585,6 +586,7 @@ const RoleSimulationModule = ({ classId, onTaskComplete, trainingEnded = false }
             setOptimize(data?.optimize || null);
             setIsRunning(false);
             setSimDay(30);
+            syncTrackingFromRecord({ tracking: data?.tracking || {} });
             onTaskComplete?.();
             return;
           }

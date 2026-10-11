@@ -196,3 +196,77 @@ export async function fetchTeacherTeamStageWorkspace(
   ) as Promise<TeacherStageWorkspace>;
 }
 
+export type TeacherCockpitStageScore = {
+  key: string;
+  name: string;
+  skipped: boolean;
+  weight: number;
+  complete: boolean;
+  status: string;
+  totalScore: number | null;
+  comment: string;
+  dimensionScores: Record<string, number> | null;
+  scoredAt: string;
+  evidenceSummary: Record<string, unknown> | null;
+};
+
+export type TeacherTeamCockpitInteractionStats = {
+  total: number;
+  byModule: { key: string; name: string; count: number }[];
+  byStudent: { studentId: number; name: string; count: number }[];
+  byScene: { scene: string; count: number }[];
+  dailyTrend: { day: string; count: number }[];
+  recent: {
+    id: number;
+    moduleKey: string;
+    moduleName: string;
+    scene: string;
+    role: string;
+    content: string;
+    studentName: string;
+    createdAt: string;
+  }[];
+};
+
+export type TeacherTeamCockpit = {
+  team: {
+    id: number;
+    name: string;
+    isSolo: boolean;
+    leaderStudentId: number;
+    groupingStatus: string;
+    introduction: string;
+  };
+  members: {
+    studentId: number;
+    name: string;
+    avatarUrl: string;
+    aiMatchedRole: string;
+    dimensionProfile: Record<string, unknown> | null;
+  }[];
+  weights: Record<string, number>;
+  stages: TeacherCockpitStageScore[];
+  weightedProcessScore: number | null;
+  finalEvaluation: {
+    status: string;
+    weightedProcessScore: number | null;
+    finalScore: number | null;
+    summary: string;
+    comment: string;
+    dimensionScores: Record<string, number> | null;
+    scoredAt: string;
+  } | null;
+  interactionCounts: Record<string, number>;
+  interactionStats?: TeacherTeamCockpitInteractionStats;
+  allScoringComplete: boolean;
+};
+
+export async function fetchTeacherTeamCockpit(
+  classId: string,
+  teamId: number | string
+): Promise<TeacherTeamCockpit> {
+  return teacherFetch(
+    `/api/teacher/personal-classes/${encodeURIComponent(classId)}/monitor/teams/${teamId}/cockpit`
+  ) as Promise<TeacherTeamCockpit>;
+}
+

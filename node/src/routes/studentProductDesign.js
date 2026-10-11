@@ -369,6 +369,21 @@ router.post(
         [ctx.team.id, ctx.sid, JSON.stringify(payload)]
       );
       const r = rows[0];
+      try {
+        const { insertTeamAiInteractionLog } = await import('../lib/teamAiInteractionLog.js');
+        await insertTeamAiInteractionLog({
+          classId: ctx.classId,
+          teamId: ctx.team.id,
+          studentId: ctx.sid,
+          moduleKey: 'product',
+          scene: 'product_ai_suggestions_generate',
+          role: 'event',
+          content: 'AI 生成产品设计建议',
+          meta: { suggestionId: String(r.id) },
+        });
+      } catch (logErr) {
+        logError('product ai-suggestions interaction log', logErr);
+      }
       sseWrite(res, 'done', {
         id: String(r.id),
         payload,
@@ -497,6 +512,24 @@ router.post(
           ctx.sid,
         ]
       );
+
+      try {
+        const { scheduleScoreTeamStage } = await import('../lib/teamCockpitScoring.js');
+        const { insertTeamAiInteractionLog } = await import('../lib/teamAiInteractionLog.js');
+        await insertTeamAiInteractionLog({
+          classId: ctx.classId,
+          teamId: ctx.team.id,
+          studentId: ctx.sid,
+          moduleKey: 'product',
+          scene: 'prototype_upload',
+          role: 'event',
+          content: `上传产品原型：${originName}`,
+          meta: { originName, size: file.size },
+        });
+        scheduleScoreTeamStage(ctx.classId, ctx.team.id, 'product');
+      } catch (hookErr) {
+        logError('product prototype cockpit hook', hookErr);
+      }
 
       return ok(req, res, { uploaded: true, originName });
     } catch (e) {

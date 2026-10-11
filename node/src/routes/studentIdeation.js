@@ -369,7 +369,7 @@ function validateTopicBody(body) {
   const competitiveAdvantage = normalizeText(body?.competitiveAdvantage);
 
   // 所有文本填入项统一最低 15 字；项目方向为下拉，仅校验必选
-  if (projectName.length < 15) return { error: '项目名称至少需要15个字' };
+  if (projectName.length < 5) return { error: '项目名称至少需要5个字' };
   if (!projectDirection) return { error: '请填写项目方向' };
   if (projectDescription.length < 15) return { error: '项目描述至少需要15个字' };
   if (coreValue.length < 15) return { error: '核心价值主张至少需要15个字' };
@@ -744,12 +744,18 @@ router.post('/teacher/personal-classes/:classId/ideation/topics/:topicId/review'
     client = await pool.connect();
     await client.query('BEGIN');
     transactionOpen = true;
+    // reject_count 用独立布尔参数，避免 $status 同时用于 varchar 赋值与文本比较导致 PG 类型推断冲突
     const { rows } = await client.query(
       `UPDATE teacher_personal_class_team_project_topics
-       SET status = $3, review_comment = $4, reviewed_by = $5, reviewed_at = now(), updated_at = now()
+       SET status = $3,
+           review_comment = $4,
+           reviewed_by = $5,
+           reviewed_at = now(),
+           updated_at = now(),
+           reject_count = CASE WHEN $6 THEN COALESCE(reject_count, 0) + 1 ELSE reject_count END
        WHERE id = $1 AND teacher_personal_class_id = $2
        RETURNING *`,
-      [topicId, classId, status, comment, tid]
+      [topicId, classId, status, comment, tid, status === 'rejected']
     );
     if (!rows.length) {
       await client.query('ROLLBACK');
@@ -771,6 +777,15 @@ router.post('/teacher/personal-classes/:classId/ideation/topics/:topicId/review'
     );
     await client.query('COMMIT');
     transactionOpen = false;
+    // 选题审核通过 → 触发创新阶段过程分
+    if (status === 'approved') {
+      try {
+        const { scheduleScoreTeamStage } = await import('../lib/teamCockpitScoring.js');
+        scheduleScoreTeamStage(classId, Number(rows[0].team_id), 'ideation');
+      } catch (hookErr) {
+        logError('scheduleScoreTeamStage ideation after topic approve', hookErr);
+      }
+    }
     return ok(req, res, { topic: await mapProjectTopic(pool, rows[0]) });
   } catch (e) {
     if (client && transactionOpen) {
@@ -890,9 +905,45 @@ router.post('/student/personal-classes/:classId/ideation/ideas/analyze', require
     if (!team) return bad(req, res, 400, 40014, '教师确认组队后可提交创意分析');
 
     const { title, description, analysis, storePayload } = await buildIdeationAnalysisResult(methodKey, formPayload);
+    const threadId = String(req.body?.threadId || '').trim().slice(0, 128) || null;
 
-    // 对话预览：只返回结构化结果，不入库
+    // 对话预览：只返回结构化结果，不入库创意；但落库对话取证
     if (previewOnly) {
+      try {
+        const { insertChatTurnLogs, insertTeamAiInteractionLog } = await import('../lib/teamAiInteractionLog.js');
+        const transcript = String(formPayload.chatTranscript || '');
+        const userBits = transcript
+          .split('\n')
+          .filter((l) => l.startsWith('学生:'))
+          .map((l) => l.replace(/^学生:\s*/, ''))
+          .join('\n')
+          .trim();
+        await insertChatTurnLogs({
+          classId,
+          teamId: Number(team.id),
+          studentId: sid,
+          moduleKey: 'ideation',
+          scene: methodKey === 'ai' ? 'ai_idea_turn' : 'brainstorm_turn',
+          threadId,
+          roundIndex: Math.max(1, (transcript.match(/学生:/g) || []).length),
+          userContent: userBits || transcript.slice(0, 2000),
+          assistantContent: `生成创意预览：${title}\n${description}`.slice(0, 4000),
+          meta: { methodKey, title, overallScore: analysis?.overallScore },
+        });
+        await insertTeamAiInteractionLog({
+          classId,
+          teamId: Number(team.id),
+          studentId: sid,
+          moduleKey: 'ideation',
+          scene: methodKey === 'ai' ? 'ai_idea_generate' : 'brainstorm_generate',
+          threadId,
+          role: 'event',
+          content: `对话生成创意：${title}`,
+          meta: { methodKey, overallScore: analysis?.overallScore },
+        });
+      } catch (logErr) {
+        logError('ideation analyze preview log', logErr);
+      }
       return ok(req, res, {
         methodKey,
         method: IDEATION_METHOD_LABELS[methodKey],
@@ -988,6 +1039,7 @@ router.post(
       const classId = parseId(req.params.classId);
       const messages = normalizeChatMessages(req.body?.messages);
       const roundIndex = Math.max(0, Number(req.body?.roundIndex) || 0);
+      const threadId = String(req.body?.threadId || '').trim().slice(0, 128) || null;
       if (!sid || !classId) return bad(req, res, 400, 40003, '参数无效');
 
       const pool = getPool();
@@ -1019,15 +1071,38 @@ ${JSON.stringify(messages.length ? messages : [{ role: 'system', content: '（�
         : messages.some((m) => m.role === 'user')
           ? Math.max(1, roundIndex + 1)
           : 0;
-      // 请求携带的 roundIndex 是「学生已看到的轮次」：>=3 表示第 3 轮提问已展示且学生已提交回答，才允许生成
-      const canGenerate = Boolean(parsed.canGenerate) && roundIndex >= 3;
+      // 请求携带的 roundIndex 是「学生已看到的轮次」：>=3 表示第 3 轮提问已展示且学生已提交回答 → 解锁生成
+      // 解锁后即使继续第 4+ 轮追问，仍保持可生成
+      const canGenerate = roundIndex >= 3;
       const doneHint = canGenerate ? String(parsed.doneHint || '').trim() : '';
+      const assistantText =
+        String(parsed.assistantText || '').trim() ||
+        (nextRound === 0
+          ? '你好！我是助创智能体。先用自己的话聊聊：你想解决什么问题、给谁用？想清楚一点后我们再深入追问。'
+          : '请继续补充你的想法。');
+
+      // 落库本轮对话（取最后一条 user + 本轮 assistant）
+      try {
+        const { insertChatTurnLogs } = await import('../lib/teamAiInteractionLog.js');
+        const lastUser = [...messages].reverse().find((m) => m.role === 'user');
+        await insertChatTurnLogs({
+          classId,
+          teamId: Number(team.id),
+          studentId: sid,
+          moduleKey: 'ideation',
+          scene: 'midwifery_turn',
+          threadId,
+          roundIndex: nextRound,
+          userContent: lastUser?.content || '',
+          assistantContent: assistantText,
+          meta: { canGenerate, methodKey: 'midwifery' },
+        });
+      } catch (logErr) {
+        logError('midwifery turn interaction log', logErr);
+      }
+
       return ok(req, res, {
-        assistantText:
-          String(parsed.assistantText || '').trim() ||
-          (nextRound === 0
-            ? '你好！我是助创智能体。先用自己的话聊聊：你想解决什么问题、给谁用？想清楚一点后我们再深入追问。'
-            : '请继续补充你的想法。'),
+        assistantText,
         roundIndex: nextRound,
         canGenerate,
         doneHint,

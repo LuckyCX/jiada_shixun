@@ -976,6 +976,22 @@ router.put(
         setGenerated: false,
         setSaved: true,
       });
+      try {
+        const { scheduleScoreTeamStage } = await import('../lib/teamCockpitScoring.js');
+        const { insertTeamAiInteractionLog } = await import('../lib/teamAiInteractionLog.js');
+        await insertTeamAiInteractionLog({
+          classId: ctx.classId,
+          teamId: ctx.team.id,
+          studentId: ctx.sid,
+          moduleKey: 'business',
+          scene: 'bmc_save',
+          role: 'event',
+          content: '队长保存商业模式画布九格',
+        });
+        scheduleScoreTeamStage(ctx.classId, ctx.team.id, 'business');
+      } catch (hookErr) {
+        logError('bmc save cockpit hook', hookErr);
+      }
       return ok(req, res, await buildWorkspaceApi(ctx.pool, ctx.team.id, ctx.sid));
     } catch (e) {
       logError(`PUT business-model bmc/save traceId=${req.traceId}`, e);
@@ -1298,6 +1314,12 @@ router.post(
            saved_at = now()`,
         [ctx.team.id, ctx.sid, JSON.stringify(ws.canvas)]
       );
+      try {
+        const { scheduleScoreTeamStage } = await import('../lib/teamCockpitScoring.js');
+        scheduleScoreTeamStage(ctx.classId, ctx.team.id, 'business');
+      } catch (hookErr) {
+        logError('war-room save cockpit hook', hookErr);
+      }
       const workspace = await buildWorkspaceApi(ctx.pool, ctx.team.id, ctx.sid);
       return ok(req, res, workspace);
     } catch (e) {

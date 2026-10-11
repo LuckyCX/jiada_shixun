@@ -1553,6 +1553,23 @@ router.post(
       }
 
       const submission = await loadSubmission(ctx.pool, ctx.team.id);
+      try {
+        const { scheduleScoreTeamStage } = await import('../lib/teamCockpitScoring.js');
+        const { insertTeamAiInteractionLog } = await import('../lib/teamAiInteractionLog.js');
+        await insertTeamAiInteractionLog({
+          classId: ctx.classId,
+          teamId: ctx.team.id,
+          studentId: ctx.sid,
+          moduleKey: 'plan',
+          scene: 'plan_submit',
+          role: 'event',
+          content: '商业计划书已提交审核',
+          meta: { versionId, attachmentCount: normalized.length },
+        });
+        scheduleScoreTeamStage(ctx.classId, ctx.team.id, 'plan');
+      } catch (hookErr) {
+        logError('business-plan submit cockpit hook', hookErr);
+      }
       return ok(req, res, { submission, trainingEnded: false });
     } catch (e) {
       logError(`POST business-plan submit traceId=${req.traceId}`, e);

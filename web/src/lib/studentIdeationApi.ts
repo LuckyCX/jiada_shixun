@@ -172,7 +172,11 @@ export async function analyzeStudentIdeationIdea(
 /** 对话生成创意预览（不入库） */
 export async function previewStudentIdeationIdea(
   classId: string,
-  body: { methodKey: IdeationMethodKey; formPayload: Record<string, unknown> }
+  body: {
+    methodKey: IdeationMethodKey;
+    formPayload: Record<string, unknown>;
+    threadId?: string;
+  }
 ): Promise<IdeationIdeaPreview> {
   return portalAuthenticatedFetch(
     'student',
@@ -214,7 +218,11 @@ export type MidwiferyTurnResult = {
 
 export async function midwiferyTurn(
   classId: string,
-  body: { messages: { role: 'user' | 'assistant'; content: string }[]; roundIndex: number }
+  body: {
+    messages: { role: 'user' | 'assistant'; content: string }[];
+    roundIndex: number;
+    threadId?: string;
+  }
 ): Promise<MidwiferyTurnResult> {
   return portalAuthenticatedFetch(
     'student',

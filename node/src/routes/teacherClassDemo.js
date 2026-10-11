@@ -55,12 +55,19 @@ const SCENES = {
   'ideation-midwifery-generate': `${getMidwiferyGeneratePrompt()}\n（课堂演示：结果只显示在当前页，勿声称已写入学生档案。）`,
   /** 头脑风暴 / AI 创意对话生成结构化创意 JSON */
   'ideation-chat-generate': `根据课堂对话笔记生成一条可讲解的创业创意。只返回 JSON，键齐全：title、description、projectDirection、coreValue、targetUsers、coreProblem、solutionOverview、marketSize、competitiveAdvantage、overallScore(0-100)、novelty、feasibility、marketPotential、innovation(0-5)、summary、strengths/weaknesses/suggestions/tags（各恰好 3 项字符串）。${NO_MD}`,
-  simulation: '根据投入配置做一轮课堂用的经营推演。只返回 JSON：summary（中文一段）、users、revenue、cac、ltv（数字），series 为 7 项 {day,users,revenue}。',
+  // 与学生端一致：逐行 NDJSON；须有峰谷/失败可能，禁止一路上涨
+  simulation: `你是课堂仿真引擎。按「逐行 JSON / NDJSON」输出共 15 行：day=1..14 各一行，最后一行 type=final。
+每行必须是可独立 JSON.parse 的单行对象，禁止把一个对象拆成多行，禁止 Markdown。
+day 行：{"type":"day","day":1,"users":0,"revenue":0,"cac":0,"ltv":0,"profit":0,"notes":"当日中文简述（含波动原因）"}
+final 行：{"type":"final","optimize":{"suggestions":[{"title":"课堂建议","desc":"可执行建议","impact":"预期影响"}],"comparison":{"current":{"summary":"当前路径问题"},"optimized":{"summary":"优化后预期"}}}}
+结合投入配置与用户消息中的「本轮主基调」做推演：成功/失败都合理。
+users、revenue 均为累计值（大体不减），用平台期（连续多日持平）表达淡季；禁止写成当日流水导致 0/高/0/高。
+至少 4 天 profit 为负；悲观剧本禁止第 14 天强行翻盘。${NO_MD}`,
   'plan-comment': `用中文给这份商业计划书要点写一段课堂点评，并给出 0～100 的建议分，格式为「建议分：N」开头。${NO_MD}`,
 };
 
 const JSON_MODE_SCENES = new Set([
-  'simulation',
+  // simulation 改为 NDJSON 多行，不能开 json_object 模式
   'market-persona',
   'team',
   'product',

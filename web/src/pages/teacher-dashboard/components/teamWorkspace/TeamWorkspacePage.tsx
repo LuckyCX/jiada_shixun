@@ -2,11 +2,14 @@ import { useEffect, useMemo, useState } from 'react';
 import { message } from 'antd';
 import UserAvatar from '../../../../components/UserAvatar';
 import {
+  fetchTeacherTeamCockpit,
   fetchTeacherTeamStageWorkspace,
   fetchTeacherTeamWorkspaceSummary,
+  type TeacherTeamCockpit,
   type TeacherWorkspaceSummary,
 } from '../../../../lib/teacherMonitorApi';
 import StagePanels from './StagePanels';
+import TeamCockpitPanel from './TeamCockpitPanel';
 import { roleLabel } from './formViews';
 
 const STATUS_LABEL: Record<string, string> = {
@@ -51,15 +54,21 @@ export default function TeamWorkspacePage({
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [stageData, setStageData] = useState<any>(null);
   const [stageLoading, setStageLoading] = useState(false);
+  const [cockpit, setCockpit] = useState<TeacherTeamCockpit | null>(null);
+  const [cockpitLoading, setCockpitLoading] = useState(false);
   const [overviewOpen, setOverviewOpen] = useState(false);
   /** 手机：未选阶段时显示卡片列表；选中后进入内容 */
   const [mobileStagePicked, setMobileStagePicked] = useState(false);
 
   const enabledOrder = summary?.enabledOrder || [];
+  // 默认驾驶舱；URL 无 stage 或非法 stage 时回落 cockpit
   const activeStage = useMemo(() => {
-    if (stage && enabledOrder.includes(stage)) return stage;
-    return enabledOrder[0] || 'team';
+    if (stage === 'cockpit' || !stage) return 'cockpit';
+    if (enabledOrder.includes(stage)) return stage;
+    return 'cockpit';
   }, [stage, enabledOrder]);
+
+  const isCockpit = activeStage === 'cockpit';
 
   const visibleStages = useMemo(() => {
     const progressMap = new Map((summary?.stages || []).map((s) => [s.key, s]));
@@ -79,10 +88,9 @@ export default function TeamWorkspacePage({
       .then((data) => {
         if (cancelled) return;
         setSummary(data);
-        // PC 需要有效 stage；手机卡片模式不强制写 URL，直到用户点选
-        if (!stage || !data.enabledOrder.includes(stage)) {
-          const first = data.enabledOrder[0] || 'team';
-          if (first !== stage) onStageChange(first);
+        // 无 stage / 非法 stage → 默认驾驶舱
+        if (!stage || (stage !== 'cockpit' && !data.enabledOrder.includes(stage))) {
+          if (stage !== 'cockpit') onStageChange('cockpit');
         }
       })
       .catch((e: any) => {
@@ -101,12 +109,35 @@ export default function TeamWorkspacePage({
   }, [classId, teamId]);
 
   useEffect(() => {
-    // 换团队时回到手机卡片列表
     setMobileStagePicked(false);
   }, [teamId]);
 
+  // 驾驶舱数据常驻拉取，供侧栏摘要与主区展示
   useEffect(() => {
-    if (!classId || !teamId || !activeStage) return;
+    if (!classId || !teamId) return;
+    let cancelled = false;
+    setCockpitLoading(true);
+    fetchTeacherTeamCockpit(classId, teamId)
+      .then((data) => {
+        if (!cancelled) setCockpit(data);
+      })
+      .catch((e: any) => {
+        if (!cancelled) {
+          if (isCockpit) message.error(e?.message || '加载驾驶舱失败');
+          setCockpit(null);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setCockpitLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [classId, teamId]);
+
+  useEffect(() => {
+    if (!classId || !teamId || isCockpit || !activeStage) return;
     let cancelled = false;
     setStageLoading(true);
     fetchTeacherTeamStageWorkspace(classId, teamId, activeStage)
@@ -125,9 +156,8 @@ export default function TeamWorkspacePage({
     return () => {
       cancelled = true;
     };
-  }, [classId, teamId, activeStage]);
+  }, [classId, teamId, activeStage, isCockpit]);
 
-  // PC 视口下视为已选阶段（直接展示内容）；窄屏保持卡片入口
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const mq = window.matchMedia('(min-width: 768px)');
@@ -139,7 +169,7 @@ export default function TeamWorkspacePage({
     return () => mq.removeEventListener('change', sync);
   }, []);
 
-  const teamName = summary?.team?.name || `团队 #${teamId}`;
+  const teamName = summary?.team?.name || cockpit?.team?.name || `团队 #${teamId}`;
   const status = summary?.status || 'on-track';
 
   const pickStage = (key: string) => {
@@ -147,6 +177,13 @@ export default function TeamWorkspacePage({
     setMobileStagePicked(true);
     setOverviewOpen(false);
   };
+
+  const cockpitScoreHint =
+    cockpit?.finalEvaluation?.status === 'scored' && cockpit.finalEvaluation.finalScore != null
+      ? `总评 ${cockpit.finalEvaluation.finalScore.toFixed(0)}`
+      : cockpit?.weightedProcessScore != null
+        ? `过程分 ${cockpit.weightedProcessScore.toFixed(0)}`
+        : `进度 ${summary?.overallProgress ?? 0}%`;
 
   const sidebar = (
     <div className="space-y-3 md:space-y-4">
@@ -173,8 +210,42 @@ export default function TeamWorkspacePage({
         </div>
       </section>
 
+      {/* 驾驶舱独立入口：不放进实训流程列表 */}
+      <button
+        type="button"
+        onClick={() => pickStage('cockpit')}
+        className={`w-full text-left rounded-xl md:rounded-2xl border p-3 md:p-4 cursor-pointer transition-colors ${
+          isCockpit
+            ? 'border-teal-300 bg-gradient-to-br from-teal-50 to-cyan-50/60 shadow-sm'
+            : 'border-gray-100 bg-white hover:border-teal-200 hover:bg-teal-50/30'
+        }`}
+      >
+        <div className="flex items-center gap-3">
+          <div
+            className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+              isCockpit ? 'bg-teal-500 text-white' : 'bg-teal-50 text-teal-600'
+            }`}
+          >
+            <i className="ri-dashboard-3-line text-lg" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-sm font-semibold text-gray-900">实训驾驶舱</span>
+              {isCockpit ? (
+                <span className="text-[10px] text-teal-600 font-medium">查看中</span>
+              ) : (
+                <i className="ri-arrow-right-s-line text-gray-300" />
+              )}
+            </div>
+            <p className="text-[11px] text-gray-500 mt-0.5 truncate">
+              过程评价 · 能力维度 · 交互热度 · {cockpitScoreHint}
+            </p>
+          </div>
+        </div>
+      </button>
+
       <section className="bg-white rounded-xl md:rounded-2xl border border-gray-100 p-3 md:p-4">
-        <h3 className="text-xs font-bold text-gray-500 mb-2.5">阶段进度</h3>
+        <h3 className="text-xs font-bold text-gray-500 mb-2.5">实训流程</h3>
         <div className="space-y-2">
           {(summary?.stages || []).map((s) => (
             <button
@@ -182,7 +253,7 @@ export default function TeamWorkspacePage({
               type="button"
               onClick={() => pickStage(s.key)}
               className={`w-full text-left rounded-lg px-2 py-1.5 cursor-pointer ${
-                s.key === activeStage ? 'bg-teal-50' : 'hover:bg-gray-50'
+                !isCockpit && s.key === activeStage ? 'bg-teal-50' : 'hover:bg-gray-50'
               }`}
             >
               <div className="flex justify-between text-xs mb-1 gap-2">
@@ -197,6 +268,9 @@ export default function TeamWorkspacePage({
               ) : null}
             </button>
           ))}
+          {!summary?.stages?.length && !summaryLoading ? (
+            <div className="text-xs text-gray-400">暂无启用环节</div>
+          ) : null}
         </div>
       </section>
 
@@ -218,6 +292,25 @@ export default function TeamWorkspacePage({
 
   const mobileStageCards = (
     <div className="grid grid-cols-1 gap-2.5 md:hidden">
+      <button
+        type="button"
+        onClick={() => pickStage('cockpit')}
+        className="w-full text-left bg-gradient-to-br from-teal-50 to-cyan-50 border border-teal-200 rounded-xl px-4 py-3.5 shadow-sm hover:border-teal-400 cursor-pointer"
+      >
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-teal-500 text-white flex items-center justify-center shrink-0">
+            <i className="ri-dashboard-3-line text-lg" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <span className="text-sm font-semibold text-gray-900">实训驾驶舱</span>
+            <div className="text-[11px] text-gray-500 mt-0.5 truncate">
+              过程评价 · 能力维度 · {cockpitScoreHint}
+            </div>
+          </div>
+          <i className="ri-arrow-right-s-line text-gray-300 text-lg shrink-0" />
+        </div>
+      </button>
+      <div className="text-[11px] font-bold text-gray-400 uppercase tracking-wide pt-1">实训流程</div>
       {visibleStages.map((s) => (
         <button
           key={s.key}
@@ -253,7 +346,9 @@ export default function TeamWorkspacePage({
 
   const stageContent = (
     <>
-      {stageLoading ? (
+      {isCockpit ? (
+        <TeamCockpitPanel data={cockpit} loading={cockpitLoading} onOpenStage={pickStage} />
+      ) : stageLoading ? (
         <div className="text-sm text-gray-400 text-center py-10 md:py-16">加载环节数据…</div>
       ) : (
         <StagePanels classId={classId} teamId={teamId} moduleKey={activeStage} stage={stageData} />
@@ -263,7 +358,6 @@ export default function TeamWorkspacePage({
 
   return (
     <div className="flex flex-col gap-3 md:gap-4 md:min-h-0 md:h-full">
-      {/* 顶栏 */}
       <div className="bg-white rounded-xl md:rounded-2xl border border-gray-100 px-3 py-2.5 md:px-5 md:py-3">
         <div className="flex items-center gap-2 md:gap-3">
           <button
@@ -289,7 +383,9 @@ export default function TeamWorkspacePage({
               <div className="text-[11px] md:text-xs text-gray-500 truncate">
                 {summaryLoading
                   ? '加载中…'
-                  : `进度 ${summary?.overallProgress ?? 0}% · ${summary?.currentStage || '—'}`}
+                  : isCockpit
+                    ? `驾驶舱 · 进度 ${summary?.overallProgress ?? 0}%`
+                    : `进度 ${summary?.overallProgress ?? 0}% · ${summary?.currentStage || '—'}`}
               </div>
             </div>
           </div>
@@ -305,7 +401,6 @@ export default function TeamWorkspacePage({
         </div>
       </div>
 
-      {/* 手机：概览折叠 */}
       <div className="md:hidden">
         <button
           type="button"
@@ -326,15 +421,12 @@ export default function TeamWorkspacePage({
         {overviewOpen ? <div className="mt-2">{sidebar}</div> : null}
       </div>
 
-      {/* 手机：阶段卡片 或 阶段内容；PC：无顶部横条，左侧切阶段 */}
       <div className="flex gap-4 min-h-0 md:flex-1">
         <aside className="hidden md:block w-80 shrink-0 overflow-y-auto pb-4">{sidebar}</aside>
 
         <div className="flex-1 min-w-0 md:min-h-0 md:overflow-y-auto md:pb-4">
-          {/* 手机卡片列表 */}
           <div className={mobileStagePicked ? 'hidden' : 'md:hidden'}>{mobileStageCards}</div>
 
-          {/* 手机进入阶段后：返回 + 内容；PC 始终内容 */}
           <div className={mobileStagePicked ? 'block' : 'hidden md:block'}>
             <div className="md:hidden mb-2">
               <button
@@ -346,7 +438,9 @@ export default function TeamWorkspacePage({
                 返回全部阶段
               </button>
               <div className="mt-1 text-sm font-semibold text-gray-900">
-                {visibleStages.find((s) => s.key === activeStage)?.fullName || '环节详情'}
+                {isCockpit
+                  ? '实训驾驶舱'
+                  : visibleStages.find((s) => s.key === activeStage)?.fullName || '环节详情'}
               </div>
             </div>
             {stageContent}

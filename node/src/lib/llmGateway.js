@@ -146,8 +146,9 @@ function mergeChatExtraBody(provider, extraBody) {
 
 /**
  * OpenAI 兼容 Chat Completions
+ * @param {AbortSignal} [signal] 外部取消（如客户端断开），与 provider.timeoutMs 一并生效
  */
-export async function chatCompletion({ provider, system, user, jsonMode = false, extraBody }) {
+export async function chatCompletion({ provider, system, user, jsonMode = false, extraBody, signal }) {
   if (!provider) throw new Error('未配置已启用的 LLM 服务，请在管理后台「系统配置」中配置并启用多模态模型');
   const url = chatCompletionsUrl(provider.baseUrl);
   const body = {
@@ -162,8 +163,16 @@ export async function chatCompletion({ provider, system, user, jsonMode = false,
   if (jsonMode) {
     body.response_format = { type: 'json_object' };
   }
+  if (signal?.aborted) {
+    const err = new Error('请求已取消');
+    err.name = 'AbortError';
+    throw err;
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), provider.timeoutMs);
+  const onExternalAbort = () => controller.abort();
+  if (signal) signal.addEventListener('abort', onExternalAbort, { once: true });
+  const startedAt = Date.now();
   try {
     const r = await fetch(url, {
       method: 'POST',
@@ -181,12 +190,16 @@ export async function chatCompletion({ provider, system, user, jsonMode = false,
     }
     const text = j?.choices?.[0]?.message?.content;
     if (!text || typeof text !== 'string') throw new Error('LLM 返回内容为空');
+    console.log(
+      `[llmGateway] chatCompletion ok model=${provider.modelId} jsonMode=${Boolean(jsonMode)} ${Date.now() - startedAt}ms`
+    );
     return text.trim();
   } catch (e) {
     logError('llmGateway.chatCompletion', e);
     throw e;
   } finally {
     clearTimeout(timer);
+    if (signal) signal.removeEventListener('abort', onExternalAbort);
   }
 }
 

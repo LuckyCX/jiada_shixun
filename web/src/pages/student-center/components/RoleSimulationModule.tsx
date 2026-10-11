@@ -463,6 +463,8 @@ const RoleSimulationModule = ({ classId, onTaskComplete, trainingEnded = false }
               setOptimize(data?.optimize || null);
               setIsRunning(false);
               setSimDay(30);
+              // 用服务端整形后的累计曲线刷新图表（消除流式阶段锯齿）
+              syncTrackingFromRecord({ tracking: data?.tracking || {} });
               setLatestSnapshot({
                 runId: String(data?.runId || ''),
                 runIndex: Number(data?.runIndex || activeRunIndex || 0),
@@ -592,6 +594,7 @@ const RoleSimulationModule = ({ classId, onTaskComplete, trainingEnded = false }
             setOptimize(data?.optimize || null);
             setIsRunning(false);
             setSimDay(30);
+            syncTrackingFromRecord({ tracking: data?.tracking || {} });
             onTaskComplete?.();
             return;
           }
@@ -925,7 +928,16 @@ const RoleSimulationModule = ({ classId, onTaskComplete, trainingEnded = false }
           <div className="grid grid-cols-2 gap-3">
             {[
               { label: '累计用户', value: metrics.users.toLocaleString(), unit: '人', icon: 'ri-user-3-line', color: 'text-emerald-500' },
-              { label: '累计收入', value: `¥${(metrics.revenue / 10000).toFixed(1)}`, unit: '万', icon: 'ri-money-cny-circle-line', color: 'text-blue-500' },
+              {
+                label: '累计收入',
+                value:
+                  metrics.revenue >= 10000
+                    ? `¥${(metrics.revenue / 10000).toFixed(1)}`
+                    : `¥${Math.round(metrics.revenue).toLocaleString()}`,
+                unit: metrics.revenue >= 10000 ? '万' : '',
+                icon: 'ri-money-cny-circle-line',
+                color: 'text-blue-500',
+              },
               { label: '获客成本', value: `¥${metrics.cac}`, unit: '/人', icon: 'ri-funds-line', color: 'text-orange-500' },
               { label: '用户LTV', value: `¥${metrics.ltv}`, unit: '', icon: 'ri-vip-crown-line', color: 'text-purple-500' },
             ].map((m) => (
