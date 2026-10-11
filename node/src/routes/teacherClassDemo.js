@@ -50,7 +50,7 @@ const SCENES = {
   /** 演示六帽创想室：整轮 / 单帽 */
   'hat-studio-round': `${HAT_STUDIO_ROUND_SYSTEM_PROMPT}\n（课堂演示：结果只显示在当前页，勿声称已写入学生档案。）`,
   'hat-studio-reply': `${HAT_STUDIO_SINGLE_REPLY_SYSTEM_PROMPT}\n（课堂演示：必须严格按用户给出的【你的角色】人设回复，禁止串戏。）`,
-  /** 演示思辨助产：与学生端同源提示词 */
+  /** 演示启思智能体：与学生端同源提示词 */
   'ideation-midwifery-turn': `${getMidwiferyTurnPrompt()}\n（课堂演示：结果只显示在当前页，勿声称已写入学生档案。）`,
   'ideation-midwifery-generate': `${getMidwiferyGeneratePrompt()}\n（课堂演示：结果只显示在当前页，勿声称已写入学生档案。）`,
   /** 头脑风暴 / AI 创意对话生成结构化创意 JSON */

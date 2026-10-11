@@ -725,7 +725,7 @@ export default function TeamFormationModule({ classId, className, initialSubTab,
   ];
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-3">
       {/* 版本控制工具栏 */}
       <VersionControl
         versions={versions}
@@ -734,27 +734,6 @@ export default function TeamFormationModule({ classId, className, initialSubTab,
         onSaveVersion={handleSaveVersion}
         moduleName="智能组队系统"
       />
-
-      {/* 模块头部 */}
-      <div className="bg-gradient-to-br from-teal-500 to-cyan-600 rounded-2xl p-4 md:p-6 text-white">
-        <div className="flex items-center gap-3 md:gap-4 !flex-nowrap">
-          <div className="w-12 h-12 md:w-14 md:h-14 bg-white/20 rounded-2xl flex items-center justify-center backdrop-blur-sm flex-shrink-0">
-            <i className="ri-group-line text-2xl"></i>
-          </div>
-          <div className="min-w-0">
-            <h2 className="text-xl font-bold mb-1" style={{ overflowWrap: 'normal' }}>智能组队系统</h2>
-            <p className="text-white/80 text-sm leading-6 flex flex-wrap gap-x-1">
-              <span className="!whitespace-nowrap">完成测评</span>
-              <span>→</span>
-              <span className="!whitespace-nowrap">AI 分析（视频选填）</span>
-              <span>→</span>
-              <span className="!whitespace-nowrap">等待组队</span>
-              <span>→</span>
-              <span className="!whitespace-nowrap">完善团队信息</span>
-            </p>
-          </div>
-        </div>
-      </div>
 
       {/* 标签页：窄屏两列，文案保持整词不拆开 */}
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100">

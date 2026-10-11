@@ -238,7 +238,7 @@ function renderTeam(sub: string, team: any, members: any[]) {
 
 /** 与学生端当前入口一致；scamper/triz 仅在有历史创意时展示（只读） */
 const IDEATION_METHOD_TABS_CORE = [
-  { key: 'midwifery', label: '思辨助产启思' },
+  { key: 'midwifery', label: '启思智能体' },
   { key: 'brainstorm', label: '头脑风暴' },
   { key: 'ai', label: 'AI创意' },
   { key: 'six_hats', label: '六帽创想室' },
@@ -255,7 +255,7 @@ function IdeationMethodsPane({ team, members }: { team: any; members: any[] }) {
     ...IDEATION_METHOD_TABS_CORE,
     ...IDEATION_METHOD_TABS_LEGACY.filter((t) => ideas.some((i: any) => i.methodKey === t.key)),
   ];
-  // 默认落到第一个「有记录」的方法，否则思辨助产
+  // 默认落到第一个「有记录」的方法，否则启思智能体
   const firstWithData =
     methodTabs.find((t) =>
       t.key === 'six_hats'
@@ -307,7 +307,7 @@ function IdeationMethodsPane({ team, members }: { team: any; members: any[] }) {
         <div className="space-y-3">
           {method === 'midwifery' ? (
             <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4">
-              <h4 className="text-sm font-bold text-indigo-900 mb-1">思辨助产启思</h4>
+              <h4 className="text-sm font-bold text-indigo-900 mb-1">启思智能体</h4>
               <p className="text-xs text-indigo-700">苏格拉底式多轮追问后生成的创意（只读）</p>
             </div>
           ) : null}
@@ -446,7 +446,7 @@ function renderIdeation(sub: string, team: any, members: any[]) {
       </div>
     );
   }
-  // 创新方法工具：思辨助产 / 头脑风暴 / AI创意 / 六帽（历史 SCAMPER/TRIZ 只读）
+  // 创新方法工具：启思智能体 / 头脑风暴 / AI创意 / 六帽（历史 SCAMPER/TRIZ 只读）
   return <IdeationMethodsPane team={team} members={members} />;
 }
 

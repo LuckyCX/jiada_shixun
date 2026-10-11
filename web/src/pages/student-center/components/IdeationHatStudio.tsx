@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Button, Dropdown, Input, message } from 'antd';
 import {
   adoptHatStudioMessage,
@@ -144,10 +144,17 @@ type Props = {
   onIdeaCreated?: () => void;
   /** 嵌入创新方法对话卡片内，去掉外层说明条与过大高度 */
   embedded?: boolean;
+  /**
+   * 是否处于当前可见/选中（嵌入时由外层传入 method===six_hats）。
+   * 为 true 且尚无会话时自动开始讨论。
+   */
+  active?: boolean;
   /** 嵌入时隐藏内部发言框，改由外层统一输入条发送 */
   onBindComposer?: (composer: HatStudioComposerBind | null) => void;
   /** 嵌入时 @帽子 写入外层输入框 */
   onRequestAppendInput?: (piece: string) => void;
+  /** 嵌入时渲染在左侧讨论区底部（输入条靠左，工作区可拉满整卡高度） */
+  composerFooter?: ReactNode;
 };
 
 /**
@@ -159,8 +166,10 @@ export default function IdeationHatStudio({
   disabled = false,
   onIdeaCreated,
   embedded = false,
+  active = true,
   onBindComposer,
   onRequestAppendInput,
+  composerFooter,
 }: Props) {
   const [messages, setMessages] = useState<HatStudioDebateMessage[]>([]);
   const [draft, setDraft] = useState<HatStudioDraft>({});
@@ -175,6 +184,8 @@ export default function IdeationHatStudio({
   const [submittingIdea, setSubmittingIdea] = useState(false);
   const [resetting, setResetting] = useState(false);
   const chatScrollRef = useRef<HTMLDivElement>(null);
+  /** 防止 Strict Mode / 重复 effect 并发自动开场 */
+  const autoStartLockRef = useRef(false);
 
   const applyStudio = useCallback((studio: HatStudioPayload, opts?: { syncMessages?: boolean }) => {
     setDraft(studio.draft || emptyDraft(studio.draftDefs || []));
@@ -260,10 +271,10 @@ export default function IdeationHatStudio({
     [draftDefs]
   );
 
-  const handleStart = async () => {
+  const handleStart = async (opts?: { silent?: boolean }) => {
     if (!classId?.trim() || disabled) return;
     if (messages.length > 0) {
-      message.info('当前已有会话，可继续发言；若要重来请点「清空重开」');
+      if (!opts?.silent) message.info('当前已有会话，可继续发言；若要重来请点「清空重开」');
       return;
     }
     setIsDebating(true);
@@ -273,13 +284,27 @@ export default function IdeationHatStudio({
       applyStudio(studio, { syncMessages: false });
       setMessages(roundMessages);
       await refresh();
-      message.success(embedded ? '请先在下方输入框描述创意并发送' : '请先描述创意，再点「发送发言」');
+      if (!opts?.silent) {
+        message.success(embedded ? '请先在下方输入框描述创意并发送' : '请先描述创意，再点「发送发言」');
+      }
     } catch (e) {
       message.error(e instanceof Error ? e.message : '开始讨论失败');
     } finally {
       setIsDebating(false);
     }
   };
+
+  // 切到六帽（或独立页激活）且尚无会话时自动开始，无需点「开始」按钮
+  useEffect(() => {
+    if (!active || disabled || loading) return;
+    if (messages.length > 0) return;
+    if (autoStartLockRef.current) return;
+    autoStartLockRef.current = true;
+    void handleStart({ silent: true }).finally(() => {
+      autoStartLockRef.current = false;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, disabled, loading, messages.length, classId]);
 
   const handleReset = async () => {
     if (!classId?.trim() || disabled) return;
@@ -304,7 +329,7 @@ export default function IdeationHatStudio({
   const sendWithText = async (raw: string) => {
     if (!classId?.trim() || !raw.trim() || isDebating || isPlaying || disabled) return;
     if (messages.length === 0) {
-      message.warning('请先点击开始讨论');
+      message.warning('讨论正在准备中，请稍候再发送');
       return;
     }
     const text = raw.trim();
@@ -396,7 +421,9 @@ export default function IdeationHatStudio({
     if (!bind) return;
     const placeholder =
       messages.length === 0
-        ? '请先点击「开始六帽讨论」'
+        ? isDebating || loading
+          ? '正在开启六帽讨论…'
+          : '讨论准备中，请稍候…'
         : awaitingStudentIdea
           ? '例如：我想做校园二手教材流转，解决买书贵、闲置浪费…'
           : '继续补充想法；或不输入 @ 开下一轮六帽；或 @白帽 等追问';
@@ -406,7 +433,7 @@ export default function IdeationHatStudio({
       busy: isDebating || isPlaying,
       placeholder,
     });
-  }, [awaitingStudentIdea, disabled, isDebating, isPlaying, messages.length]);
+  }, [awaitingStudentIdea, disabled, isDebating, isPlaying, loading, messages.length]);
 
   useEffect(() => {
     return () => {
@@ -485,7 +512,7 @@ export default function IdeationHatStudio({
         <div className="bg-violet-50 border border-violet-200 rounded-xl p-4">
           <h4 className="text-sm font-bold text-violet-900 mb-1">六帽创想室</h4>
           <p className="text-xs text-violet-700">
-            ① 开始六帽讨论 → ② 描述创意并「发送发言」→ ③ 六帽引导多轮对话（可 @ 或不 @）→ ④ 写入右侧工作区 → ⑤ AI 汇总并入库。可随时「清空重开」。
+            ① 进入后自动开启讨论 → ② 描述创意并发送 → ③ 六帽引导多轮对话（可 @ 或不 @）→ ④ 写入右侧工作区 → ⑤ AI 汇总并入库。可随时「清空重开」。
           </p>
         </div>
       )}
@@ -497,7 +524,7 @@ export default function IdeationHatStudio({
       <div
         className={
           embedded
-            ? 'grid grid-cols-1 lg:grid-cols-5 gap-2 flex-1 min-h-0 h-full'
+            ? 'grid grid-cols-1 lg:grid-cols-5 gap-2 flex-1 min-h-0 h-full lg:items-stretch'
             : 'grid grid-cols-1 lg:grid-cols-5 gap-4 lg:h-[calc(100dvh-15rem)] lg:min-h-[420px] lg:max-h-[720px]'
         }
       >
@@ -508,69 +535,54 @@ export default function IdeationHatStudio({
               : 'lg:col-span-3 flex flex-col h-[min(58dvh,520px)] lg:h-full rounded-xl border border-gray-200 bg-white overflow-hidden'
           }
         >
-          <div className="px-3 py-2 border-b border-gray-100 flex items-center justify-between gap-2 shrink-0">
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="text-sm font-semibold text-gray-800">讨论区</span>
-              {messages.length > 0 ? (
-                <span className="text-[11px] px-2 py-0.5 rounded-full bg-violet-50 text-violet-700 border border-violet-100 whitespace-nowrap">
-                  会话进行中
-                </span>
-              ) : null}
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              {messages.length > 0 ? (
-                <Button
-                  size="small"
-                  danger
-                  loading={resetting}
-                  disabled={disabled || isDebating || isPlaying}
-                  onClick={() => void handleReset()}
-                >
-                  清空重开
-                </Button>
-              ) : (
-                <Button
-                  size="small"
-                  type="primary"
-                  className="!bg-violet-600 !border-violet-600"
-                  loading={isDebating}
-                  disabled={disabled || loading || isPlaying}
-                  onClick={() => void handleStart()}
-                >
-                  开始六帽讨论
-                </Button>
-              )}
-            </div>
-          </div>
-          {/* 六顶帽子：放在讨论区内、引导气泡上方 */}
-          <div className="px-3 pt-2.5 pb-2 border-b border-gray-50 shrink-0">
-            <div className="flex flex-wrap gap-2">
+          {/* Header：标题 + 六帽小图标 + 清空，同一行 */}
+          <div className="px-3 py-1.5 border-b border-gray-100 flex items-center gap-2.5 shrink-0 min-w-0">
+            <span className="text-sm font-semibold text-gray-800 shrink-0">讨论区</span>
+            {messages.length > 0 ? (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-50 text-violet-700 border border-violet-100 whitespace-nowrap shrink-0 hidden sm:inline">
+                进行中
+              </span>
+            ) : null}
+            <div className="flex-1 min-w-0" />
+            <div className="flex items-center gap-1.5 shrink-0">
               {HAT_HEADER_ORDER.map((h) => {
                 const cfg = hatConfig[h];
-                const active = currentSpeaker === h;
+                const speaking = currentSpeaker === h;
                 return (
                   <button
                     key={h}
                     type="button"
                     disabled={disabled || isDebating || isPlaying || awaitingStudentIdea || messages.length === 0}
                     onClick={() => insertMention(h)}
-                    className={`flex items-center gap-2 rounded-xl border px-2.5 py-1.5 text-xs transition-all cursor-pointer ${
-                      active ? 'ring-2 ring-violet-300 border-violet-400' : cfg.borderColor
-                    } ${cfg.color} ${cfg.textColor} ${awaitingStudentIdea || messages.length === 0 ? 'opacity-50' : ''}`}
-                    title={awaitingStudentIdea ? '请先发送你的创意后再 @ 帽子' : `@${cfg.hatLabel}`}
+                    className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 transition-all cursor-pointer ${
+                      speaking ? 'ring-1 ring-violet-300 border-violet-400' : cfg.borderColor
+                    } ${cfg.color} ${cfg.textColor} ${
+                      awaitingStudentIdea || messages.length === 0 ? 'opacity-45' : 'hover:opacity-90'
+                    }`}
+                    title={awaitingStudentIdea ? '请先发送你的创意后再 @ 帽子' : `@${cfg.hatLabel} · ${cfg.role}`}
                   >
-                    <img src={cfg.avatar} alt="" className="w-7 h-7 rounded-full object-cover" />
-                    <span className="font-semibold whitespace-nowrap">{cfg.hatLabel}</span>
+                    <img src={cfg.avatar} alt="" className="w-4 h-4 rounded-full object-cover shrink-0" />
+                    <span className="text-[10px] font-medium leading-none whitespace-nowrap">{cfg.hatLabel}</span>
                   </button>
                 );
               })}
             </div>
+            <Button
+              size="small"
+              danger
+              loading={resetting}
+              disabled={disabled || isDebating || isPlaying || loading || messages.length === 0}
+              onClick={() => void handleReset()}
+              className="shrink-0 !text-xs !h-7 !px-2.5 ml-0.5"
+            >
+              清空重开
+            </Button>
           </div>
           <div ref={chatScrollRef} className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-3 space-y-3">
             {loading && <div className="text-sm text-gray-400 text-center py-8">加载中…</div>}
             {!loading && messages.length === 0 && (
               <div className="text-sm text-gray-400 text-center py-10">
-                点击「开始讨论」，系统会引导你先输入创意想法
+                {isDebating ? '正在开启六帽讨论…' : '准备中…进入本页将自动开始讨论'}
               </div>
             )}
             {messages.map((msg) => {
@@ -648,6 +660,10 @@ export default function IdeationHatStudio({
               </div>
             )}
           </div>
+          {/* 嵌入：外层输入条压在讨论区底部左侧；非嵌入：自带发送框 */}
+          {embedded && composerFooter ? (
+            <div className="shrink-0 border-t border-gray-100 bg-white">{composerFooter}</div>
+          ) : null}
           {!embedded && (
             <div className="p-3 border-t border-gray-100 shrink-0">
               <div className="flex gap-2 items-center h-10">
@@ -680,7 +696,7 @@ export default function IdeationHatStudio({
         <div
           className={
             embedded
-              ? 'lg:col-span-2 flex flex-col min-h-0 h-full rounded-xl border border-gray-200 bg-white overflow-hidden'
+              ? 'lg:col-span-2 flex flex-col min-h-0 h-full self-stretch rounded-xl border border-gray-200 bg-white overflow-hidden'
               : 'lg:col-span-2 flex flex-col h-[min(58dvh,520px)] lg:h-full rounded-xl border border-gray-200 bg-white overflow-hidden'
           }
         >

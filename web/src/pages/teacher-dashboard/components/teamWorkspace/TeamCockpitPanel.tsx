@@ -84,8 +84,8 @@ function formatTime(iso: string) {
 
 /** 交互 scene 码 → 中文（与后端落库 scene 对齐） */
 const SCENE_LABELS: Record<string, string> = {
-  midwifery: '助产启思',
-  midwifery_turn: '助产启思对话',
+  midwifery: '启思智能体',
+  midwifery_turn: '启思智能体对话',
   brainstorm: '头脑风暴',
   brainstorm_turn: '头脑风暴对话',
   brainstorm_generate: '头脑风暴生成',
@@ -114,7 +114,7 @@ const SCENE_LABELS: Record<string, string> = {
 };
 
 const SCENE_TOKEN_ZH: Record<string, string> = {
-  midwifery: '助产启思',
+  midwifery: '启思智能体',
   brainstorm: '头脑风暴',
   scamper: 'SCAMPER',
   triz: 'TRIZ',

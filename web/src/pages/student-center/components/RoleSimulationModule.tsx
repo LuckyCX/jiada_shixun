@@ -636,7 +636,7 @@ const RoleSimulationModule = ({ classId, onTaskComplete, trainingEnded = false }
   const myPct = Math.round((myShown / QUALIFY_ROUNDS) * 100);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-3">
       {/* 达标进度：有效轮次 = max(run_index)，需每人 ≥ 3 轮 */}
       <div className="bg-white border border-emerald-100 rounded-xl p-4">
         <div className="flex items-center justify-between gap-3 mb-2">

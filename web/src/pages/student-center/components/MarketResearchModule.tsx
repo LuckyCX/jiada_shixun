@@ -1252,7 +1252,7 @@ export default function MarketResearchModule({
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-3">
       {/* 版本控制工具栏 */}
       <VersionControl
         enabled={false}
@@ -1435,35 +1435,6 @@ export default function MarketResearchModule({
           <li>调研报告（AI 分析结果）</li>
         </ul>
       </Modal>
-
-      {/* Module Header */}
-      <div className="bg-gradient-to-br from-green-500 to-green-600 rounded-2xl shadow-xl px-8 py-4 text-white">
-        <div className="flex items-start justify-between  ">
-          <div className="flex items-center gap-4">
-            <div className="w-16 h-16 bg-white/20 rounded-2xl flex items-center justify-center backdrop-blur-sm">
-              <i className="ri-bar-chart-line text-3xl"></i>
-            </div>
-            <div>
-              <h2 className="text-2xl font-bold mb-1">市场调研与用户画像</h2>
-              <p className="text-white/80 text-sm">通过真实调研验证用户需求，构建典型用户画像</p>
-            </div>
-          </div>
-        </div>
-        {/* <div className="grid grid-cols-3 gap-4">
-          <div className="bg-white/10 rounded-xl p-4 backdrop-blur-sm">
-            <div className="text-2xl font-bold mb-1">6/8</div>
-            <div className="text-sm text-white/70">知识点完成</div>
-          </div>
-          <div className="bg-white/10 rounded-xl p-4 backdrop-blur-sm">
-            <div className="text-2xl font-bold mb-1">4/5</div>
-            <div className="text-sm text-white/70">任务完成</div>
-          </div>
-          <div className="bg-white/10 rounded-xl p-4 backdrop-blur-sm">
-            <div className="text-2xl font-bold mb-1">75%</div>
-            <div className="text-sm text-white/70">整体进度</div>
-          </div>
-        </div> */}
-      </div>
 
       {/* Data flow hint */}
       {/* <div className="flex items-center gap-2 text-xs text-gray-500 bg-gray-50 border border-gray-200 rounded-xl px-4 py-3">

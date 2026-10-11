@@ -46,7 +46,7 @@ const HAT_DEFS = [
 ];
 
 const METHOD_LABEL: Record<string, string> = {
-  midwifery: '思辨助产启思',
+  midwifery: '启思智能体',
   brainstorm: '头脑风暴',
   ai: 'AI 创意',
   six_hats: '六帽创想室',
@@ -383,19 +383,58 @@ export async function midwiferyTurn(
     : body.messages.some((m) => m.role === 'user')
       ? Math.max(1, body.roundIndex + 1)
       : 0;
-  // 与学生端一致：仅学生已回答第 3 轮后（请求 roundIndex>=3）才允许生成
-  const canGenerate = Boolean(parsed?.canGenerate) && body.roundIndex >= 3;
+  const assistantText =
+    String(parsed?.assistantText || '').trim() ||
+    raw ||
+    (nextRound === 0
+      ? '你好！我是启思智能体。先用自己的话聊聊你想解决的问题或创业想法雏形，确认方向后我们再正式追问。'
+      : '请继续补充你的想法。');
+  // 与学生端一致：综合轮次 / 历史「第3轮已答」/ 模型 JSON / 正文引导
+  const canGenerate = resolveDemoMidwiferyCanGenerate({
+    messages: body.messages,
+    clientRoundIndex: body.roundIndex,
+    parsedCanGenerate: parsed?.canGenerate,
+    assistantText,
+  });
   return {
-    assistantText:
-      String(parsed?.assistantText || '').trim() ||
-      raw ||
-      (nextRound === 0
-        ? '你好！我是助创智能体。先用自己的话聊聊你想解决的问题或创业想法雏形，确认方向后我们再正式追问。'
-        : '请继续补充你的想法。'),
+    assistantText,
     roundIndex: nextRound,
     canGenerate,
-    doneHint: canGenerate ? String(parsed?.doneHint || '').trim() : '',
+    doneHint: canGenerate
+      ? String(parsed?.doneHint || '').trim() || '可以点击下方「生成创意」按钮，整合结构化创业可行性分析。'
+      : '',
   };
+}
+
+/** 演示侧解锁逻辑（对齐 node ideationMidwiferyPrompts.resolveMidwiferyCanGenerate） */
+function resolveDemoMidwiferyCanGenerate(opts: {
+  messages: { role: string; content: string }[];
+  clientRoundIndex: number;
+  parsedCanGenerate?: unknown;
+  assistantText?: string;
+}) {
+  const clientRound = Math.max(0, Number(opts.clientRoundIndex) || 0);
+  const list = Array.isArray(opts.messages) ? opts.messages : [];
+  let maxRoundAsked = 0;
+  let lastRound3AskIdx = -1;
+  for (let i = 0; i < list.length; i += 1) {
+    const m = list[i];
+    if (m.role !== 'assistant') continue;
+    for (const match of String(m.content || '').matchAll(/第\s*(\d+)\s*轮/g)) {
+      const r = Number(match[1]) || 0;
+      if (r > maxRoundAsked) maxRoundAsked = r;
+      if (r >= 3) lastRound3AskIdx = i;
+    }
+  }
+  const answeredAfterRound3 =
+    lastRound3AskIdx >= 0 && list.slice(lastRound3AskIdx + 1).some((m) => m.role === 'user');
+  const unlocked = answeredAfterRound3 && maxRoundAsked >= 3;
+  const parsedOn = opts.parsedCanGenerate === true || opts.parsedCanGenerate === 'true';
+  const text = String(opts.assistantText || '');
+  const textHintsGenerate =
+    /点击\s*生成创意|生成创意报告|可以点击生成|已完成三轮|三轮核心追问/.test(text) &&
+    (clientRound >= 2 || maxRoundAsked >= 2 || unlocked);
+  return clientRound >= 3 || unlocked || (parsedOn && (clientRound >= 2 || maxRoundAsked >= 2 || unlocked)) || textHintsGenerate;
 }
 
 export async function midwiferyGenerate(
@@ -406,11 +445,11 @@ export async function midwiferyGenerate(
   const raw = await generateDemoAi(
     classId,
     'ideation-midwifery-generate',
-    `请根据下列思辨助产对话提炼创业创意：\n${JSON.stringify(body.messages, null, 2)}`
+    `请根据下列启思智能体对话提炼创业创意：\n${JSON.stringify(body.messages, null, 2)}`
   );
   const parsed = parseJsonObject(raw);
   const topic = topicFrom(parsed);
-  const title = String(parsed?.title || '助产启思创意').trim().slice(0, 40) || '助产启思创意';
+  const title = String(parsed?.title || '启思智能体创意').trim().slice(0, 40) || '启思智能体创意';
   const description = String(parsed?.description || raw).trim() || '根据对话提炼的创意概述';
   const aiAnalysis = scoresFrom(parsed, description);
   return {

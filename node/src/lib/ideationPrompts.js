@@ -39,7 +39,7 @@ function methodPrompt(roleLine, focusLine) {
 }
 
 export const IDEATION_METHOD_LABELS = {
-  midwifery: '思辨助产启思',
+  midwifery: '启思智能体',
   brainstorm: '头脑风暴',
   ai: 'AI创意',
   six_hats: '六帽创想室',

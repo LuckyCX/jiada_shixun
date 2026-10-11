@@ -2410,7 +2410,7 @@ export default function StudentCenterPage() {
           </div>
         </Drawer>
 
-        <main key={selectedClassId || 'student-no-class'} className="flex-1 p-4 md:p-6 min-w-0 overflow-y-auto overflow-x-hidden">
+        <main key={selectedClassId || 'student-no-class'} className="flex-1 px-4 pt-3 pb-4 md:px-5 md:pt-3 md:pb-5 min-w-0 overflow-y-auto overflow-x-hidden">
 
           {/* 进度看板 */}
           {activeTab === 'overview' && (

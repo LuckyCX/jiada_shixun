@@ -1,19 +1,75 @@
 /**
- * 思辨助产启思：苏格拉底式多轮追问 + 创意生成
+ * 启思智能体：苏格拉底式多轮追问 + 创意生成
  * 轮次主题由模型自定，不硬套固定步骤表；每轮恰好 3 个编号问题。
  */
 
 import { JSON_OUTPUT_HARD_RULES } from './llmJsonOutputRules.js';
 
+/**
+ * 从对话历史解析「正式追问」最高轮次，以及学生是否已在第 3 轮提问后作答
+ * （避免模型把 roundIndex 标错导致 canGenerate 永远不解锁）
+ * @param {{ role?: string, content?: string }[]} messages
+ */
+export function resolveMidwiferyGenerateUnlock(messages) {
+  const list = Array.isArray(messages) ? messages : [];
+  let maxRoundAsked = 0;
+  let lastRound3AskIdx = -1;
+  for (let i = 0; i < list.length; i += 1) {
+    const m = list[i];
+    if (String(m?.role || '') !== 'assistant') continue;
+    const text = String(m?.content || '');
+    for (const match of text.matchAll(/第\s*(\d+)\s*轮/g)) {
+      const r = Number(match[1]) || 0;
+      if (r > maxRoundAsked) maxRoundAsked = r;
+      if (r >= 3) lastRound3AskIdx = i;
+    }
+  }
+  const answeredAfterRound3 =
+    lastRound3AskIdx >= 0 && list.slice(lastRound3AskIdx + 1).some((m) => String(m?.role || '') === 'user');
+  // 至少出现过「第1/2/3轮」字样，且学生在第3轮提问后已回复
+  const hasThreeRoundMarks =
+    list.some((m) => m?.role === 'assistant' && /第\s*1\s*轮/.test(String(m.content || ''))) &&
+    list.some((m) => m?.role === 'assistant' && /第\s*2\s*轮/.test(String(m.content || ''))) &&
+    maxRoundAsked >= 3;
+  return {
+    maxRoundAsked,
+    answeredAfterRound3,
+    unlocked: answeredAfterRound3 && (hasThreeRoundMarks || maxRoundAsked >= 3),
+  };
+}
+
+/**
+ * 综合客户端轮次、模型 JSON、对话证据，判定是否解锁「生成创意」
+ * @param {{ messages: any[], clientRoundIndex: number, parsedCanGenerate?: boolean, assistantText?: string }} opts
+ */
+export function resolveMidwiferyCanGenerate(opts) {
+  const clientRound = Math.max(0, Number(opts.clientRoundIndex) || 0);
+  const messages = Array.isArray(opts.messages) ? opts.messages : [];
+  const fromHistory = resolveMidwiferyGenerateUnlock(messages);
+  const parsedOn = opts.parsedCanGenerate === true || opts.parsedCanGenerate === 'true';
+  const text = String(opts.assistantText || '');
+  // 模型正文已引导生成（且历史显示至少答完一轮正式追问）时兜底解锁
+  const textHintsGenerate =
+    /点击\s*生成创意|生成创意报告|可以点击生成|已完成三轮|三轮核心追问/.test(text) &&
+    (clientRound >= 2 || fromHistory.maxRoundAsked >= 2 || fromHistory.unlocked);
+
+  return (
+    clientRound >= 3 ||
+    fromHistory.unlocked ||
+    (parsedOn && (clientRound >= 2 || fromHistory.maxRoundAsked >= 2 || fromHistory.unlocked)) ||
+    textHintsGenerate
+  );
+}
+
 /** 对话轮次：输出 JSON（assistantText / roundIndex / canGenerate / doneHint） */
 export function getMidwiferyTurnPrompt() {
   return `#Context#
-你是「助创智能体」，在「思辨助产启思」环节用苏格拉底式提问帮助学生澄清创业想法。你不替学生下结论，而是通过追问启发对方自己想清楚。
-自称必须用「助创智能体」，禁止自称「思辨助产士」「助产士」「助产师」。
+你是「启思智能体」，在「启思智能体」创新方法环节用苏格拉底式提问帮助学生澄清创业想法。你不替学生下结论，而是通过追问启发对方自己想清楚。
+自称必须用「启思智能体」，禁止自称「助创智能体」「思辨助产启思」「思辨助产士」「助产士」「助产师」。
 
 #Objective#
 按阶段推进，**确认学生已有想法后才进入正式追问轮次**：
-1. **开场（尚无助手消息）**：只做欢迎与邀请（2～4 句），可写「你好！我是助创智能体…」；请学生先用自己的话简述想解决的问题或创业想法雏形；**禁止**出现「1. 2. 3.」编号问题；**禁止**进入正式轮与对话框架；roundIndex=0；canGenerate=false。
+1. **开场（尚无助手消息）**：只做欢迎与邀请（2～4 句），可写「你好！我是启思智能体…」；请学生先用自己的话简述想解决的问题或创业想法雏形；**禁止**出现「1. 2. 3.」编号问题；**禁止**进入正式轮与对话框架；roundIndex=0；canGenerate=false。
 2. **确认想法（已有开场，但学生描述过简 / 笼统 / 不可辨识）**：
    - 仍保持苏格拉底式引导，追问场景、用户、痛点等；**禁止**正式 3 问与完整对话框架；roundIndex=0；canGenerate=false。
    - **必须**在回复末尾用 Markdown 明确给出「门槛提示」（不可省略），告诉学生：只有补齐下列信息，你才能为其**构建对话框架并开启第一轮追问**。建议结构：
@@ -46,7 +102,7 @@ export function getMidwiferyTurnPrompt() {
 开场阶段：禁止编号三问、禁止「第N轮」、禁止输出完整对话框架列表。
 确认想法阶段：禁止编号三问、禁止「第N轮」、禁止完整对话框架；**必须**含「要进入第一轮，请尽量补充：」门槛清单（见 Objective 第 2 点）。
 三轮后阶段：有缺口则继续追问；已清晰则可引导生成并保留续聊余地——由你判断，勿机械凑第 4 轮。
-自称仅用「助创智能体」。禁止 JSON 以外文字；禁止空字段。
+自称仅用「启思智能体」。禁止 JSON 以外文字；禁止空字段。
 
 #Response#
 只输出一个 JSON 对象，键必须齐全且仅限下列键：
@@ -63,7 +119,7 @@ ${JSON_OUTPUT_HARD_RULES}`;
 /** 基于全文对话生成可入库创意（含选题映射字段） */
 export function getMidwiferyGeneratePrompt() {
   return `#Context#
-你是创业实训「助创智能体」创意提炼助手。根据学生与助创智能体在「思辨助产启思」环节的多轮对话，提炼一条可入库、可填入「确定项目选题」表单的创业创意。
+你是创业实训「启思智能体」创意提炼助手。根据学生与启思智能体在「启思智能体」环节的多轮对话，提炼一条可入库、可填入「确定项目选题」表单的创业创意。
 
 #Objective#
 综合对话中学生表达的问题、用户、价值与方案，输出完整创意 JSON。信息不足时用「材料不足，暂按合理假设：…」补全，不得省略字段。

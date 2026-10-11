@@ -209,7 +209,7 @@ export default function IdeationModule({
   onTaskComplete,
 }: IdeationModuleProps) {
   const [topicForm] = Form.useForm<IdeationTopicFormValues>();
-  const [activeTab, setActiveTab] = useState<IdeationModuleTab>(initialTab || 'examples');
+  const [activeTab, setActiveTab] = useState<IdeationModuleTab>(initialTab || 'methods');
   const [activeMethod, setActiveMethod] = useState<IdeationChatMethodKey>(() => {
     const cached = DEMO_ACTIVE_METHOD_CACHE.get(classId);
     const allowed: IdeationChatMethodKey[] = ['midwifery', 'brainstorm', 'ai', 'six_hats'];
@@ -217,7 +217,7 @@ export default function IdeationModule({
   });
   /** 进过「创新方法工具」后保活对话，避免切到实例库/选题时卸载 */
   const [keepMethodsChat, setKeepMethodsChat] = useState(
-    () => DEMO_KEEP_METHODS_CACHE.get(classId) || (initialTab || 'examples') === 'methods'
+    () => DEMO_KEEP_METHODS_CACHE.get(classId) || (initialTab || 'methods') === 'methods'
   );
   const [ideas, setIdeas] = useState<Idea[]>([]);
   const [chatInput, setChatInput] = useState('');
@@ -598,19 +598,8 @@ export default function IdeationModule({
         </div>
       </div>
 
-      {/* Tab Navigation - 实例库在前 */}
+      {/* Tab：创新方法工具 → 实例库 → 确定项目选题 */}
       <div className="flex items-center gap-3">
-        <button
-          onClick={() => setActiveTab('examples')}
-          className={`px-5 py-2.5 text-sm font-semibold rounded-xl transition-all whitespace-nowrap cursor-pointer ${
-            activeTab === 'examples'
-              ? 'bg-gradient-to-r from-purple-500 to-violet-500 text-white shadow-lg'
-              : 'bg-white text-gray-700 border border-gray-200 hover:border-purple-300'
-          }`}
-        >
-          <i className="ri-archive-line mr-2"></i>
-          实例库
-        </button>
         <button
           onClick={() => setActiveTab('methods')}
           className={`px-5 py-2.5 text-sm font-semibold rounded-xl transition-all whitespace-nowrap cursor-pointer ${
@@ -621,6 +610,17 @@ export default function IdeationModule({
         >
           <i className={`ri-lightbulb-flash-line mr-2 ${activeTab === 'methods' ? 'text-white' : 'text-teal-500'}`}></i>
           创新方法工具
+        </button>
+        <button
+          onClick={() => setActiveTab('examples')}
+          className={`px-5 py-2.5 text-sm font-semibold rounded-xl transition-all whitespace-nowrap cursor-pointer ${
+            activeTab === 'examples'
+              ? 'bg-gradient-to-r from-purple-500 to-violet-500 text-white shadow-lg'
+              : 'bg-white text-gray-700 border border-gray-200 hover:border-purple-300'
+          }`}
+        >
+          <i className="ri-archive-line mr-2"></i>
+          实例库
         </button>
         <button
           onClick={() => void handleConfirmTabClick()}
@@ -638,7 +638,7 @@ export default function IdeationModule({
         </button>
       </div>
 
-      {/* 实例库 Tab */}
+      {/* 实例库 Tab：左右卡片同顶对齐、同内边距 */}
       {activeTab === 'examples' && (
         <div className="space-y-4 min-h-[calc(100vh-270px)]">
           <Alert
@@ -651,17 +651,16 @@ export default function IdeationModule({
               </span>
             }
           />
-        <div className="grid grid-cols-4 gap-6">
-          {/* 左侧分类导航 */}
-          <div className="col-span-1">
-            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 sticky top-24 max-h-[calc(100vh-280px)] overflow-y-auto">
-              <h3 className="text-base font-bold text-gray-900 mb-4">垂直方向</h3>
+          <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 items-start">
+            <aside className="lg:col-span-1 bg-white rounded-2xl shadow-sm border border-gray-100 p-4 max-h-[calc(100vh-280px)] overflow-y-auto">
+              <h3 className="text-base font-bold text-gray-900 mb-3 leading-none">垂直方向</h3>
               <div className="space-y-2">
                 {exampleCategories.map((cat) => (
                   <button
                     key={cat.id}
+                    type="button"
                     onClick={() => setSelectedCategoryId(cat.id)}
-                    className={`w-full px-4 py-3 text-sm font-medium rounded-xl transition-all text-left flex items-center gap-3 cursor-pointer ${
+                    className={`w-full px-3 py-2.5 text-sm font-medium rounded-xl transition-all text-left flex items-center gap-2.5 cursor-pointer ${
                       selectedCategory.id === cat.id
                         ? 'text-white shadow-md'
                         : 'bg-gray-50 text-gray-700 hover:bg-gray-100'
@@ -669,37 +668,41 @@ export default function IdeationModule({
                     style={selectedCategory.id === cat.id ? { backgroundColor: displayColor(cat.color) } : undefined}
                   >
                     <CategoryIcon className="text-base flex-shrink-0" icon={cat.icon} />
-                    <span>{cat.name}</span>
+                    <span className="truncate">{cat.name}</span>
                   </button>
                 ))}
                 {!examplesLoading && exampleCategories.length === 0 && (
-                  <div className="rounded-xl border border-dashed border-gray-200 p-4 text-center text-sm text-gray-500">暂无实例方向</div>
+                  <div className="rounded-xl border border-dashed border-gray-200 p-4 text-center text-sm text-gray-500">
+                    暂无实例方向
+                  </div>
                 )}
               </div>
-            </div>
-          </div>
+            </aside>
 
-          {/* 右侧案例展示 */}
-          <div className="col-span-3">
-            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 max-h-[calc(100vh-280px)] flex flex-col">
+            <section className="lg:col-span-3 bg-white rounded-2xl shadow-sm border border-gray-100 p-4 max-h-[calc(100vh-280px)] flex flex-col min-h-0">
               {selectedCategory ? (
                 <>
-                  <div className="flex items-center gap-3 mb-6">
+                  <div className="flex items-center gap-3 mb-4 shrink-0">
                     <div
-                      className="w-12 h-12 rounded-2xl flex items-center justify-center text-white"
+                      className="w-11 h-11 rounded-2xl flex items-center justify-center text-white shrink-0"
                       style={{ backgroundColor: displayColor(selectedCategory.color) }}
                     >
-                      <CategoryIcon className="text-2xl" icon={selectedCategory.icon} />
+                      <CategoryIcon className="text-xl" icon={selectedCategory.icon} />
                     </div>
-                    <div>
-                      <h2 className="text-xl font-bold text-gray-900">{selectedCategory.name}</h2>
-                      <p className="text-sm text-gray-500">参考以下实例，激发创新灵感（共{selectedCategory.cases.length}个实例）</p>
+                    <div className="min-w-0">
+                      <h2 className="text-lg font-bold text-gray-900 leading-tight">{selectedCategory.name}</h2>
+                      <p className="text-sm text-gray-500 mt-0.5">
+                        参考以下实例，激发创新灵感（共{selectedCategory.cases.length}个实例）
+                      </p>
                     </div>
                   </div>
 
-                  <div className="space-y-4 overflow-y-auto pr-2">
+                  <div className="space-y-3 overflow-y-auto min-h-0 flex-1 pr-1">
                     {selectedCategory.cases.map((caseItem) => (
-                      <div key={caseItem.id} className="border border-gray-200 rounded-xl overflow-hidden hover:shadow-lg hover:border-teal-200 transition-all">
+                      <div
+                        key={caseItem.id}
+                        className="border border-gray-200 rounded-xl overflow-hidden hover:shadow-lg hover:border-teal-200 transition-all"
+                      >
                         {caseItem.hasCoverImage && classId ? (
                           <div className="w-full h-40 bg-gray-100 border-b border-gray-200">
                             <img
@@ -709,40 +712,54 @@ export default function IdeationModule({
                             />
                           </div>
                         ) : null}
-                        <div className="p-5">
-                        <div className="flex items-start justify-between mb-2 gap-4">
-                          <div className="flex-1">
-                            <h3 className="text-base font-bold text-gray-900 mb-2">{caseItem.title}</h3>
-                            <p
-                              className="text-sm text-gray-600 leading-relaxed mb-3"
-                              style={{ display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2, overflow: 'hidden' }}
-                            >
-                              {detailSummary(caseItem.detailHtml)}
-                            </p>
-                            <div className="flex items-center gap-2 mb-3 flex-wrap">
-                              {caseItem.tags.map((tag) => (
-                                <span key={tag} className="px-2.5 py-1 bg-teal-50 text-teal-700 text-xs font-medium rounded-full whitespace-nowrap">
-                                  {tag}
-                                </span>
-                              ))}
-                            </div>
-                            <div className="flex items-start gap-2 bg-green-50 border border-green-200 rounded-lg p-2.5">
-                              <i className="ri-trophy-line text-green-600 text-sm mt-0.5"></i>
-                              <div>
-                                <p className="text-xs font-semibold text-green-800 mb-0.5">项目成果</p>
-                                <p className="text-xs text-green-700">{caseItem.projectOutcome || '未填写'}</p>
+                        <div className="p-4">
+                          <div className="flex items-start justify-between mb-2 gap-4">
+                            <div className="flex-1 min-w-0">
+                              <h3 className="text-base font-bold text-gray-900 mb-2">{caseItem.title}</h3>
+                              <p
+                                className="text-sm text-gray-600 leading-relaxed mb-3"
+                                style={{
+                                  display: '-webkit-box',
+                                  WebkitBoxOrient: 'vertical',
+                                  WebkitLineClamp: 2,
+                                  overflow: 'hidden',
+                                }}
+                              >
+                                {detailSummary(caseItem.detailHtml)}
+                              </p>
+                              <div className="flex items-center gap-2 mb-3 flex-wrap">
+                                {caseItem.tags.map((tag) => (
+                                  <span
+                                    key={tag}
+                                    className="px-2.5 py-1 bg-teal-50 text-teal-700 text-xs font-medium rounded-full whitespace-nowrap"
+                                  >
+                                    {tag}
+                                  </span>
+                                ))}
+                              </div>
+                              <div className="flex items-start gap-2 bg-green-50 border border-green-200 rounded-lg p-2.5">
+                                <i className="ri-trophy-line text-green-600 text-sm mt-0.5"></i>
+                                <div>
+                                  <p className="text-xs font-semibold text-green-800 mb-0.5">项目成果</p>
+                                  <p className="text-xs text-green-700">{caseItem.projectOutcome || '未填写'}</p>
+                                </div>
                               </div>
                             </div>
+                            <button
+                              type="button"
+                              onClick={() => setPreviewCase(caseItem)}
+                              className="text-sm text-teal-600 font-medium cursor-pointer shrink-0"
+                            >
+                              查看详情
+                            </button>
                           </div>
-                          <button type="button" onClick={() => setPreviewCase(caseItem)} className="text-sm text-teal-600 font-medium cursor-pointer">
-                            查看详情
-                          </button>
-                        </div>
                         </div>
                       </div>
                     ))}
                     {!examplesLoading && selectedCategory.cases.length === 0 && (
-                      <div className="rounded-xl border border-dashed border-gray-200 p-10 text-center text-sm text-gray-500">暂无实例</div>
+                      <div className="rounded-xl border border-dashed border-gray-200 p-10 text-center text-sm text-gray-500">
+                        暂无实例
+                      </div>
                     )}
                   </div>
                 </>
@@ -751,16 +768,15 @@ export default function IdeationModule({
                   {examplesLoading ? '实例库加载中...' : '暂无实例'}
                 </div>
               )}
-            </div>
+            </section>
           </div>
-        </div>
         </div>
       )}
 
       {/* 创新方法工具 Tab：首次进入后 hidden 保活，切换实例库/选题不丢对话 */}
       {keepMethodsChat ? (
       <div
-        className={activeTab === 'methods' ? 'space-y-5' : 'hidden'}
+        className={activeTab === 'methods' ? 'space-y-3' : 'hidden'}
         aria-hidden={activeTab !== 'methods'}
       >
             <IdeationMethodChat

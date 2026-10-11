@@ -963,7 +963,7 @@ export default function BusinessPlanModule({
   }
 
   return (
-    <div className={fullScreen ? 'space-y-0' : 'space-y-8'}>
+    <div className={fullScreen ? 'space-y-0' : 'space-y-3'}>
       {readOnly && (
         <div className="bg-green-50 border border-green-200 rounded-xl px-4 py-3 text-sm text-green-800">
           商业计划书已通过教师审核，内容不可再编辑。

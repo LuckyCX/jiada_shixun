@@ -191,10 +191,10 @@ export default function IdeationModule({
   onTaskComplete,
 }: IdeationModuleProps) {
   const [topicForm] = Form.useForm<IdeationTopicFormValues>();
-  const [activeTab, setActiveTab] = useState<IdeationModuleTab>(initialTab || 'examples');
+  const [activeTab, setActiveTab] = useState<IdeationModuleTab>(initialTab || 'methods');
   const [activeMethod, setActiveMethod] = useState<IdeationChatMethodKey>('midwifery');
   /** 进过「创新方法工具」后保活对话，避免切到实例库/选题时卸载 */
-  const [keepMethodsChat, setKeepMethodsChat] = useState(() => (initialTab || 'examples') === 'methods');
+  const [keepMethodsChat, setKeepMethodsChat] = useState(() => (initialTab || 'methods') === 'methods');
   const [ideas, setIdeas] = useState<Idea[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [messages, setMessages] = useState<StudentIdeationDiscussion[]>([]);
@@ -543,7 +543,7 @@ export default function IdeationModule({
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-3">
       {/* 版本控制工具栏 */}
       <VersionControl
         versions={versions}
@@ -553,32 +553,8 @@ export default function IdeationModule({
         moduleName="创新思维与创意生成"
       />
 
-      {/* 模块头部 */}
-      <div className="bg-gradient-to-br from-teal-500 to-cyan-600 rounded-2xl p-6 text-white">
-        <div className="flex items-center gap-4">
-          <div className="w-14 h-14 bg-white/20 rounded-2xl flex items-center justify-center backdrop-blur-sm">
-            <i className="ri-lightbulb-flash-line text-2xl"></i>
-          </div>
-          <div>
-            <h2 className="text-xl font-bold mb-1">创新思维与创意生成</h2>
-            <p className="text-white/80 text-sm">运用结构化方法生成并筛选高质量创业点子</p>
-          </div>
-        </div>
-      </div>
-
-      {/* Tab Navigation - 实例库在前 */}
+      {/* Tab：创新方法工具 → 实例库 → 确定项目选题 */}
       <div className="flex items-center gap-3">
-        <button
-          onClick={() => setActiveTab('examples')}
-          className={`px-5 py-2.5 text-sm font-semibold rounded-xl transition-all whitespace-nowrap cursor-pointer ${
-            activeTab === 'examples'
-              ? 'bg-gradient-to-r from-purple-500 to-violet-500 text-white shadow-lg'
-              : 'bg-white text-gray-700 border border-gray-200 hover:border-purple-300'
-          }`}
-        >
-          <i className="ri-archive-line mr-2"></i>
-          实例库
-        </button>
         <button
           onClick={() => setActiveTab('methods')}
           className={`px-5 py-2.5 text-sm font-semibold rounded-xl transition-all whitespace-nowrap cursor-pointer ${
@@ -589,6 +565,17 @@ export default function IdeationModule({
         >
           <i className={`ri-lightbulb-flash-line mr-2 ${activeTab === 'methods' ? 'text-white' : 'text-teal-500'}`}></i>
           创新方法工具
+        </button>
+        <button
+          onClick={() => setActiveTab('examples')}
+          className={`px-5 py-2.5 text-sm font-semibold rounded-xl transition-all whitespace-nowrap cursor-pointer ${
+            activeTab === 'examples'
+              ? 'bg-gradient-to-r from-purple-500 to-violet-500 text-white shadow-lg'
+              : 'bg-white text-gray-700 border border-gray-200 hover:border-purple-300'
+          }`}
+        >
+          <i className="ri-archive-line mr-2"></i>
+          实例库
         </button>
         <button
           onClick={() => void handleConfirmTabClick()}
@@ -606,79 +593,90 @@ export default function IdeationModule({
         </button>
       </div>
 
-      {/* 实例库 Tab */}
+      {/* 实例库 Tab：左右卡片同顶对齐、同内边距 */}
       {activeTab === 'examples' && (
-        <div className="grid grid-cols-4 gap-6 min-h-[calc(100vh-270px)]">
-          {/* 左侧分类导航 */}
-          <div className="col-span-1">
-            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 sticky top-24 max-h-[calc(100vh-280px)] overflow-y-auto">
-              <h3 className="text-base font-bold text-gray-900 mb-4">垂直方向</h3>
-              <div className="space-y-2">
-                {exampleCategories.map((cat) => (
-                  <button
-                    key={cat.id}
-                    onClick={() => setSelectedCategoryId(cat.id)}
-                    className={`w-full px-4 py-3 text-sm font-medium rounded-xl transition-all text-left flex items-center gap-3 cursor-pointer ${
-                      selectedCategory.id === cat.id
-                        ? 'text-white shadow-md'
-                        : 'bg-gray-50 text-gray-700 hover:bg-gray-100'
-                    }`}
-                    style={selectedCategory.id === cat.id ? { backgroundColor: displayColor(cat.color) } : undefined}
-                  >
-                    <CategoryIcon className="text-base flex-shrink-0" icon={cat.icon} />
-                    <span>{cat.name}</span>
-                  </button>
-                ))}
-                {!examplesLoading && exampleCategories.length === 0 && (
-                  <div className="rounded-xl border border-dashed border-gray-200 p-4 text-center text-sm text-gray-500">暂无实例方向</div>
-                )}
-              </div>
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 min-h-[calc(100vh-270px)] items-start">
+          <aside className="lg:col-span-1 bg-white rounded-2xl shadow-sm border border-gray-100 p-4 max-h-[calc(100vh-220px)] overflow-y-auto">
+            <h3 className="text-base font-bold text-gray-900 mb-3 leading-none">垂直方向</h3>
+            <div className="space-y-2">
+              {exampleCategories.map((cat) => (
+                <button
+                  key={cat.id}
+                  type="button"
+                  onClick={() => setSelectedCategoryId(cat.id)}
+                  className={`w-full px-3 py-2.5 text-sm font-medium rounded-xl transition-all text-left flex items-center gap-2.5 cursor-pointer ${
+                    selectedCategory.id === cat.id
+                      ? 'text-white shadow-md'
+                      : 'bg-gray-50 text-gray-700 hover:bg-gray-100'
+                  }`}
+                  style={selectedCategory.id === cat.id ? { backgroundColor: displayColor(cat.color) } : undefined}
+                >
+                  <CategoryIcon className="text-base flex-shrink-0" icon={cat.icon} />
+                  <span className="truncate">{cat.name}</span>
+                </button>
+              ))}
+              {!examplesLoading && exampleCategories.length === 0 && (
+                <div className="rounded-xl border border-dashed border-gray-200 p-4 text-center text-sm text-gray-500">
+                  暂无实例方向
+                </div>
+              )}
             </div>
-          </div>
+          </aside>
 
-          {/* 右侧案例展示 */}
-          <div className="col-span-3">
-            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 max-h-[calc(100vh-280px)] flex flex-col">
-              {selectedCategory ? (
-                <>
-                  <div className="flex items-center gap-3 mb-6">
-                    <div
-                      className="w-12 h-12 rounded-2xl flex items-center justify-center text-white"
-                      style={{ backgroundColor: displayColor(selectedCategory.color) }}
-                    >
-                      <CategoryIcon className="text-2xl" icon={selectedCategory.icon} />
-                    </div>
-                    <div>
-                      <h2 className="text-xl font-bold text-gray-900">{selectedCategory.name}</h2>
-                      <p className="text-sm text-gray-500">参考以下实例，激发创新灵感（共{selectedCategory.cases.length}个实例）</p>
-                    </div>
+          <section className="lg:col-span-3 bg-white rounded-2xl shadow-sm border border-gray-100 p-4 max-h-[calc(100vh-220px)] flex flex-col min-h-0">
+            {selectedCategory ? (
+              <>
+                <div className="flex items-center gap-3 mb-4 shrink-0">
+                  <div
+                    className="w-11 h-11 rounded-2xl flex items-center justify-center text-white shrink-0"
+                    style={{ backgroundColor: displayColor(selectedCategory.color) }}
+                  >
+                    <CategoryIcon className="text-xl" icon={selectedCategory.icon} />
                   </div>
+                  <div className="min-w-0">
+                    <h2 className="text-lg font-bold text-gray-900 leading-tight">{selectedCategory.name}</h2>
+                    <p className="text-sm text-gray-500 mt-0.5">
+                      参考以下实例，激发创新灵感（共{selectedCategory.cases.length}个实例）
+                    </p>
+                  </div>
+                </div>
 
-                  <div className="space-y-4 overflow-y-auto pr-2">
-                    {selectedCategory.cases.map((caseItem) => (
-                      <div key={caseItem.id} className="border border-gray-200 rounded-xl overflow-hidden hover:shadow-lg hover:border-teal-200 transition-all">
-                        {caseItem.hasCoverImage && classId ? (
-                          <div className="w-full h-40 bg-gray-100 border-b border-gray-200">
-                            <img
-                              src={getStudentInstanceCaseCoverUrl(classId, caseItem.id)}
-                              alt=""
-                              className="w-full h-full object-cover"
-                            />
-                          </div>
-                        ) : null}
-                        <div className="p-5">
+                <div className="space-y-3 overflow-y-auto min-h-0 flex-1 pr-1">
+                  {selectedCategory.cases.map((caseItem) => (
+                    <div
+                      key={caseItem.id}
+                      className="border border-gray-200 rounded-xl overflow-hidden hover:shadow-lg hover:border-teal-200 transition-all"
+                    >
+                      {caseItem.hasCoverImage && classId ? (
+                        <div className="w-full h-40 bg-gray-100 border-b border-gray-200">
+                          <img
+                            src={getStudentInstanceCaseCoverUrl(classId, caseItem.id)}
+                            alt=""
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
+                      ) : null}
+                      <div className="p-4">
                         <div className="flex items-start justify-between mb-2 gap-4">
-                          <div className="flex-1">
+                          <div className="flex-1 min-w-0">
                             <h3 className="text-base font-bold text-gray-900 mb-2">{caseItem.title}</h3>
                             <p
                               className="text-sm text-gray-600 leading-relaxed mb-3"
-                              style={{ display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2, overflow: 'hidden' }}
+                              style={{
+                                display: '-webkit-box',
+                                WebkitBoxOrient: 'vertical',
+                                WebkitLineClamp: 2,
+                                overflow: 'hidden',
+                              }}
                             >
                               {detailSummary(caseItem.detailHtml)}
                             </p>
                             <div className="flex items-center gap-2 mb-3 flex-wrap">
                               {caseItem.tags.map((tag) => (
-                                <span key={tag} className="px-2.5 py-1 bg-teal-50 text-teal-700 text-xs font-medium rounded-full whitespace-nowrap">
+                                <span
+                                  key={tag}
+                                  className="px-2.5 py-1 bg-teal-50 text-teal-700 text-xs font-medium rounded-full whitespace-nowrap"
+                                >
                                   {tag}
                                 </span>
                               ))}
@@ -691,32 +689,37 @@ export default function IdeationModule({
                               </div>
                             </div>
                           </div>
-                          <button type="button" onClick={() => setPreviewCase(caseItem)} className="text-sm text-teal-600 font-medium cursor-pointer">
+                          <button
+                            type="button"
+                            onClick={() => setPreviewCase(caseItem)}
+                            className="text-sm text-teal-600 font-medium cursor-pointer shrink-0"
+                          >
                             查看详情
                           </button>
                         </div>
-                        </div>
                       </div>
-                    ))}
-                    {!examplesLoading && selectedCategory.cases.length === 0 && (
-                      <div className="rounded-xl border border-dashed border-gray-200 p-10 text-center text-sm text-gray-500">暂无实例</div>
-                    )}
-                  </div>
-                </>
-              ) : (
-                <div className="flex-1 rounded-xl border border-dashed border-gray-200 p-12 text-center text-sm text-gray-500">
-                  {examplesLoading ? '实例库加载中...' : '暂无实例'}
+                    </div>
+                  ))}
+                  {!examplesLoading && selectedCategory.cases.length === 0 && (
+                    <div className="rounded-xl border border-dashed border-gray-200 p-10 text-center text-sm text-gray-500">
+                      暂无实例
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
-          </div>
+              </>
+            ) : (
+              <div className="flex-1 rounded-xl border border-dashed border-gray-200 p-12 text-center text-sm text-gray-500">
+                {examplesLoading ? '实例库加载中...' : '暂无实例'}
+              </div>
+            )}
+          </section>
         </div>
       )}
 
       {/* 创新方法工具 Tab：首次进入后 hidden 保活，切换实例库/选题不丢对话 */}
       {keepMethodsChat ? (
       <div
-        className={activeTab === 'methods' ? 'space-y-5' : 'hidden'}
+        className={activeTab === 'methods' ? 'space-y-3' : 'hidden'}
         aria-hidden={activeTab !== 'methods'}
       >
             <IdeationMethodChat

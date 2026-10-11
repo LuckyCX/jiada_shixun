@@ -616,7 +616,7 @@ export default function BusinessModelModule({
   );
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-3">
       <VersionControl
         versions={versions}
         currentVersion={currentVersion}
@@ -624,22 +624,6 @@ export default function BusinessModelModule({
         onSaveVersion={handleSaveVersion}
         moduleName="商业模式设计"
       />
-
-      {/* 模块头部 */}
-      <div className="bg-gradient-to-br from-pink-500 to-pink-600 rounded-2xl shadow-xl p-8 text-white">
-        <div className="flex items-start justify-between">
-          <div className="flex items-center gap-4">
-            <div className="w-16 h-16 bg-white/20 rounded-2xl flex items-center justify-center backdrop-blur-sm">
-              <i className="ri-briefcase-line text-3xl"></i>
-            </div>
-            <div>
-              <h2 className="text-2xl font-bold mb-1">商业模式设计</h2>
-              <p className="text-white/80 text-sm">整合前期成果，构建完整商业模式</p>
-            </div>
-          </div>
-        </div>
-         
-      </div>
 
       {/* 标签页 */}
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100">

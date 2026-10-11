@@ -19,6 +19,7 @@ import {
 import {
   getMidwiferyGeneratePrompt,
   getMidwiferyTurnPrompt,
+  resolveMidwiferyCanGenerate,
 } from '../lib/ideationMidwiferyPrompts.js';
 import {
   HAT_STUDIO_DRAFT_KEYS,
@@ -894,7 +895,7 @@ router.post('/student/personal-classes/:classId/ideation/ideas/analyze', require
       return bad(req, res, 400, 40003, '参数无效');
     }
     if (methodKey === 'midwifery') {
-      return bad(req, res, 400, 40003, '思辨助产启思请使用专用生成接口');
+      return bad(req, res, 400, 40003, '启思智能体请使用专用生成接口');
     }
 
     const pool = getPool();
@@ -1028,7 +1029,7 @@ router.post('/student/personal-classes/:classId/ideation/ideas', requireAuth(), 
   }
 });
 
-/** 思辨助产启思：多轮对话 */
+/** 启思智能体：多轮对话 */
 router.post(
   '/student/personal-classes/:classId/ideation/methods/midwifery/turn',
   requireAuth(),
@@ -1047,7 +1048,7 @@ router.post(
         return bad(req, res, 403, 40301, '未加入该班级');
       }
       const team = await getConfirmedTeam(pool, sid, classId);
-      if (!team) return bad(req, res, 400, 40014, '教师确认组队后可使用思辨助产启思');
+      if (!team) return bad(req, res, 400, 40014, '教师确认组队后可使用启思智能体');
 
       const provider = await getEnabledProvider('multimodal');
       if (!provider) return bad(req, res, 400, 40011, '未配置已启用的多模态模型');
@@ -1056,7 +1057,7 @@ router.post(
 对话历史（JSON）：
 ${JSON.stringify(messages.length ? messages : [{ role: 'system', content: '（新会话，请发起第 1 轮提问）' }], null, 2)}
 
-请输出本轮助创智能体回复 JSON。`;
+请输出本轮启思智能体回复 JSON。`;
 
       const parsed = await runIdeationLlmJson({
         provider,
@@ -1071,15 +1072,21 @@ ${JSON.stringify(messages.length ? messages : [{ role: 'system', content: '（�
         : messages.some((m) => m.role === 'user')
           ? Math.max(1, roundIndex + 1)
           : 0;
-      // 请求携带的 roundIndex 是「学生已看到的轮次」：>=3 表示第 3 轮提问已展示且学生已提交回答 → 解锁生成
-      // 解锁后即使继续第 4+ 轮追问，仍保持可生成
-      const canGenerate = roundIndex >= 3;
-      const doneHint = canGenerate ? String(parsed.doneHint || '').trim() : '';
       const assistantText =
         String(parsed.assistantText || '').trim() ||
         (nextRound === 0
-          ? '你好！我是助创智能体。先用自己的话聊聊：你想解决什么问题、给谁用？想清楚一点后我们再深入追问。'
+          ? '你好！我是启思智能体。先用自己的话聊聊：你想解决什么问题、给谁用？想清楚一点后我们再深入追问。'
           : '请继续补充你的想法。');
+      // 解锁：客户端轮次 / 对话里「第3轮」已答 / 模型 JSON / 正文引导生成（防轮次标错导致无按钮）
+      const canGenerate = resolveMidwiferyCanGenerate({
+        messages,
+        clientRoundIndex: roundIndex,
+        parsedCanGenerate: parsed.canGenerate,
+        assistantText,
+      });
+      const doneHint = canGenerate
+        ? String(parsed.doneHint || '').trim() || '可以点击下方「生成创意」按钮，整合结构化创业可行性分析。'
+        : '';
 
       // 落库本轮对话（取最后一条 user + 本轮 assistant）
       try {
@@ -1114,7 +1121,7 @@ ${JSON.stringify(messages.length ? messages : [{ role: 'system', content: '（�
   }
 );
 
-/** 思辨助产启思：基于对话生成可入库预览创意 */
+/** 启思智能体：基于对话生成可入库预览创意 */
 router.post(
   '/student/personal-classes/:classId/ideation/methods/midwifery/generate',
   requireAuth(),
@@ -1137,7 +1144,7 @@ router.post(
       const provider = await getEnabledProvider('multimodal');
       if (!provider) return bad(req, res, 400, 40011, '未配置已启用的多模态模型');
 
-      const userPrompt = `请根据下列思辨助产对话提炼创业创意：\n${JSON.stringify(messages, null, 2)}`;
+      const userPrompt = `请根据下列启思智能体对话提炼创业创意：\n${JSON.stringify(messages, null, 2)}`;
       const parsed = await runIdeationLlmJson({
         provider,
         system: getMidwiferyGeneratePrompt(),

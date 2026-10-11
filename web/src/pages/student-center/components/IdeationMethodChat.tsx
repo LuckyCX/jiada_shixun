@@ -1,5 +1,5 @@
 /**
- * 创新方法工具：豆包式左侧对话（思辨助产 / 头脑风暴 / AI 创意 / 六帽嵌入）
+ * 创新方法工具：豆包式左侧对话（启思智能体 / 头脑风暴 / AI 创意 / 六帽嵌入）
  * 方法 chip 切换保留各线程；离开创新方法菜单卸载后可丢失。
  */
 import {
@@ -113,7 +113,7 @@ export const IDEATION_CHAT_METHODS: {
   icon: string;
   activeClass: string;
 }[] = [
-  { key: 'midwifery', label: '思辨助产启思', icon: 'ri-questionnaire-line', activeClass: 'bg-indigo-500 text-white' },
+  { key: 'midwifery', label: '启思智能体', icon: 'ri-questionnaire-line', activeClass: 'bg-indigo-500 text-white' },
   { key: 'brainstorm', label: '头脑风暴', icon: 'ri-lightbulb-flash-line', activeClass: 'bg-teal-500 text-white' },
   { key: 'ai', label: 'AI 创意', icon: 'ri-sparkling-line', activeClass: 'bg-rose-500 text-white' },
   { key: 'six_hats', label: '六帽创想室', icon: 'ri-user-voice-line', activeClass: 'bg-violet-500 text-white' },
@@ -185,6 +185,11 @@ function sanitizeMidwiferyText(text: string, canGenerate: boolean) {
     .replace(/^[>\s]*可点击生成创意[^\n]*$/gm, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+/** 正文已引导生成时前端兜底解锁（防接口 canGenerate 漏标） */
+function textSuggestsCanGenerate(text: string) {
+  return /点击\s*生成创意|生成创意报告|可以点击生成|已完成三轮|三轮核心追问/.test(String(text || ''));
 }
 
 function buildChatFormPayload(methodKey: 'brainstorm' | 'ai', msgs: ChatMsg[]) {
@@ -386,20 +391,6 @@ export default function IdeationMethodChat({
     });
   }, []);
 
-  const hatSlot =
-    hatStudioSlot && isValidElement(hatStudioSlot)
-      ? cloneElement(
-          hatStudioSlot as ReactElement<{
-            onBindComposer?: (c: HatStudioComposerBind | null) => void;
-            onRequestAppendInput?: (piece: string) => void;
-          }>,
-          {
-            onBindComposer: bindHatComposer,
-            onRequestAppendInput: appendHatInput,
-          }
-        )
-      : hatStudioSlot;
-
   const thread = threads[method] || emptyThread();
   const busy = Boolean(busyMap[method]) || (method === 'six_hats' && Boolean(hatComposer?.busy));
   // 任一方法思考中（含六帽）时锁定底部方法切换，避免对话中途乱切
@@ -420,6 +411,29 @@ export default function IdeationMethodChat({
     el.scrollTop = el.scrollHeight;
   }, [thread.messages, method, busy]);
 
+  // 已有会话：正文已写「可生成」但 canGenerate 未解锁时补按钮（兼容旧轮次漏标）
+  useEffect(() => {
+    if (method !== 'midwifery') return;
+    const cur = threadsRef.current.midwifery;
+    if (!cur?.bootstrapped || cur.canGenerate) return;
+    const lastAssist = [...cur.messages]
+      .reverse()
+      .find((m): m is TextMsg => m.kind === 'text' && m.role === 'assistant');
+    if (!lastAssist || !textSuggestsCanGenerate(lastAssist.content)) return;
+    patchThread('midwifery', (prev) => {
+      if (prev.canGenerate) return prev;
+      return {
+        ...prev,
+        canGenerate: true,
+        messages: prev.messages.map((m) =>
+          m.kind === 'text' && m.role === 'assistant'
+            ? { ...m, showGenerate: m.id === lastAssist.id }
+            : m
+        ),
+      };
+    });
+  }, [method, thread.messages, thread.canGenerate]);
+
   // 开场：助产自动 turn；头脑风暴/AI 写入引导语（切换方法不重跑已开场线程）
   useEffect(() => {
     if (disabled || method === 'six_hats') return;
@@ -439,25 +453,26 @@ export default function IdeationMethodChat({
           // 过期请求（Strict Mode 第一次 effect）直接丢弃
           if (gen !== bootGenRef.current) return;
           const text = String(res?.assistantText || '').trim();
-          if (!text) throw new Error('助创智能体开场未返回内容');
+          if (!text) throw new Error('启思智能体开场未返回内容');
           const round = Math.max(0, Number(res.roundIndex) || 0);
+          const canGen = Boolean(res.canGenerate) || textSuggestsCanGenerate(text);
           patchThread('midwifery', () => ({
             messages: [
               {
                 kind: 'text',
                 id: `a-${Date.now()}`,
                 role: 'assistant',
-                content: text,
-                showGenerate: Boolean(res.canGenerate) && round >= 3,
+                content: sanitizeMidwiferyText(text, canGen),
+                showGenerate: canGen,
               },
             ],
             roundIndex: round,
-            canGenerate: Boolean(res.canGenerate) && round >= 3,
+            canGenerate: canGen,
             bootstrapped: true,
           }));
         } catch (e) {
           if (gen !== bootGenRef.current) return;
-          message.error(e instanceof Error ? e.message : '助创智能体开场失败');
+          message.error(e instanceof Error ? e.message : '启思智能体开场失败');
           // 失败也落一条可重试的提示，避免一直「正在准备引导」
           patchThread('midwifery', () => ({
             messages: [
@@ -543,7 +558,7 @@ export default function IdeationMethodChat({
     if (sendMethod === 'six_hats') {
       const composer = hatComposerRef.current;
       if (!composer?.canSend) {
-        message.warning(composer?.placeholder || '请先点击「开始六帽讨论」');
+        message.warning(composer?.placeholder || '讨论准备中，请稍候再发送');
         return;
       }
       setMethodBusy('six_hats', true);
@@ -578,26 +593,37 @@ export default function IdeationMethodChat({
           roundIndex: cur.roundIndex,
           threadId: ensureThreadId('midwifery'),
         });
-        // 一旦解锁「生成创意」则保持，避免第 4 轮及以后按钮消失
-        const canGen = Boolean(res.canGenerate) || Boolean(cur.canGenerate);
+        // 一旦解锁「生成创意」则保持；正文引导生成时也兜底解锁
+        const canGen =
+          Boolean(res.canGenerate) ||
+          Boolean(cur.canGenerate) ||
+          textSuggestsCanGenerate(res.assistantText) ||
+          textSuggestsCanGenerate(res.doneHint || '');
         const bodyText = sanitizeMidwiferyText(res.assistantText, canGen);
         const withHint =
           canGen && res.doneHint?.trim() ? `${bodyText}\n\n> ${res.doneHint.trim()}` : bodyText;
-        patchThread('midwifery', (prev) => ({
-          ...prev,
-          roundIndex: res.roundIndex,
-          canGenerate: canGen || prev.canGenerate,
-          messages: [
-            ...prev.messages,
-            {
-              kind: 'text',
-              id: `a-${Date.now()}`,
-              role: 'assistant',
-              content: withHint,
-              showGenerate: canGen || prev.canGenerate,
-            },
-          ],
-        }));
+        patchThread('midwifery', (prev) => {
+          const unlocked = canGen || prev.canGenerate;
+          // 解锁后给最近一条助手气泡补上按钮（含本轮新建的）
+          const msgs = prev.messages.map((m) =>
+            m.kind === 'text' && m.role === 'assistant' ? { ...m, showGenerate: false } : m
+          );
+          return {
+            ...prev,
+            roundIndex: res.roundIndex,
+            canGenerate: unlocked,
+            messages: [
+              ...msgs,
+              {
+                kind: 'text' as const,
+                id: `a-${Date.now()}`,
+                role: 'assistant' as const,
+                content: withHint,
+                showGenerate: unlocked,
+              },
+            ],
+          };
+        });
       } catch (e) {
         message.error(e instanceof Error ? e.message : '发送失败');
       } finally {
@@ -670,10 +696,114 @@ export default function IdeationMethodChat({
 
   const isSixHats = method === 'six_hats';
 
-  return (
-    <div className="ideation-method-chat w-full bg-white rounded-2xl shadow-sm border border-gray-100 flex flex-col min-h-0 h-[min(610px,calc(100dvh-19rem-30px))] max-h-[calc(100dvh-17rem-30px)] select-text">
+  /** 输入条：六帽时塞进左侧讨论区底部，其它方法用卡片底栏 */
+  const composerBar = (
+    <div className={isSixHats ? 'px-2.5 pt-2 pb-2' : ''}>
+      {method === 'midwifery' && thread.canGenerate && !busy ? (
+        <div className="mb-2 flex items-center justify-between gap-2 rounded-xl border border-indigo-100 bg-indigo-50/70 px-3 py-2">
+          <span className="text-[11px] text-indigo-700">三轮追问已就绪，可生成结构化创意报告</span>
+          <Button
+            size="small"
+            type="primary"
+            disabled={disabled}
+            className="!bg-indigo-500 !border-indigo-500 shrink-0"
+            onClick={() => void handleGenerateMidwifery()}
+          >
+            生成创意
+          </Button>
+        </div>
+      ) : null}
+      <div className="rounded-2xl border border-teal-200 bg-white shadow-sm px-3 pt-2 pb-2 focus-within:border-teal-400 focus-within:ring-2 focus-within:ring-teal-100 transition-shadow">
+        <Input.TextArea
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          placeholder={
+            disabled
+              ? '请先完成组队确认'
+              : isSixHats
+                ? hatComposer?.placeholder || '正在开启六帽讨论…'
+                : '输入你的回答…'
+          }
+          disabled={disabled || busy || (isSixHats && Boolean(hatComposer?.busy))}
+          autoSize={{ minRows: 1, maxRows: isSixHats ? 3 : 4 }}
+          variant="borderless"
+          className="!p-0 !resize-none"
+          onPressEnter={(e) => {
+            if (!e.shiftKey) {
+              e.preventDefault();
+              void handleSend();
+            }
+          }}
+        />
+        <div className="flex items-end gap-2 mt-1.5">
+          <div className="flex flex-wrap gap-1.5 flex-1 min-w-0">
+            {IDEATION_CHAT_METHODS.map((tab) => {
+              const tabActive = method === tab.key;
+              const switchDisabled = methodSwitchLocked && !tabActive;
+              return (
+                <button
+                  key={tab.key}
+                  type="button"
+                  disabled={switchDisabled}
+                  onClick={() => handleSwitch(tab.key)}
+                  className={`px-2.5 py-1.5 text-[11px] font-semibold rounded-lg transition-all flex items-center gap-1 ${
+                    tabActive
+                      ? tab.activeClass
+                      : switchDisabled
+                        ? 'bg-gray-100 text-gray-400 opacity-60 cursor-not-allowed'
+                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200 cursor-pointer'
+                  }`}
+                >
+                  <i className={tab.icon} />
+                  {tab.label}
+                </button>
+              );
+            })}
+          </div>
+          <button
+            type="button"
+            disabled={
+              disabled ||
+              busy ||
+              !input.trim() ||
+              (isSixHats && (!hatComposer?.canSend || hatComposer.busy))
+            }
+            onClick={() => void handleSend()}
+            className="w-9 h-9 rounded-full bg-teal-500 text-white flex items-center justify-center hover:bg-teal-600 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer shrink-0"
+            aria-label="发送"
+          >
+            {busy || (isSixHats && hatComposer?.busy) ? (
+              <i className="ri-loader-4-line text-lg animate-spin" />
+            ) : (
+              <i className="ri-arrow-up-line text-lg" />
+            )}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 
-      {/* 六帽：嵌在当前卡片内；用 hidden 保活，切换方法不丢会话 */}
+  const hatSlot =
+    hatStudioSlot && isValidElement(hatStudioSlot)
+      ? cloneElement(
+          hatStudioSlot as ReactElement<{
+            onBindComposer?: (c: HatStudioComposerBind | null) => void;
+            onRequestAppendInput?: (piece: string) => void;
+            active?: boolean;
+            composerFooter?: ReactNode;
+          }>,
+          {
+            onBindComposer: bindHatComposer,
+            onRequestAppendInput: appendHatInput,
+            active: isSixHats,
+            composerFooter: isSixHats ? composerBar : null,
+          }
+        )
+      : hatStudioSlot;
+
+  return (
+    <div className="ideation-method-chat w-full bg-white rounded-2xl shadow-sm border border-gray-100 flex flex-col min-h-0 h-[calc(100dvh-9rem)] min-h-[360px] select-text">
+      {/* 六帽：整卡高度给双栏，输入收进左侧；其它方法：消息区 + 底栏 */}
       {hatSlot ? (
         <div className={`flex-1 min-h-0 overflow-hidden px-3 py-2 ${isSixHats ? 'flex flex-col' : 'hidden'}`}>
           {hatSlot}
@@ -712,7 +842,6 @@ export default function IdeationMethodChat({
                   ) : (
                     <ChatMarkdown text={msg.content} />
                   )}
-                  {/* 仅消息气泡内展示「生成创意」，不再另挂底部工具条 */}
                   {!mine && msg.showGenerate && (
                     <div className="mt-3 pt-2 border-t border-gray-200/80">
                       <Button
@@ -730,83 +859,17 @@ export default function IdeationMethodChat({
               </div>
             );
           })}
-          {/* 接口等待中：对齐 AI 侧边栏思考气泡 */}
           {busy ? (
             <ThinkingBubble label={thread.messages.length === 0 ? '正在准备引导…' : '思考中…'} />
           ) : null}
         </div>
       )}
 
-      {/* 豆包风：底部输入条始终留在卡片内可见，消息区内部滚动 */}
-      <div className="px-4 pb-3 pt-2 border-t border-gray-100 shrink-0 bg-white rounded-b-2xl">
-        <div className="rounded-2xl border border-teal-200 bg-white shadow-sm px-3 pt-2 pb-2 focus-within:border-teal-400 focus-within:ring-2 focus-within:ring-teal-100 transition-shadow">
-          <Input.TextArea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder={
-              disabled
-                ? '请先完成组队确认'
-                : isSixHats
-                  ? hatComposer?.placeholder || '请先点击「开始六帽讨论」'
-                  : '输入你的回答…'
-            }
-            disabled={disabled || busy || (isSixHats && Boolean(hatComposer?.busy))}
-            autoSize={{ minRows: 1, maxRows: 4 }}
-            variant="borderless"
-            className="!p-0 !resize-none"
-            onPressEnter={(e) => {
-              if (!e.shiftKey) {
-                e.preventDefault();
-                void handleSend();
-              }
-            }}
-          />
-          <div className="flex items-end gap-2 mt-1.5">
-            <div className="flex flex-wrap gap-1.5 flex-1 min-w-0">
-              {IDEATION_CHAT_METHODS.map((tab) => {
-                const active = method === tab.key;
-                const switchDisabled = methodSwitchLocked && !active;
-                return (
-                  <button
-                    key={tab.key}
-                    type="button"
-                    disabled={switchDisabled}
-                    onClick={() => handleSwitch(tab.key)}
-                    className={`px-2.5 py-1.5 text-[11px] font-semibold rounded-lg transition-all flex items-center gap-1 ${
-                      active
-                        ? tab.activeClass
-                        : switchDisabled
-                          ? 'bg-gray-100 text-gray-400 opacity-60 cursor-not-allowed'
-                          : 'bg-gray-100 text-gray-600 hover:bg-gray-200 cursor-pointer'
-                    }`}
-                  >
-                    <i className={tab.icon} />
-                    {tab.label}
-                  </button>
-                );
-              })}
-            </div>
-            <button
-              type="button"
-              disabled={
-                disabled ||
-                busy ||
-                !input.trim() ||
-                (isSixHats && (!hatComposer?.canSend || hatComposer.busy))
-              }
-              onClick={() => void handleSend()}
-              className="w-9 h-9 rounded-full bg-teal-500 text-white flex items-center justify-center hover:bg-teal-600 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer shrink-0"
-              aria-label="发送"
-            >
-              {busy || (isSixHats && hatComposer?.busy) ? (
-                <i className="ri-loader-4-line text-lg animate-spin" />
-              ) : (
-                <i className="ri-arrow-up-line text-lg" />
-              )}
-            </button>
-          </div>
+      {!isSixHats ? (
+        <div className="px-4 pb-3 pt-2 border-t border-gray-100 shrink-0 bg-white rounded-b-2xl">
+          {composerBar}
         </div>
-      </div>
+      ) : null}
     </div>
   );
 }
