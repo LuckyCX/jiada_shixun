@@ -38,11 +38,11 @@ import { formatDateTimeZhCN } from '../lib/calendarDate.js';
 import {
   createMarketResearchStreamHandler,
   extractJsonFromLlmText,
-  findAllBalancedJsonObjects,
   setupSseResponse,
   sseWrite,
 } from '../lib/marketResearchSse.js';
 import { normalizeUploadFileName } from '../lib/uploadFileName.js';
+import { planMarkdownToHtml } from '../lib/planContentHtml.js';
 
 const router = Router();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -509,23 +509,58 @@ function stripHtmlText(s) {
   return String(s || '').replace(/<[^>]+>/g, '').trim();
 }
 
-function shouldAllowRenameTitle(oldTitle, nextTitle) {
-  const o = String(oldTitle || '').trim();
-  const n = String(nextTitle || '').trim();
-  if (!n) return false;
-  if (!o) return true;
-  if (/^新章节\\d+$/i.test(o)) return true;
-  return false;
-}
+/** 计划书一键生成：关思考；19 章×500～800 字需更大输出上限，避免截断变短章 */
+const PLAN_LLM_EXTRA = { enable_thinking: false, max_tokens: 32768 };
 
-function normalizeStreamSectionObject(obj) {
-  if (!obj || typeof obj !== 'object') return null;
-  const key = String(obj.key || '').trim();
-  const title = String(obj.title || '').trim();
-  const content = typeof obj.content === 'string' ? obj.content : String(obj.content ?? '');
-  if (!key) return null;
-  if (!content || !String(content).trim()) return null;
-  return { key, title, content: String(content) };
+/** 一次性生成全部目标章节 JSON（不做逐章/分批兜底） */
+async function generateFullPlanSectionsJson(provider, bundle, targetSections) {
+  const userPrompt = buildBusinessPlanGenerateUserPrompt(bundle, targetSections);
+  logPromptToConsole(provider, BUSINESS_PLAN_GENERATE_SYSTEM_PROMPT, userPrompt);
+  let text = '';
+  try {
+    text = await chatCompletion({
+      provider,
+      system: BUSINESS_PLAN_GENERATE_SYSTEM_PROMPT,
+      user: userPrompt,
+      jsonMode: true,
+      extraBody: PLAN_LLM_EXTRA,
+    });
+  } catch (e) {
+    const sm = String(e?.message || '');
+    if (/response_format|json_object|json mode/i.test(sm)) {
+      text = await chatCompletion({
+        provider,
+        system: BUSINESS_PLAN_GENERATE_SYSTEM_PROMPT,
+        user: userPrompt,
+        jsonMode: false,
+        extraBody: PLAN_LLM_EXTRA,
+      });
+    } else {
+      throw e;
+    }
+  }
+  try {
+    const generated = normalizeGeneratePayload(text);
+    const genByKey = new Map(
+      (generated || []).map((s) => [String(s.key || '').trim(), s]).filter(([k]) => k)
+    );
+    const missing = (targetSections || []).filter((t) => !String(genByKey.get(String(t.key))?.content || '').trim());
+    if (missing.length) {
+      const names = missing.map((t) => t.title || t.key).join('、');
+      const preview = String(text || '');
+      console.error(
+        `[business-plan.generate] 漏章 missing=${missing.length} rawLen=${preview.length}\n--- raw head ---\n${preview.slice(0, 4000)}\n--- raw tail ---\n${preview.slice(-4000)}`
+      );
+      throw new Error(`AI 未完整返回全部章节（缺少：${names}），请重试`);
+    }
+    return generated;
+  } catch (e) {
+    const preview = String(text || '');
+    console.error(
+      `[business-plan.generate] 解析失败 err=${e?.message || e} rawLen=${preview.length}\n--- raw head ---\n${preview.slice(0, 6000)}\n--- raw tail ---\n${preview.slice(-6000)}`
+    );
+    throw e;
+  }
 }
 
 router.get('/student/personal-classes/:classId/business-plan/entry', requireAuth(), requireStudent(), async (req, res) => {
@@ -856,6 +891,7 @@ router.delete(
   }
 );
 
+/** 一键填写：非流式一次生成整本 JSON → 按章落库 → 返回工作区 */
 router.post('/student/personal-classes/:classId/business-plan/generate', requireAuth(), requireStudent(), async (req, res) => {
   try {
     const ctx = await requireTeamContext(req, res);
@@ -866,19 +902,43 @@ router.post('/student/personal-classes/:classId/business-plan/generate', require
     }
     const provider = await getEnabledProvider('multimodal');
     if (!provider) return bad(req, res, 503, 50301, '未配置 AI 服务');
+
+    const mode = String(req.body?.mode || 'full').trim() === 'incremental' ? 'incremental' : 'full';
+    const inputSectionsRaw = Array.isArray(req.body?.sections) ? req.body.sections : null;
+    const workspaceRow = await ensureWorkspace(ctx.pool, ctx.team.id, ctx.classId);
+    const workspaceSections = coerceSections(workspaceRow?.sections_json);
+    let workingSections = coerceSections(inputSectionsRaw || workspaceSections);
+
+    const shouldFillSection = (s) => {
+      if (mode === 'full') return true;
+      return stripHtmlText(s.content).length === 0;
+    };
+    const targets = workingSections.filter(shouldFillSection);
+
+    if (!targets.length) {
+      const payload = await buildWorkspacePayload(ctx);
+      return ok(req, res, { ...payload, savedCount: 0 });
+    }
+
+    if (mode === 'full') {
+      workingSections = workingSections.map((s) => ({ ...s, content: '' }));
+    }
+
     const bundle = await assembleBusinessPlanBundle(ctx.pool, ctx.team.id);
-    const current = await ensureWorkspace(ctx.pool, ctx.team.id, ctx.classId);
-    const inputSections = coerceSections(current?.sections_json);
-    const userPrompt = buildBusinessPlanGenerateUserPrompt(bundle, inputSections);
-    logPromptToConsole?.('business-plan.generate.system', BUSINESS_PLAN_GENERATE_SYSTEM_PROMPT);
-    logPromptToConsole?.('business-plan.generate.user', userPrompt);
-    const { text } = await chatCompletion({
-      provider,
-      system: BUSINESS_PLAN_GENERATE_SYSTEM_PROMPT,
-      user: userPrompt,
-      jsonMode: true,
-    });
-    const sections = normalizeGeneratePayload(text);
+    // 严格一次生成整本 JSON，按 key 灌入（无分批、无逐章兜底）
+    const generated = await generateFullPlanSectionsJson(provider, bundle, targets);
+    const genByKey = new Map(
+      (generated || []).map((s) => [String(s.key || '').trim(), s]).filter(([k]) => k)
+    );
+    let savedCount = 0;
+    for (const target of targets) {
+      const hit = genByKey.get(String(target.key));
+      const html = planMarkdownToHtml(String(hit?.content || '').trim());
+      workingSections = workingSections.map((s) =>
+        s.key === target.key ? { ...s, content: html } : s
+      );
+      savedCount += 1;
+    }
 
     await ctx.pool.query(
       `INSERT INTO teacher_personal_class_team_business_plan_workspace
@@ -886,166 +946,10 @@ router.post('/student/personal-classes/:classId/business-plan/generate', require
        VALUES ($1, $2, $3::jsonb, now(), $4)
        ON CONFLICT (team_id)
        DO UPDATE SET sections_json = EXCLUDED.sections_json, updated_at = now(), updated_by = EXCLUDED.updated_by`,
-      [ctx.team.id, ctx.classId, JSON.stringify(sections), ctx.sid]
+      [ctx.team.id, ctx.classId, JSON.stringify(sectionsForDb(workingSections)), ctx.sid]
     );
 
-    const { rows: cnt } = await ctx.pool.query(
-      `SELECT COUNT(*)::int AS c FROM teacher_personal_class_team_business_plan_versions WHERE team_id = $1`,
-      [ctx.team.id]
-    );
-    if (Number(cnt[0]?.c || 0) === 0) {
-      await ctx.pool.query(
-        `INSERT INTO teacher_personal_class_team_business_plan_versions
-           (team_id, version_no, summary, sections_json, saved_by)
-         VALUES ($1, 1, $2, $3::jsonb, $4)`,
-        [ctx.team.id, 'AI 一键生成初稿', JSON.stringify(sections), ctx.sid]
-      );
-    }
-
-    const payload = await buildWorkspacePayload(ctx);
-    return ok(req, res, payload);
-  } catch (e) {
-    logError(`POST business-plan generate traceId=${req.traceId}`, e);
-    return bad(req, res, 500, 50000, friendlyLlmErrorMessage(e));
-  }
-});
-
-router.post('/student/personal-classes/:classId/business-plan/generate/stream', requireAuth(), requireStudent(), async (req, res) => {
-  setupSseResponse(res);
-  let heartbeat = null;
-  try {
-    const ctx = await requireTeamContext(req, res);
-    if (!ctx) return;
-    if (!(await assertEntryAllowed(ctx, req, res))) return;
-    if (await isReadOnly(ctx.pool, ctx.team.id)) {
-      sseWrite(res, 'error', { message: '商业计划书已审核通过，不可再生成' });
-      res.end();
-      return;
-    }
-    const provider = await getEnabledProvider('multimodal');
-    if (!provider) {
-      sseWrite(res, 'error', { message: '未配置 AI 服务' });
-      res.end();
-      return;
-    }
-
-    const mode = String(req.body?.mode || 'incremental').trim() === 'full' ? 'full' : 'incremental';
-    const inputSectionsRaw = Array.isArray(req.body?.sections) ? req.body.sections : null;
-    const workspaceRow = await ensureWorkspace(ctx.pool, ctx.team.id, ctx.classId);
-    const workspaceSections = coerceSections(workspaceRow?.sections_json);
-    const inputSections = coerceSections(inputSectionsRaw || workspaceSections);
-
-    const byKey = new Map(inputSections.map((s) => [s.key, s]));
-    const allowedKeys = new Set(inputSections.map((s) => s.key));
-    const processedKeys = new Set();
-
-    const shouldFillContent = (key) => {
-      const s = byKey.get(key);
-      if (!s) return false;
-      if (mode === 'full') return true;
-      return stripHtmlText(s.content).length === 0;
-    };
-
-    sseWrite(res, 'log', {
-      text: mode === 'full' ? '开始全量生成：将重写全部章节内容' : '开始增量生成：仅生成缺失章节/优化章节标题',
-    });
-
-    heartbeat = setInterval(() => {
-      try {
-        sseWrite(res, 'log', { text: '生成中…' });
-      } catch {
-        /* ignore */
-      }
-    }, 2000);
-
-    if (mode === 'full') {
-      const cleared = inputSections.map((s) => ({ ...s, content: '' }));
-      await ctx.pool.query(
-        `INSERT INTO teacher_personal_class_team_business_plan_workspace
-           (team_id, teacher_personal_class_id, sections_json, updated_at, updated_by)
-         VALUES ($1, $2, $3::jsonb, now(), $4)
-         ON CONFLICT (team_id)
-         DO UPDATE SET sections_json = EXCLUDED.sections_json, updated_at = now(), updated_by = EXCLUDED.updated_by`,
-        [ctx.team.id, ctx.classId, JSON.stringify(cleared), ctx.sid]
-      );
-      sseWrite(res, 'log', { text: '已清空当前内容，开始生成…' });
-    }
-
-    const bundle = await assembleBusinessPlanBundle(ctx.pool, ctx.team.id);
-    const userPrompt = buildBusinessPlanGenerateUserPrompt(bundle, inputSections);
-
-    const streamSystem = `${BUSINESS_PLAN_GENERATE_SYSTEM_PROMPT}
-
-补充要求（流式输出协议）：
-- 你将按顺序输出多个 JSON 对象，每次输出一个对象并换行。
-- 每个对象必须形如：{ "key": "...", "title": "...", "content": "..." }
-- key 必须使用输入章节列表提供的 key；不得输出数组、不得输出 markdown 代码块、不得输出额外文字。`;
-
-    // 仍打印提示词（便于你核对）
-    logPromptToConsole?.(provider, streamSystem, userPrompt);
-
-    let buffer = '';
-    let savedCount = 0;
-    const streamHandler = createMarketResearchStreamHandler(res);
-
-    await chatCompletionStream({
-      provider,
-      system: streamSystem,
-      user: userPrompt,
-      jsonMode: false,
-      streamReasoning: true,
-      onEvent: async (evt) => {
-        if (!evt) return;
-        // 透传 thinking/content 给前端（参考产品设计模块）
-        streamHandler.onEvent(evt);
-        if (evt.kind !== 'content') return;
-        buffer += evt.text;
-        const objs = findAllBalancedJsonObjects(buffer);
-        for (const obj of objs) {
-          const norm = normalizeStreamSectionObject(obj);
-          if (!norm) continue;
-          if (!allowedKeys.has(norm.key)) continue;
-          if (processedKeys.has(norm.key)) continue;
-          processedKeys.add(norm.key);
-
-          const prev = byKey.get(norm.key);
-          const nextTitle = shouldAllowRenameTitle(prev?.title, norm.title) ? norm.title : prev?.title;
-          const shouldWrite = shouldFillContent(norm.key);
-          if (!shouldWrite && nextTitle === prev?.title) continue;
-
-          byKey.set(norm.key, {
-            ...prev,
-            title: nextTitle,
-            content: shouldWrite ? norm.content : prev?.content,
-          });
-          const nextSections = inputSections.map((s) => byKey.get(s.key) || s);
-
-          await ctx.pool.query(
-            `INSERT INTO teacher_personal_class_team_business_plan_workspace
-               (team_id, teacher_personal_class_id, sections_json, updated_at, updated_by)
-             VALUES ($1, $2, $3::jsonb, now(), $4)
-             ON CONFLICT (team_id)
-             DO UPDATE SET sections_json = EXCLUDED.sections_json, updated_at = now(), updated_by = EXCLUDED.updated_by`,
-            [ctx.team.id, ctx.classId, JSON.stringify(nextSections), ctx.sid]
-          );
-          savedCount += 1;
-          sseWrite(res, 'section', {
-            key: norm.key,
-            title: nextTitle,
-            content: shouldWrite ? norm.content : prev?.content,
-            done: true,
-          });
-          sseWrite(res, 'log', { text: `已生成并保存章节：${nextTitle || norm.key}` });
-        }
-      },
-    });
-
-    if (heartbeat) clearInterval(heartbeat);
-
-    // 生成完成后，自动落一条新版本（便于恢复/对比）
     try {
-      const finalRow = await ensureWorkspace(ctx.pool, ctx.team.id, ctx.classId);
-      const finalSections = coerceSections(finalRow?.sections_json);
       const { rows: maxRows } = await ctx.pool.query(
         `SELECT COALESCE(MAX(version_no), 0)::int AS m
          FROM teacher_personal_class_team_business_plan_versions
@@ -1061,28 +965,17 @@ router.post('/student/personal-classes/:classId/business-plan/generate/stream', 
         `INSERT INTO teacher_personal_class_team_business_plan_versions
            (team_id, version_no, summary, sections_json, saved_by)
          VALUES ($1, $2, $3, $4::jsonb, $5)`,
-        [ctx.team.id, nextNo, summary.slice(0, 500), JSON.stringify(finalSections), ctx.sid]
+        [ctx.team.id, nextNo, summary.slice(0, 500), JSON.stringify(sectionsForDb(workingSections)), ctx.sid]
       );
     } catch (e) {
-      // 不影响生成主流程
-      logError(`POST business-plan generate/stream save-version traceId=${req.traceId}`, e);
+      logError(`POST business-plan generate save-version traceId=${req.traceId}`, e);
     }
 
-    sseWrite(res, 'done', { savedCount });
-    res.end();
+    const payload = await buildWorkspacePayload(ctx);
+    return ok(req, res, { ...payload, savedCount });
   } catch (e) {
-    logError(`POST business-plan generate/stream traceId=${req.traceId}`, e);
-    try {
-      if (heartbeat) clearInterval(heartbeat);
-    } catch {
-      /* ignore */
-    }
-    try {
-      sseWrite(res, 'error', { message: friendlyLlmErrorMessage(e) });
-      res.end();
-    } catch {
-      /* ignore */
-    }
+    logError(`POST business-plan generate traceId=${req.traceId}`, e);
+    return bad(req, res, 500, 50000, friendlyLlmErrorMessage(e));
   }
 });
 
@@ -1209,7 +1102,8 @@ router.post(
         );
         return bad(req, res, 500, 50000, 'AI 返回格式无效，请稍后重试');
       }
-      const nextSections = sections.map((s) => (s.key === sectionKey ? { ...s, content: filledContent } : s));
+      const htmlContent = planMarkdownToHtml(filledContent);
+      const nextSections = sections.map((s) => (s.key === sectionKey ? { ...s, content: htmlContent } : s));
       const row = await ensureWorkspace(ctx.pool, ctx.team.id, ctx.classId);
       const clientRevision = Number(req.body?.revision ?? row?.revision ?? 1);
       const payload = await saveWorkspaceOptimistic(ctx, {

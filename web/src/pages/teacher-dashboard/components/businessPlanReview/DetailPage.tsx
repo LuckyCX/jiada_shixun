@@ -4,7 +4,7 @@ import { BusinessPlan, ReviewFormData } from './types';
 import ReviewModal from './ReviewModal';
 import { getPortalToken } from '../../../../lib/authApi';
 import { BUSINESS_PLAN_RUBRIC_DIMENSIONS } from '../../../../lib/businessPlanTemplate';
-import { sanitizeRichText } from '../../../../lib/richText';
+import { ensurePlanEditorHtml } from '../../../../lib/planEditorHtml';
 import {
   fetchTeacherBusinessPlanSubmissions,
   reviewTeacherBusinessPlanSubmission,
@@ -181,7 +181,7 @@ export default function BusinessPlanDetailPage({ classId, submissionId, onBack }
           {activeTab === 'content' && (
             <div className="space-y-3">
               {sections.map((section) => {
-                const html = sanitizeRichText(String(section.content || ''));
+                const html = ensurePlanEditorHtml(String(section.content || ''));
                 return (
                   <div key={section.key} className="bg-gray-50 rounded-lg p-3">
                     <h3 className="text-sm font-semibold text-gray-900 mb-2 flex items-center gap-1.5">

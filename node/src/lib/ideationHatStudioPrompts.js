@@ -1,4 +1,5 @@
 import { extractJsonFromLlmText, findAllBalancedJsonObjects } from './marketResearchSse.js';
+import { SIX_HATS_ORDER, normalizeSixHat } from './sixHatsSession.js';
 
 /** 六帽创想室工作区字段（讨论过程用，最终入库创意库） */
 export const HAT_STUDIO_DRAFT_KEYS = [
@@ -17,110 +18,95 @@ export const HAT_STUDIO_DRAFT_LABELS = {
   riskDiff: '风险与差异',
 };
 
-const MIDDLE_HATS = ['red', 'black', 'yellow', 'green'];
+/** @deprecated 使用 SIX_HATS_ORDER；保留导出避免旧引用报错 */
+export function buildHatStudioRoundOrder() {
+  return [...SIX_HATS_ORDER];
+}
 
 export function shuffleMiddleHatOrder() {
-  const arr = [...MIDDLE_HATS];
-  for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [arr[i], arr[j]] = [arr[j], arr[i]];
-  }
-  return arr;
+  return ['green', 'yellow', 'black', 'red'];
 }
 
-/** 每轮：白 → 中间四帽随机 → 蓝 */
-export function buildHatStudioRoundOrder() {
-  return ['white', ...shuffleMiddleHatOrder(), 'blue'];
-}
-
+/**
+ * 提问不代改：各帽只抛出苏格拉底式问题，引导学生自查，不给标准答案、不直接改方案
+ */
 export const HAT_ROLE_TEXT = {
-  white: `白帽（数据分析师）：只基于客观事实和数据发言。补充目标场景规模、用户行为线索、同类方案公开信息等可验证事实，不主观评价。`,
-  red: `红帽（用户代表）：以目标用户身份谈第一感受：会不会想用、哪里别扭、最在意什么体验。少讲大道理。`,
-  black: `黑帽（风险预警员）：指出关键约束与风险，并给出可写入工作区的调整建议；禁止只做否定、不给可采纳写法。`,
-  yellow: `黄帽（乐观倡导者）：挖掘优势、痛点机会、差异亮点，并推动某一工作区字段的可落地表述。`,
-  green: `绿帽（创意设计师）：提出差异化创意：功能玩法、触达路径、与竞品不同点，尽量对应具体工作区字段。`,
-  blue: `蓝帽（项目经理）：控场与总结。引导讨论、追问关键信息，总结已解决与待解决问题，建议下一步并推动工作区补全。`,
+  white: `白帽（客观事实思维｜补信息）：聚焦事实、数据、已知信息，不做主观评判。引导学生区分「主观猜想」和「客观可验证信息」，找出缺少的资料、数据、前提条件。提问句式：你有哪些可验证的数据？这个说法依据是什么？还缺少哪些信息？`,
+  green: `绿帽（发散创新思维｜找创新）：鼓励发散、跳出固有方案，挖掘创意可能性、替代方案、差异化亮点，不否定原有想法。提问句式：还有别的实现方式吗？可以增加什么新亮点？有没有不一样的解决思路？`,
+  yellow: `黄帽（正向价值思维｜判价值）：挖掘项目的价值、优势、收益，思考为什么可行、用户能获得什么价值。提问句式：这个方案最大的价值是什么？用户为什么愿意选择你？长期能带来什么收益？`,
+  black: `黑帽（风险批判思维｜查风险）：理性审视隐患、短板、潜在风险，识别方案漏洞与落地障碍，审慎评估而非抬杠。提问句式：这个方案最大隐患是什么？哪一步最容易出问题？有哪些不可控因素？`,
+  red: `红帽（用户共情思维｜贴需求）：关注感受、情绪、直觉，站在用户视角体会好恶与真实感受。提问句式：用户看到这个方案第一感受是什么？用户会担心什么？什么场景下用户会抵触？`,
+  blue: `蓝帽（全局系统思维｜做统筹）：把控整体框架，整合前面各帽结论，规划后续行动，收敛思路。提问句式：综合前面分析，当前最大问题是什么？下一步优先做什么？整体框架如何调整？`,
 };
 
-export const HAT_STUDIO_ROUND_JSON_SCHEMA = `{
-  "messages": [
-    {
-      "hat": "white|red|black|yellow|green|blue",
-      "content": "发言正文",
-      "targetModule": "工作区键名或 null",
-      "moduleContent": "当 targetModule 非 null 时的替换全文，否则空字符串"
-    }
-  ]
+export const HAT_STUDIO_ASK_SCHEMA = `{
+  "hat": "white|green|yellow|black|red|blue",
+  "content": "面向学生的提问正文（可含 1～3 个编号追问）",
+  "questions": ["追问1", "追问2", "追问3"]
 }
-固定约束：messages 长度必须恰好为 6；hat 顺序必须与用户提示中的本轮发言顺序完全一致；禁止增删键。
-targetModule 只能是以下之一或 null：
-${HAT_STUDIO_DRAFT_KEYS.join(', ')}`;
+固定约束：hat 必须与指定角色一致；questions 长度 1～3；content 须把追问组织成可读段落；禁止给出标准答案或直接改写创业方案；禁止 markdown 代码块。`;
 
-export const HAT_STUDIO_ROUND_SYSTEM_PROMPT = `你是创业实训「六帽创想室」协作助手。
+export const HAT_STUDIO_ASK_SYSTEM_PROMPT = `你是创业实训「六帽创想室」中的单一思考帽。
 
-#Context#
-学生会先陈述自己的创意，再由六顶思考帽围绕其内容做引导式讨论。请完整阅读辩论历史中的学生发言，不得忽略或遗忘其已表达的创意要点。
+#原则#
+提问不代改：只抛出问题引导学生思考、自查，绝不直接修改创业方案、不给标准答案、不替学生填写工作区。
 
 #Objective#
-输出恰好 6 条消息的 JSON，对应本轮固定帽子顺序；讨论必须紧扣学生创意，并产出可一键写入工作区的要点。
+以指定帽子视角，一次性提出最多 3 个苏格拉底式追问。
 
 #Style#
+（只能扮演用户提示【你的角色】，禁止串戏）
 ${HAT_ROLE_TEXT.white}
-${HAT_ROLE_TEXT.red}
-${HAT_ROLE_TEXT.black}
-${HAT_ROLE_TEXT.yellow}
 ${HAT_ROLE_TEXT.green}
+${HAT_ROLE_TEXT.yellow}
+${HAT_ROLE_TEXT.black}
+${HAT_ROLE_TEXT.red}
 ${HAT_ROLE_TEXT.blue}
 
 #Schema#
-${HAT_STUDIO_ROUND_JSON_SCHEMA}
+${HAT_STUDIO_ASK_SCHEMA}
 
 #Response#
-1. 每条消息对应一个帽子，严格按用户提示中的本轮发言顺序。
-2. 白帽先基于学生创意摆事实与澄清；中间帽子推进某一工作区字段；蓝帽最后总结并 @学生姓名，给出下一步追问。
-3. 至少 4 条消息应带 targetModule + moduleContent（可直接替换对应工作区字段的短文，勿空泛）。
-4. 黑帽须给出可落地修正方向，禁止只否定。
-5. 单条 content 约 100–220 字；要承接历史对话，避免重复已确认结论。
-6. 只能输出 messages 一个顶层键的 JSON，禁止 markdown。`;
+- 紧扣学生创意与完整辩论历史
+- 最多 3 个问题，问题要具体、可作答
+- 只能输出 schema 规定键的 JSON`;
 
 export const HAT_STUDIO_SINGLE_REPLY_SCHEMA = `{
-  "hat": "white|red|black|yellow|green|blue",
-  "content": "回复正文",
+  "hat": "white|green|yellow|black|red|blue",
+  "content": "回复正文（继续提问引导，或简要承接后追问）",
   "targetModule": "工作区键名或 null",
-  "moduleContent": "单字段替换用要点或空字符串",
+  "moduleContent": "可选：学生可自行采纳的摘录短句，禁止整段代写终稿",
   "fills": [
-    { "targetModule": "工作区键名", "moduleContent": "可直接写入该字段的全文" }
+    { "targetModule": "工作区键名", "moduleContent": "可选摘录" }
   ]
 }
-固定约束：上述五键必须齐全；fills 可为 []，但学生要求填写工作区时不得为空。
+固定约束：hat/content 必填；fills 可为 []；禁止给出标准答案或直接改写整份方案。
 targetModule 只能是：
 ${HAT_STUDIO_DRAFT_KEYS.join(', ')}`;
 
 export const HAT_STUDIO_SINGLE_REPLY_SYSTEM_PROMPT = `你是六帽创想室中的单一角色。
 
-#Context#
-学生可在多轮对话中 @ 某一顶帽子追问。请阅读完整辩论历史，紧扣学生已陈述的创意与最新问题作答，不得丢失上下文。
+#原则#
+提问不代改：承接学生回答后继续用问题引导，或简要复述学生要点后追问；不替学生改方案。
 
 #Objective#
-输出单条回复 JSON；尽量给出可写入工作区的 fills，便于学生一键采纳。
+输出单条回复 JSON。
 
 #Style#
-（只能扮演用户提示【你的角色】中的那一顶帽子，禁止串戏）
-${HAT_ROLE_TEXT.white}
-${HAT_ROLE_TEXT.red}
-${HAT_ROLE_TEXT.black}
-${HAT_ROLE_TEXT.yellow}
-${HAT_ROLE_TEXT.green}
-${HAT_ROLE_TEXT.blue}
+（只能扮演【你的角色】，禁止串戏）
+${Object.values(HAT_ROLE_TEXT).join('\n')}
 
 #Schema#
 ${HAT_STUDIO_SINGLE_REPLY_SCHEMA}
 
 #Response#
-- 必须严格按【你的角色】人设发言：语气、视角、关注点都要像该帽，不得混成其他帽子或通用助教口吻。
-- 建设性、可落地，非反方辩论；承接历史已讨论内容。
-- 优先填写 fills（或 targetModule+moduleContent），给出可一键写入工作区的短文。
-- 只能输出 schema 规定键，禁止 markdown。`;
+- 严格按角色视角
+- 优先提问引导；fills 仅在学生表述已很清晰时可给出简短摘录供其自行采纳
+- 禁止 markdown`;
+
+/** 兼容旧 round 系统提示（已改为顺序单帽追问，保留常量名） */
+export const HAT_STUDIO_ROUND_SYSTEM_PROMPT = HAT_STUDIO_ASK_SYSTEM_PROMPT;
+export const HAT_STUDIO_ROUND_JSON_SCHEMA = HAT_STUDIO_ASK_SCHEMA;
 
 export function detectDraftKeysFromUserText(text) {
   const t = String(text || '');
@@ -141,7 +127,7 @@ export function detectDraftKeysFromUserText(text) {
 function formatTranscriptForPrompt(messages, maxChars = 12000) {
   const list = Array.isArray(messages) ? messages : [];
   const lines = list.map((m) => {
-    const role = m.hat === 'user' ? '学生' : HAT_ROLE_TEXT[m.hat]?.slice(0, 8) || m.hat;
+    const role = m.hat === 'user' ? '学生' : HAT_ROLE_TEXT[m.hat]?.slice(0, 12) || m.hat;
     return `[${role}] ${String(m.content || '').trim()}`;
   });
   let text = lines.join('\n\n');
@@ -149,68 +135,58 @@ function formatTranscriptForPrompt(messages, maxChars = 12000) {
   return text || '（尚无历史发言）';
 }
 
-export function buildHatStudioRoundUserPrompt({
-  contextText,
-  transcriptMessages,
-  roundIndex,
-  hatOrder,
-  studentDisplayName,
-  draftSnapshot,
-}) {
-  const orderDesc = hatOrder
-    .map((h, i) => `${i + 1}. ${h}（${HAT_ROLE_TEXT[h]?.split('：')[0] || h}）`)
-    .join('\n');
-  const draftLines = HAT_STUDIO_DRAFT_KEYS.map((k) => {
+function draftLinesOf(draftSnapshot) {
+  return HAT_STUDIO_DRAFT_KEYS.map((k) => {
     const cell = draftSnapshot?.[k];
     const c = cell?.content ? String(cell.content).trim() : '';
     return `- ${k}（${HAT_STUDIO_DRAFT_LABELS[k]}）：${c || '（空）'}`;
   }).join('\n');
+}
 
-  const latestUser = [...(transcriptMessages || [])]
-    .reverse()
-    .find((m) => m.hat === 'user');
-  const latestUserText = String(latestUser?.content || '').trim();
-
+/** 当前帽抛出最多 3 个追问 */
+export function buildHatStudioAskUserPrompt({
+  contextText,
+  priorStageText,
+  transcriptMessages,
+  activeHat,
+  studentDisplayName,
+  draftSnapshot,
+}) {
   return `【团队创意库参考】
 ${String(contextText || '').trim() || '（尚无已入库创意）'}
 
-【当前工作区】
-${draftLines}
+【前置实训文本产物（不含上传文件）】
+${String(priorStageText || '').trim() || '（暂无）'}
 
-【辩论历史（须完整承接，勿遗忘学生已说内容）】
+【当前工作区（仅供参考，勿代填）】
+${draftLinesOf(draftSnapshot)}
+
+【辩论历史（须完整承接）】
 ${formatTranscriptForPrompt(transcriptMessages)}
 
-【学生本轮创意/发言（本轮讨论的核心依据）】
-${latestUserText || '（学生尚未发言，请等待学生描述创意）'}
+【你的角色】${HAT_ROLE_TEXT[activeHat] || activeHat}
 
-【本轮要求】
-- 轮次：第 ${roundIndex + 1} 轮（引导式连续对话，保留全部上下文）
-- 本轮 6 条消息的发言顺序（必须严格按此顺序生成 messages 数组）：
-${orderDesc}
-- 学生显示名：${studentDisplayName || '同学'}（蓝帽末条请 @${studentDisplayName || '同学'}，邀请其补充或选择采纳到工作区）
-- 必须紧扣「学生本轮创意/发言」与历史对话；提炼标题/问题/用户价值/方案/风险等可写入点
-- 至少 4 条消息应带 targetModule 与可采纳的 moduleContent
-- 黑帽等角色禁止纯否定；须推动可写入工作区的可行表述`;
+【任务】
+面向 ${studentDisplayName || '同学'}，以该帽视角一次性提出最多 3 个苏格拉底式追问，帮助学生自查创业设想。提问不代改。`;
 }
 
 export function buildHatStudioSingleReplyUserPrompt({
   contextText,
+  priorStageText,
   transcriptMessages,
   mentionedHat,
   userMessage,
   studentDisplayName,
   draftSnapshot,
 }) {
-  const draftLines = HAT_STUDIO_DRAFT_KEYS.map((k) => {
-    const cell = draftSnapshot?.[k];
-    return `- ${k}（${HAT_STUDIO_DRAFT_LABELS[k]}）：${cell?.content?.trim() || '（空）'}`;
-  }).join('\n');
-
   return `【团队创意与背景】
 ${String(contextText || '').trim() || '（尚无已入库创意）'}
 
+【前置实训文本产物（不含上传文件）】
+${String(priorStageText || '').trim() || '（暂无）'}
+
 【当前工作区】
-${draftLines}
+${draftLinesOf(draftSnapshot)}
 
 【辩论历史】
 ${formatTranscriptForPrompt(transcriptMessages)}
@@ -219,14 +195,16 @@ ${formatTranscriptForPrompt(transcriptMessages)}
 
 【你的角色】${HAT_ROLE_TEXT[mentionedHat] || mentionedHat}
 
-${(() => {
-  const keys = detectDraftKeysFromUserText(userMessage);
-  if (!keys.length) return '';
-  const labels = keys.map((k) => HAT_STUDIO_DRAFT_LABELS[k] || k).join('、');
-  return `【学生本轮涉及的工作区】${labels}（键名：${keys.join(', ')}）。请在 fills 中为每一字段分别填写 moduleContent，使学生可点击采纳写入。`;
-})()}
+请以该角色身份回复：承接学生回答并继续提问引导（提问不代改）。可附极简 fills 摘录供学生自行写入工作区，勿整段代写。`;
+}
 
-请以该角色身份回复一条消息，回应学生并推进创意工作区讨论。黑帽须带可采纳的修正建议，勿只做否定。`;
+/** @deprecated 旧整轮 6 帽；现转为单帽追问 prompt */
+export function buildHatStudioRoundUserPrompt(args) {
+  return buildHatStudioAskUserPrompt({
+    ...args,
+    activeHat: args.hatOrder?.[0] || args.activeHat || 'white',
+    priorStageText: args.priorStageText || '',
+  });
 }
 
 function collectFillsFromParsed(parsed) {
@@ -247,18 +225,6 @@ function collectFillsFromParsed(parsed) {
   return fills;
 }
 
-function normalizeHat(h) {
-  const s = String(h || '').trim().toLowerCase();
-  if (['white', 'red', 'black', 'yellow', 'green', 'blue'].includes(s)) return s;
-  if (s.includes('白')) return 'white';
-  if (s.includes('红')) return 'red';
-  if (s.includes('黑')) return 'black';
-  if (s.includes('黄')) return 'yellow';
-  if (s.includes('绿')) return 'green';
-  if (s.includes('蓝')) return 'blue';
-  return null;
-}
-
 function normalizeDraftKey(k) {
   const s = String(k || '').trim();
   if (!s || s === 'null') return null;
@@ -267,44 +233,48 @@ function normalizeDraftKey(k) {
   return byLabel ? byLabel[0] : null;
 }
 
-export function parseHatStudioRoundFromLlmText(text, expectedOrder) {
+export function parseHatStudioAskFromLlmText(text, expectedHat) {
   let parsed = extractJsonFromLlmText(text);
-  if (!parsed?.messages) {
+  if (!parsed?.content && !Array.isArray(parsed?.questions)) {
     const all = findAllBalancedJsonObjects(String(text || ''));
     for (let i = all.length - 1; i >= 0; i--) {
-      if (Array.isArray(all[i]?.messages)) {
+      if (all[i]?.content || Array.isArray(all[i]?.questions)) {
         parsed = all[i];
         break;
       }
     }
   }
-  if (!parsed?.messages || !Array.isArray(parsed.messages)) {
-    return { error: 'AI 返回格式无效' };
+  const hat = normalizeSixHat(parsed?.hat) || expectedHat;
+  let questions = Array.isArray(parsed?.questions)
+    ? parsed.questions.map((q) => String(q || '').trim()).filter(Boolean).slice(0, 3)
+    : [];
+  let content = String(parsed?.content || '').trim();
+  if (!content && questions.length) {
+    content = questions.map((q, i) => `${i + 1}. ${q}`).join('\n');
   }
-  const raw = parsed.messages.slice(0, 6);
-  if (raw.length !== 6) return { error: '须返回 6 条发言' };
-
-  const messages = raw.map((item, idx) => {
-    const hat = normalizeHat(item.hat) || expectedOrder[idx];
-    const targetModule = normalizeDraftKey(item.targetModule);
-    let moduleContent = String(item.moduleContent || '').trim();
-    if (!targetModule) moduleContent = '';
-    return {
+  if (!content) return { error: 'AI 返回格式无效' };
+  if (!questions.length) {
+    // 从 content 拆编号问句，兜底
+    const lines = content.split(/\n+/).map((l) => l.replace(/^\d+[\.\)、]\s*/, '').trim()).filter(Boolean);
+    questions = lines.slice(0, 3);
+  }
+  return {
+    message: {
       hat,
-      content: String(item.content || '').trim(),
-      targetModule,
-      moduleContent,
-    };
-  });
+      content,
+      questions,
+      targetModule: null,
+      moduleContent: '',
+    },
+  };
+}
 
-  for (let i = 0; i < 6; i++) {
-    if (messages[i].hat !== expectedOrder[i]) {
-      messages[i].hat = expectedOrder[i];
-    }
-    if (!messages[i].content) return { error: `第 ${i + 1} 条发言内容为空` };
-  }
-
-  return { messages };
+/** 兼容旧 parseHatStudioRoundFromLlmText：改为单条 ask 消息 */
+export function parseHatStudioRoundFromLlmText(text, expectedOrder) {
+  const hat = Array.isArray(expectedOrder) ? expectedOrder[0] : expectedOrder;
+  const r = parseHatStudioAskFromLlmText(text, hat || 'white');
+  if (r.error) return r;
+  return { messages: [r.message] };
 }
 
 export function parseHatStudioSingleReplyFromLlmText(text, mentionedHat) {
@@ -319,16 +289,14 @@ export function parseHatStudioSingleReplyFromLlmText(text, mentionedHat) {
     }
   }
   if (!parsed?.content) return { error: 'AI 返回格式无效' };
-  const hat = normalizeHat(parsed.hat) || mentionedHat;
+  const hat = normalizeSixHat(parsed.hat) || mentionedHat;
   const fills = collectFillsFromParsed(parsed);
-  const targetModule = fills[0]?.targetModule || null;
-  const moduleContent = fills[0]?.moduleContent || '';
   return {
     message: {
       hat,
       content: String(parsed.content).trim(),
-      targetModule,
-      moduleContent,
+      targetModule: fills[0]?.targetModule || null,
+      moduleContent: fills[0]?.moduleContent || '',
       fills: fills.length ? fills : undefined,
     },
   };
@@ -338,10 +306,10 @@ export function parseMentionedHatFromText(text) {
   const t = String(text || '');
   const patterns = [
     { re: /@\s*白帽|@white/i, hat: 'white' },
-    { re: /@\s*红帽|@red/i, hat: 'red' },
-    { re: /@\s*黑帽|@black/i, hat: 'black' },
-    { re: /@\s*黄帽|@yellow/i, hat: 'yellow' },
     { re: /@\s*绿帽|@green/i, hat: 'green' },
+    { re: /@\s*黄帽|@yellow/i, hat: 'yellow' },
+    { re: /@\s*黑帽|@black/i, hat: 'black' },
+    { re: /@\s*红帽|@red/i, hat: 'red' },
     { re: /@\s*蓝帽|@blue/i, hat: 'blue' },
   ];
   for (const p of patterns) {
@@ -350,7 +318,6 @@ export function parseMentionedHatFromText(text) {
   return null;
 }
 
-/** 工作区拼成入库用的 title / description */
 export function draftToIdeaFields(draft) {
   const get = (k) => String(draft?.[k]?.content || '').trim();
   const ideaTitle = get('ideaTitle');

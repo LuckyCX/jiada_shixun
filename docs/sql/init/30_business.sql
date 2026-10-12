@@ -334,7 +334,7 @@ CREATE TABLE teacher_personal_class_team_ideas (
   id          bigserial PRIMARY KEY,
   team_id     bigint NOT NULL REFERENCES teacher_personal_class_teams (id) ON DELETE CASCADE,
   method_key  varchar(32) NOT NULL
-    CHECK (method_key IN ('brainstorm', 'scamper', 'triz', 'ai', 'six_hats')),
+    CHECK (method_key IN ('brainstorm', 'scamper', 'triz', 'ai', 'six_hats', 'midwifery')),
   method_name varchar(64) NOT NULL,
   title       varchar(256) NOT NULL,
   description text NOT NULL DEFAULT '',
@@ -399,6 +399,7 @@ CREATE TABLE teacher_personal_class_course_settings (
   reminder_days              int NOT NULL DEFAULT 3,
   reminder_enabled           boolean NOT NULL DEFAULT true,
   skipped                    boolean NOT NULL DEFAULT false,
+  features_json              jsonb NOT NULL DEFAULT '{}'::jsonb,
   last_reminded_at           timestamptz,
   last_reminded_deadline     date,
   created_at                 timestamptz NOT NULL DEFAULT now(),
@@ -661,11 +662,45 @@ CREATE TABLE teacher_personal_class_team_business_model_workspace (
   bmc_canvas_generated_at timestamptz,
   bmc_canvas_saved_at timestamptz,
   bmc_canvas_saved_by bigint REFERENCES users (id) ON DELETE SET NULL,
+  bmc_review_status varchar(32) NOT NULL DEFAULT 'draft',
+  bmc_review_comment text NOT NULL DEFAULT '',
+  bmc_reviewed_at timestamptz,
+  bmc_reviewed_by bigint REFERENCES users (id) ON DELETE SET NULL,
   updated_by         bigint REFERENCES users (id) ON DELETE SET NULL,
   updated_at         timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE INDEX idx_tpctbm_workspace_updated ON teacher_personal_class_team_business_model_workspace (updated_at DESC);
+
+CREATE TABLE teacher_personal_class_team_bmc_cell_locks (
+  team_id       bigint NOT NULL REFERENCES teacher_personal_class_teams (id) ON DELETE CASCADE,
+  cell_key      varchar(64) NOT NULL,
+  locked_by     bigint NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  locked_at     timestamptz NOT NULL DEFAULT now(),
+  heartbeat_at  timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (team_id, cell_key)
+);
+
+CREATE INDEX idx_bmc_cell_locks_team_user
+  ON teacher_personal_class_team_bmc_cell_locks (team_id, locked_by);
+
+CREATE TABLE teacher_personal_class_team_bmc_ai_reviews (
+  id              bigserial PRIMARY KEY,
+  team_id         bigint NOT NULL REFERENCES teacher_personal_class_teams (id) ON DELETE CASCADE,
+  teacher_personal_class_id bigint NOT NULL REFERENCES teacher_personal_classes (id) ON DELETE CASCADE,
+  submitted_by    bigint NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  self_note       text NOT NULL DEFAULT '',
+  canvas_snapshot jsonb NOT NULL DEFAULT '{}'::jsonb,
+  ai_result       jsonb NOT NULL DEFAULT '{}'::jsonb,
+  ai_score        numeric(5,2),
+  created_at      timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_bmc_ai_reviews_team_created
+  ON teacher_personal_class_team_bmc_ai_reviews (team_id, created_at DESC);
+
+CREATE INDEX idx_bmc_ai_reviews_class_created
+  ON teacher_personal_class_team_bmc_ai_reviews (teacher_personal_class_id, created_at DESC);
 
 -- 虚拟董事会：按组员独立草稿 + 每人最新保存记录
 -- 执行：psql -v ON_ERROR_STOP=1 -f 028_war_room_member.sql

@@ -13,6 +13,10 @@ import {
   rollSimulationScenario,
 } from '../lib/roleSimulationPrompts.js';
 import { assembleBusinessModelAiBundle } from '../lib/businessModelContext.js';
+import {
+  loadMarketAnalysisTextForPrompt,
+  loadMarketPersonasTextForPrompt,
+} from '../lib/marketResearchContext.js';
 import { evaluateModulePrerequisiteForStudent } from '../lib/trainingModulePrerequisite.js';
 
 const router = Router();
@@ -136,43 +140,6 @@ function truncateMiddle(s, max) {
   const head = Math.floor(max * 0.6);
   const tail = Math.floor(max * 0.3);
   return `${t.slice(0, head)}\n…\n${t.slice(t.length - tail)}（前文已省略）`;
-}
-
-async function loadMarketAnalysisText(pool, teamId) {
-  const { rows } = await pool.query(
-    `SELECT result, generated_at
-     FROM teacher_personal_class_team_market_analysis
-     WHERE team_id = $1`,
-    [teamId]
-  );
-  const row = rows[0];
-  if (!row?.result) return '';
-  const generatedAt = row.generated_at ? new Date(row.generated_at).toISOString() : '';
-  const text = ['【市场调研 · AI智能分析报告】', generatedAt ? `生成时间：${generatedAt}` : '', JSON.stringify(row.result, null, 2)]
-    .filter(Boolean)
-    .join('\n');
-  return truncateMiddle(text, 8000);
-}
-
-async function loadMarketPersonasText(pool, teamId) {
-  const { rows } = await pool.query(
-    `SELECT payload, source, created_at
-     FROM teacher_personal_class_team_market_personas
-     WHERE team_id = $1
-     ORDER BY created_at ASC`,
-    [teamId]
-  );
-  if (!rows.length) return '';
-  const blocks = rows.slice(0, 6).map((r, idx) => {
-    const createdAt = r.created_at ? new Date(r.created_at).toISOString() : '';
-    const source = String(r.source || '').trim();
-    const header = [`画像${idx + 1}`, source ? `来源：${source}` : '', createdAt ? `生成时间：${createdAt}` : '']
-      .filter(Boolean)
-      .join(' / ');
-    return `- ${header}\n${JSON.stringify(r.payload || {}, null, 2)}`;
-  });
-  const text = ['【市场调研 · 用户画像】', ...blocks].join('\n');
-  return truncateMiddle(text, 9000);
 }
 
 async function loadBusinessModelWorkspaceText(pool, teamId) {
@@ -373,8 +340,8 @@ router.post('/student/personal-classes/:classId/role-simulation/simulate/stream'
     const seenDayNos = new Set(days.map((d) => Number(d?.day || 0)).filter((n) => n > 0));
     const bundle = await assembleBusinessModelAiBundle(ctx.pool, ctx.team.id, UPLOAD_ROOT);
     const [analysisText, personasText] = await Promise.all([
-      loadMarketAnalysisText(ctx.pool, ctx.team.id),
-      loadMarketPersonasText(ctx.pool, ctx.team.id),
+      loadMarketAnalysisTextForPrompt(ctx.pool, ctx.team.id, 8000),
+      loadMarketPersonasTextForPrompt(ctx.pool, ctx.team.id, 9000),
     ]);
     const contextText = [bundle, analysisText, personasText].filter(Boolean).join('\n\n');
     const businessModelWorkspaceText = await loadBusinessModelWorkspaceText(ctx.pool, ctx.team.id);

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Button, Modal, Spin, Upload, message } from 'antd';
+import { Button, Modal, Radio, Spin, Upload, message } from 'antd';
 import type { UploadFile } from 'antd';
 import RichTextEditor from '../../../components/RichTextEditor';
 import {
@@ -8,6 +8,7 @@ import {
   fetchBusinessPlanEntry,
   fetchBusinessPlanWorkspace,
   fillBusinessPlanSection,
+  generateBusinessPlan,
   generateBusinessPlanOutline,
   heartbeatBusinessPlanSectionLock,
   releaseBusinessPlanSectionLock,
@@ -20,6 +21,7 @@ import {
   type BusinessPlanWorkspace,
 } from '../../../lib/studentBusinessPlanApi';
 import { downloadBusinessPlanDocx } from '../../../lib/businessPlanDocxExport';
+import { ensurePlanEditorHtml } from '../../../lib/planEditorHtml';
 import { getPortalToken, parseJwtPayload, rewriteUnsafeHttpMethod } from '../../../lib/authApi';
 import {
   BUSINESS_PLAN_RUBRIC_DIMENSIONS,
@@ -141,15 +143,9 @@ function stripHtml(s: string) {
   return String(s || '').replace(/<[^>]+>/g, '').trim();
 }
 
-/** AI 常返回纯文本/Markdown，富文本编辑器需要 HTML */
+/** AI 常返回 Markdown/纯文本，转入编辑器前转为 HTML（隐藏 ** / ### 等符号） */
 function ensureEditorHtml(raw: string) {
-  const s = String(raw || '');
-  if (!s.trim()) return '';
-  if (/<[a-z][\s\S]*>/i.test(s)) return s;
-  return s
-    .split(/\n{2,}/)
-    .map((block) => `<p>${block.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br/>')}</p>`)
-    .join('');
+  return ensurePlanEditorHtml(raw);
 }
 
 function sectionsHaveContent(secs: BusinessPlanSection[]) {
@@ -202,6 +198,12 @@ export default function BusinessPlanModule({
   const [generatingOutline, setGeneratingOutline] = useState(false);
   const [outlineModalOpen, setOutlineModalOpen] = useState(false);
   const [fillModalOpen, setFillModalOpen] = useState(false);
+  /** AI 一键填写整本计划书 */
+  const [oneClickModalOpen, setOneClickModalOpen] = useState(false);
+  const [oneClickMode, setOneClickMode] = useState<'full' | 'incremental'>('incremental');
+  const [oneClickGenerating, setOneClickGenerating] = useState(false);
+  const [oneClickLog, setOneClickLog] = useState('');
+  const oneClickGeneratingRef = useRef(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitPptFiles, setSubmitPptFiles] = useState<UploadFile[]>([]);
   const [submitOptionalFiles, setSubmitOptionalFiles] = useState<UploadFile[]>([]);
@@ -595,14 +597,14 @@ export default function BusinessPlanModule({
   ]);
 
   useEffect(() => {
-    suppressBlurReleaseRef.current = fillModalOpen || outlineModalOpen;
-    if (fillModalOpen || outlineModalOpen) {
+    suppressBlurReleaseRef.current = fillModalOpen || outlineModalOpen || oneClickModalOpen;
+    if (fillModalOpen || outlineModalOpen || oneClickModalOpen) {
       if (blurReleaseTimerRef.current) {
         clearTimeout(blurReleaseTimerRef.current);
         blurReleaseTimerRef.current = null;
       }
     }
-  }, [fillModalOpen, outlineModalOpen]);
+  }, [fillModalOpen, outlineModalOpen, oneClickModalOpen]);
 
   // 5s：持锁续租+自动保存；未持锁则拉取同步
   useEffect(() => {
@@ -822,6 +824,38 @@ export default function BusinessPlanModule({
       if (!handleConflict(e)) message.error(e instanceof Error ? e.message : '生成章节失败');
     } finally {
       setGeneratingOutline(false);
+    }
+  };
+
+  const confirmOneClickFill = async () => {
+    if (!classId || readOnly || oneClickGeneratingRef.current) return;
+    oneClickGeneratingRef.current = true;
+    setOneClickGenerating(true);
+    setOneClickLog(
+      oneClickMode === 'full' ? '正在生成完整商业计划书，请稍候…' : '正在生成空白章节内容，请稍候…'
+    );
+    try {
+      if (holdingLockKeyRef.current) {
+        await saveActiveSection({ silent: true, releaseAfter: true });
+      }
+      const snapshot = getSectionsSnapshotWithDraft();
+      const ws = await generateBusinessPlan(classId, { mode: oneClickMode, sections: snapshot });
+      applyWorkspace(ws, { markSaved: true });
+      setOneClickModalOpen(false);
+      const n = Number(ws.savedCount || 0);
+      message.success(
+        n > 0
+          ? oneClickMode === 'full'
+            ? `AI 已写完 ${n} 个章节，请人工核对`
+            : `AI 已填写 ${n} 个空白章节，请人工核对`
+          : '没有需要填写的章节'
+      );
+    } catch (e) {
+      if (!handleConflict(e)) message.error(e instanceof Error ? e.message : '一键填写失败');
+    } finally {
+      oneClickGeneratingRef.current = false;
+      setOneClickGenerating(false);
+      setOneClickLog('');
     }
   };
 
@@ -1192,6 +1226,19 @@ export default function BusinessPlanModule({
                       <div className="flex items-center gap-2 shrink-0">
                         <button
                           type="button"
+                          disabled={readOnly || oneClickGenerating}
+                          onClick={() => {
+                            setOneClickMode(sectionsHaveContent(sectionsWithDraft) ? 'incremental' : 'full');
+                            setOneClickModalOpen(true);
+                          }}
+                          className="px-3 py-2 bg-teal-600 text-white text-sm font-semibold rounded-lg hover:bg-teal-700 disabled:opacity-50 cursor-pointer whitespace-nowrap"
+                          title="根据前期实训产物流式填写各章"
+                        >
+                          <i className="ri-sparkling-2-line mr-1.5" />
+                          {oneClickGenerating ? 'AI 填写中…' : 'AI 一键填写计划书'}
+                        </button>
+                        <button
+                          type="button"
                           onClick={() => exportDocx()}
                           className="px-3 py-2 bg-white border border-gray-200 text-gray-700 text-sm font-semibold rounded-lg hover:bg-gray-50 cursor-pointer whitespace-nowrap"
                           title="导出 Word"
@@ -1435,6 +1482,62 @@ export default function BusinessPlanModule({
           )}
         </div>
       </div>
+
+      <Modal
+        title="AI 一键填写计划书"
+        open={oneClickModalOpen}
+        maskClosable={false}
+        keyboard={!oneClickGenerating}
+        closable={!oneClickGenerating}
+        onCancel={() => !oneClickGenerating && setOneClickModalOpen(false)}
+        footer={[
+          <Button key="cancel" disabled={oneClickGenerating} onClick={() => setOneClickModalOpen(false)}>
+            取消
+          </Button>,
+          <Button key="export" onClick={() => exportDocx()} disabled={oneClickGenerating}>
+            导出备份（docx）
+          </Button>,
+          <Button
+            key="ok"
+            type="primary"
+            loading={oneClickGenerating}
+            onClick={() => void confirmOneClickFill()}
+          >
+            开始生成
+          </Button>,
+        ]}
+      >
+        <div className="text-sm text-gray-600 leading-relaxed space-y-3">
+          <p>
+            将依据前期实训产物（选题、市场分析报告、用户画像、产品、商业模式、仿真等）与计划书结构，由 AI
+            一次生成完整计划书并保存。请求期间请稍候，完成后章节会自动更新，需人工核对后再提交。
+          </p>
+          <div>
+            <div className="text-xs font-medium text-gray-700 mb-2">填写范围</div>
+            <Radio.Group
+              value={oneClickMode}
+              disabled={oneClickGenerating}
+              onChange={(e) => setOneClickMode(e.target.value)}
+              className="flex flex-col gap-2"
+            >
+              <Radio value="incremental">只填空白章节（保留已有正文）</Radio>
+              <Radio value="full">全部覆盖（重写全部章节正文）</Radio>
+            </Radio.Group>
+          </div>
+          {oneClickMode === 'full' || sectionsHaveContent(sectionsWithDraft) ? (
+            <p className="text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
+              {oneClickMode === 'full'
+                ? '全部覆盖将清空并重写现有章节内容，存在丢失风险。建议先点击「导出备份」再开始生成。'
+                : '当前已有部分章节内容；「只填空白」不会改写已有正文。若仍不放心，可先导出备份。'}
+            </p>
+          ) : (
+            <p className="text-gray-500">当前各章多为空，可直接开始生成。</p>
+          )}
+          {oneClickLog ? (
+            <p className="text-xs text-teal-700 font-medium tabular-nums">{oneClickLog}</p>
+          ) : null}
+        </div>
+      </Modal>
 
       <Modal
         title="根据项目生成章节"

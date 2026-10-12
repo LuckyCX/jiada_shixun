@@ -26,17 +26,30 @@ export type HatStudioDebateMessage = {
   moduleContent: string;
   fills?: HatStudioFill[];
   adoptedModules?: string[];
-  status?: 'adopted' | 'ignored' | 'guide';
+  status?: 'adopted' | 'ignored' | 'guide' | 'ask';
   roundIndex: number;
   createdAt: string;
 };
 
 export type HatStudioDraft = Record<string, HatStudioCell>;
 
+export type HatSessionState = {
+  mode: 'sequential' | 'free';
+  hatOrder: Exclude<HatStudioHat, 'user'>[];
+  completedHats: Exclude<HatStudioHat, 'user'>[];
+  activeHat: Exclude<HatStudioHat, 'user'>;
+  resumeHat: Exclude<HatStudioHat, 'user'> | null;
+  sequentialDone: boolean;
+  awaitingAnswer: boolean;
+  /** 当前帽已完成对话轮次（学生作答次数），满 3 轮后切下一帽 */
+  hatDialogueRound?: number;
+};
+
 export type HatStudioPayload = {
   draft: HatStudioDraft;
   draftDefs: { key: string; label: string }[];
-  transcript: { messages: HatStudioDebateMessage[]; roundCount: number };
+  transcript: { messages: HatStudioDebateMessage[]; roundCount: number; hatSession?: HatSessionState };
+  hatSession?: HatSessionState;
   filledCount: number;
 };
 
@@ -284,11 +297,12 @@ export async function hatStudioReset(
 export async function hatStudioDebateRound(
   classId: string,
   studentDisplayName: string,
-  userMessage: string
+  userMessage: string,
+  activeHat?: string
 ): Promise<{ roundMessages: HatStudioDebateMessage[]; studio: HatStudioPayload }> {
   return portalAuthenticatedFetch('student', `${hatStudioBase(classId)}/debate/round`, {
     method: 'POST',
-    body: JSON.stringify({ studentDisplayName, userMessage }),
+    body: JSON.stringify({ studentDisplayName, userMessage, activeHat }),
   }) as Promise<{ roundMessages: HatStudioDebateMessage[]; studio: HatStudioPayload }>;
 }
 
@@ -296,12 +310,30 @@ export async function hatStudioDebateReply(
   classId: string,
   studentDisplayName: string,
   userMessage: string,
-  hat?: string
-): Promise<{ message: HatStudioDebateMessage; studio: HatStudioPayload }> {
+  activeHat?: string
+): Promise<{
+  message?: HatStudioDebateMessage;
+  roundMessages?: HatStudioDebateMessage[];
+  studio: HatStudioPayload;
+}> {
   return portalAuthenticatedFetch('student', `${hatStudioBase(classId)}/debate/reply`, {
     method: 'POST',
-    body: JSON.stringify({ studentDisplayName, userMessage, hat }),
-  }) as Promise<{ message: HatStudioDebateMessage; studio: HatStudioPayload }>;
+    body: JSON.stringify({ studentDisplayName, userMessage, activeHat, hat: activeHat }),
+  }) as Promise<{
+    message?: HatStudioDebateMessage;
+    roundMessages?: HatStudioDebateMessage[];
+    studio: HatStudioPayload;
+  }>;
+}
+
+export async function hatStudioSwitchHat(
+  classId: string,
+  hat: string
+): Promise<{ studio: HatStudioPayload }> {
+  return portalAuthenticatedFetch('student', `${hatStudioBase(classId)}/debate/switch-hat`, {
+    method: 'POST',
+    body: JSON.stringify({ hat }),
+  }) as Promise<{ studio: HatStudioPayload }>;
 }
 
 export async function saveHatStudioDraftCell(

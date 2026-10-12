@@ -54,7 +54,13 @@ export type MarketStagePeriod = {
   deadlineDate: string;
 } | null;
 
+export type MarketCourseFeatures = {
+  surveyEnabled: boolean;
+  uploadEnabled: boolean;
+};
+
 export type MarketPlanResponse = {
+  features?: MarketCourseFeatures;
   plan: MarketResearchPlan | null;
   isTeamLeader: boolean;
   teamMembers: MarketTeamMember[];

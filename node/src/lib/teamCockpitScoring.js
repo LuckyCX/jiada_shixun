@@ -153,35 +153,27 @@ export async function isScoringStageComplete(pool, classId, teamId, moduleKey) {
     return rowCount > 0;
   }
   if (key === 'business') {
-    const [{ rows: bmRows }, { rows: warRows }] = await Promise.all([
-      pool.query(
-        `SELECT swot_saved_at, marketing_saved_at, finance_saved_at, bmc_canvas_saved_at
-         FROM teacher_personal_class_team_business_model_workspace WHERE team_id = $1 LIMIT 1`,
-        [teamId]
-      ),
-      pool.query(
-        `SELECT canvas_json FROM teacher_personal_class_team_war_room_saved_record WHERE team_id = $1`,
-        [teamId]
-      ),
-    ]);
+    const { rows: bmRows } = await pool.query(
+      `SELECT swot_saved_at, marketing_saved_at, finance_saved_at, bmc_canvas_saved_at, bmc_review_status
+       FROM teacher_personal_class_team_business_model_workspace WHERE team_id = $1 LIMIT 1`,
+      [teamId]
+    );
     const bm = bmRows[0];
-    let warOk = false;
-    for (const r of warRows || []) {
-      const canvas = r?.canvas_json && typeof r.canvas_json === 'object' ? r.canvas_json : {};
-      const filled = Object.values(canvas).filter(
-        (v) => v && typeof v === 'object' && String(v.content || '').trim()
-      ).length;
-      if (filled >= 9) {
-        warOk = true;
-        break;
-      }
-    }
+    const { rows: reviewRows } = await pool.query(
+      `SELECT COUNT(*)::int AS c, COALESCE(AVG(ai_score),0)::float AS avg_score
+       FROM teacher_personal_class_team_bmc_ai_reviews WHERE team_id = $1`,
+      [teamId]
+    ).catch(() => ({ rows: [{ c: 0, avg_score: 0 }] }));
+    const reviewCount = Number(reviewRows[0]?.c || 0);
+    // 五件套改为：SWOT + 营销 + 财务 + 画布上传 + 教师审核通过（取消战情室九格）
     const parts =
       (bm?.swot_saved_at ? 1 : 0) +
       (bm?.marketing_saved_at ? 1 : 0) +
       (bm?.finance_saved_at ? 1 : 0) +
       (bm?.bmc_canvas_saved_at ? 1 : 0) +
-      (warOk ? 1 : 0);
+      (String(bm?.bmc_review_status || '') === 'approved' ? 1 : 0);
+    // 审查次数仅作过程证据，完成判定仍看五件齐
+    void reviewCount;
     return parts >= 5;
   }
   if (key === 'simulation') {
@@ -293,16 +285,19 @@ async function buildEvidence(pool, classId, teamId, moduleKey) {
 
   if (moduleKey === 'business') {
     const { rows } = await pool.query(
-      `SELECT swot_saved_at, marketing_saved_at, finance_saved_at, bmc_canvas_saved_at
+      `SELECT swot_saved_at, marketing_saved_at, finance_saved_at, bmc_canvas_saved_at, bmc_review_status
        FROM teacher_personal_class_team_business_model_workspace WHERE team_id = $1 LIMIT 1`,
       [teamId]
     );
     evidence.workspace = rows[0] || null;
-    const { rowCount: warCount } = await pool.query(
-      `SELECT 1 FROM teacher_personal_class_team_war_room_saved_record WHERE team_id = $1 LIMIT 1`,
+    const { rows: revRows } = await pool.query(
+      `SELECT COUNT(*)::int AS c, COALESCE(AVG(ai_score),0)::float AS avg_score
+       FROM teacher_personal_class_team_bmc_ai_reviews WHERE team_id = $1`,
       [teamId]
-    );
-    evidence.hasWarRoomSave = warCount > 0;
+    ).catch(() => ({ rows: [{ c: 0, avg_score: 0 }] }));
+    evidence.bmcAiReviewCount = Number(revRows[0]?.c || 0);
+    evidence.bmcAiReviewAvgScore = Number(revRows[0]?.avg_score || 0);
+    evidence.bmcTeacherApproved = String(rows[0]?.bmc_review_status || '') === 'approved';
   }
 
   if (moduleKey === 'simulation') {
@@ -743,6 +738,7 @@ export async function loadTeamCockpit(pool, classId, teamId) {
     [teamId]
   ).catch(() => ({ rows: [] }));
 
+  // 多取一些，供驾驶舱按阶段 Tab 分组展示
   const { rows: recentLogRows } = await pool.query(
     `SELECT l.id, l.module_key, l.scene, l.role, l.content, l.created_at, l.student_id,
             COALESCE(u.real_name, u.username, '') AS student_name
@@ -750,7 +746,7 @@ export async function loadTeamCockpit(pool, classId, teamId) {
      LEFT JOIN users u ON u.id = l.student_id
      WHERE l.team_id = $1
      ORDER BY l.created_at DESC
-     LIMIT 10`,
+     LIMIT 80`,
     [teamId]
   ).catch(() => ({ rows: [] }));
 
@@ -838,13 +834,30 @@ export async function loadTeamCockpit(pool, classId, teamId) {
 
 function summarizeEvidence(ev) {
   if (!ev || typeof ev !== 'object') return null;
+  const ws = ev.workspace && typeof ev.workspace === 'object' ? ev.workspace : null;
   return {
     topicRejectCount: ev.topicRejectCount ?? ev.topic?.rejectCount ?? null,
+    topicStatus: ev.topic?.status ?? null,
     ideaCount: ev.ideaCount ?? null,
     hatMessageCount: ev.hatStudio?.messageCount ?? null,
+    hatMembers: ev.hatStudio?.members ?? null,
     challengeRounds: ev.challenge?.rounds ?? null,
-    runCount: ev.runCount ?? null,
+    challengeSessions: ev.challenge?.sessions ?? null,
     hasReport: ev.hasReport ?? null,
+    hasAiSuggestions: ev.hasAiSuggestions ?? null,
+    hasPrototype: Boolean(ev.prototype),
+    prototypeName: ev.prototype?.name ?? null,
+    // 商模：AI 审查次数 / 均分 / 教师审核 / 五件套进度
+    bmcAiReviewCount: ev.bmcAiReviewCount ?? null,
+    bmcAiReviewAvgScore: ev.bmcAiReviewAvgScore != null ? Math.round(Number(ev.bmcAiReviewAvgScore)) : null,
+    bmcTeacherApproved: ev.bmcTeacherApproved ?? null,
+    bmcUploaded: Boolean(ws?.bmc_canvas_saved_at),
+    swotSaved: Boolean(ws?.swot_saved_at),
+    marketingSaved: Boolean(ws?.marketing_saved_at),
+    financeSaved: Boolean(ws?.finance_saved_at),
+    runCount: ev.runCount ?? null,
+    planStatus: ev.plan?.status ?? null,
+    planScore: ev.plan?.totalScore ?? null,
     interactionStatCount: Array.isArray(ev.interactionStats) ? ev.interactionStats.length : null,
   };
 }

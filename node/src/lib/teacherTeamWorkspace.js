@@ -9,6 +9,7 @@ import { coerceSections, sectionsToFullText } from './businessPlanSections.js';
 import { normalizeUploadFileName } from './uploadFileName.js';
 import { TEAM_ROLE_LABELS } from './teamFormationConstants.js';
 import { profileFromAnalysisRaw, narrativeBeforeJson } from './teamFormationDimension.js';
+import { loadMarketFeatures } from './courseSettingsFeatures.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MARKET_UPLOAD_ROOT = path.join(__dirname, '../../uploads/market-research');
@@ -548,6 +549,7 @@ async function loadIdeationStage(pool, classId, teamId, members) {
 }
 
 async function loadMarketStage(pool, classId, teamId, members) {
+  const features = await loadMarketFeatures(pool, classId);
   const { rows: planRows } = await pool.query(
     `SELECT goal, methods, plan_start_date, plan_end_date, assignments, saved_at
      FROM teacher_personal_class_team_market_research_plans WHERE team_id = $1`,
@@ -638,6 +640,7 @@ async function loadMarketStage(pool, classId, teamId, members) {
   return {
     moduleKey: 'market',
     name: STAGE_META.market.name,
+    features,
     team: {
       plan,
       uploads,
@@ -738,7 +741,8 @@ async function loadProductStage(pool, classId, teamId, members) {
 async function loadBusinessStage(pool, classId, teamId, members) {
   const { rows: wsRows } = await pool.query(
     `SELECT swot_json, marketing_json, finance_json, bmc_canvas_json,
-            swot_saved_at, marketing_saved_at, finance_saved_at, bmc_canvas_saved_at
+            swot_saved_at, marketing_saved_at, finance_saved_at, bmc_canvas_saved_at,
+            bmc_review_status, bmc_review_comment, bmc_reviewed_at
      FROM teacher_personal_class_team_business_model_workspace WHERE team_id = $1`,
     [teamId]
   );
@@ -760,6 +764,17 @@ async function loadBusinessStage(pool, classId, teamId, members) {
      WHERE w.team_id = $1`,
     [teamId]
   );
+  // AI 审查记录（学生提交的本轮审查历史，教师端只读展示）
+  const { rows: aiReviewRows } = await pool.query(
+    `SELECT r.id, r.self_note, r.ai_result, r.ai_score, r.created_at, r.submitted_by,
+            COALESCE(u.real_name, u.username, '') AS submitter_name
+     FROM teacher_personal_class_team_bmc_ai_reviews r
+     JOIN users u ON u.id = r.submitted_by
+     WHERE r.team_id = $1
+     ORDER BY r.created_at DESC
+     LIMIT 50`,
+    [teamId]
+  );
 
   return {
     moduleKey: 'business',
@@ -773,6 +788,18 @@ async function loadBusinessStage(pool, classId, teamId, members) {
       financeSavedAt: fmtZh(ws?.finance_saved_at),
       bmc: ws?.bmc_canvas_json || null,
       bmcSavedAt: fmtZh(ws?.bmc_canvas_saved_at),
+      bmcReviewStatus: String(ws?.bmc_review_status || 'draft'),
+      bmcReviewComment: String(ws?.bmc_review_comment || ''),
+      bmcReviewedAt: fmtZh(ws?.bmc_reviewed_at),
+      bmcAiReviews: aiReviewRows.map((r) => ({
+        id: String(r.id),
+        selfNote: String(r.self_note || ''),
+        aiResult: asObj(r.ai_result),
+        aiScore: r.ai_score != null ? Number(r.ai_score) : null,
+        createdAt: fmtZh(r.created_at),
+        submittedBy: String(r.submitted_by),
+        submitterName: String(r.submitter_name || '').trim() || '同学',
+      })),
     },
     members: members.map((m) => {
       const draft = warDraftRows.find((w) => String(w.student_id) === m.studentId);

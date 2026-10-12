@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Button, Dropdown, Input, message } from 'antd';
+import { Button, Dropdown, Input, Popover, message } from 'antd';
 import {
   adoptHatStudioMessage,
   analyzeStudentIdeationIdea,
   fetchHatStudio,
   hatStudioDebateReply,
-  hatStudioDebateRound,
   hatStudioDebateStart,
   hatStudioReset,
-  parseHatStudioMentionedHat,
+  hatStudioSwitchHat,
   saveHatStudioDraftCell,
+  type HatSessionState,
   type HatStudioDebateMessage,
   type HatStudioDraft,
   type HatStudioHat,
@@ -25,13 +25,16 @@ import imgLan from '../../../../../assets/images/lan.jpg';
 
 type HatKey = Exclude<HatStudioHat, 'user'>;
 
-const HAT_HEADER_ORDER: HatKey[] = ['white', 'red', 'black', 'yellow', 'green', 'blue'];
+/** 顺序：白→绿→黄→黑→红→蓝 */
+const HAT_HEADER_ORDER: HatKey[] = ['white', 'green', 'yellow', 'black', 'red', 'blue'];
 
 const hatConfig: Record<
   HatKey | 'user',
   {
     hatLabel: string;
     role: string;
+    /** 气泡叹号弹出的职能详解 */
+    detail: string;
     color: string;
     textColor: string;
     borderColor: string;
@@ -40,47 +43,59 @@ const hatConfig: Record<
 > = {
   white: {
     hatLabel: '白帽',
-    role: '数据分析师',
+    role: '客观事实｜补信息',
+    detail:
+      '白帽（客观事实思维｜补信息）：聚焦事实、数据、已知信息，不做主观评判。引导学生区分「主观猜想」和「客观可验证信息」，找出缺少的资料、数据、前提条件。提问句式：你有哪些可验证的数据？这个说法依据是什么？还缺少哪些信息？',
     color: 'bg-gray-100',
     textColor: 'text-gray-900',
     borderColor: 'border-gray-300',
     avatar: imgBai,
   },
-  red: {
-    hatLabel: '红帽',
-    role: '用户代表',
-    color: 'bg-red-100',
-    textColor: 'text-red-900',
-    borderColor: 'border-red-300',
-    avatar: imgHong,
-  },
-  black: {
-    hatLabel: '黑帽',
-    role: '风险预警员',
-    color: 'bg-gray-900',
-    textColor: 'text-white',
-    borderColor: 'border-gray-700',
-    avatar: imgHei,
-  },
-  yellow: {
-    hatLabel: '黄帽',
-    role: '乐观倡导者',
-    color: 'bg-amber-100',
-    textColor: 'text-amber-900',
-    borderColor: 'border-amber-300',
-    avatar: imgHuang,
-  },
   green: {
     hatLabel: '绿帽',
-    role: '创意设计师',
+    role: '发散创新｜找创新',
+    detail:
+      '绿帽（发散创新思维｜找创新）：鼓励发散、跳出固有方案，挖掘创意可能性、替代方案、差异化亮点，不否定原有想法。提问句式：还有别的实现方式吗？可以增加什么新亮点？有没有不一样的解决思路？',
     color: 'bg-emerald-100',
     textColor: 'text-emerald-900',
     borderColor: 'border-emerald-300',
     avatar: imgLv,
   },
+  yellow: {
+    hatLabel: '黄帽',
+    role: '正向价值｜判价值',
+    detail:
+      '黄帽（正向价值思维｜判价值）：挖掘项目的价值、优势、收益，思考为什么可行、用户能获得什么价值。提问句式：这个方案最大的价值是什么？用户为什么愿意选择你？长期能带来什么收益？',
+    color: 'bg-amber-100',
+    textColor: 'text-amber-900',
+    borderColor: 'border-amber-300',
+    avatar: imgHuang,
+  },
+  black: {
+    hatLabel: '黑帽',
+    role: '风险批判｜查风险',
+    detail:
+      '黑帽（风险批判思维｜查风险）：理性审视隐患、短板、潜在风险，识别方案漏洞与落地障碍，审慎评估而非抬杠。提问句式：这个方案最大隐患是什么？哪一步最容易出问题？有哪些不可控因素？',
+    color: 'bg-gray-900',
+    textColor: 'text-white',
+    borderColor: 'border-gray-700',
+    avatar: imgHei,
+  },
+  red: {
+    hatLabel: '红帽',
+    role: '用户共情｜贴需求',
+    detail:
+      '红帽（用户共情思维｜贴需求）：关注感受、情绪、直觉，站在用户视角体会好恶与真实感受。提问句式：用户看到这个方案第一感受是什么？用户会担心什么？什么场景下用户会抵触？',
+    color: 'bg-red-100',
+    textColor: 'text-red-900',
+    borderColor: 'border-red-300',
+    avatar: imgHong,
+  },
   blue: {
     hatLabel: '蓝帽',
-    role: '项目经理',
+    role: '全局系统｜做统筹',
+    detail:
+      '蓝帽（全局系统思维｜做统筹）：把控整体框架，整合前面各帽结论，规划后续行动，收敛思路。提问句式：综合前面分析，当前最大问题是什么？下一步优先做什么？整体框架如何调整？',
     color: 'bg-sky-100',
     textColor: 'text-sky-900',
     borderColor: 'border-sky-300',
@@ -89,6 +104,7 @@ const hatConfig: Record<
   user: {
     hatLabel: '我',
     role: '学生',
+    detail: '学生本人发言。',
     color: 'bg-teal-50',
     textColor: 'text-teal-900',
     borderColor: 'border-teal-200',
@@ -130,6 +146,14 @@ function collectAdoptTargets(msg: HatStudioDebateMessage) {
   return list;
 }
 
+/** 输入框已有 @某帽 时替换为切换后的帽子；无 @ 则不动（中文帽名后勿用 \b） */
+function syncHatMentionInText(text: string, hatLabel: string) {
+  const mentionRe = /@\s*(白帽|红帽|黑帽|黄帽|绿帽|蓝帽|white|red|black|yellow|green|blue)/gi;
+  if (!/@\s*(白帽|红帽|黑帽|黄帽|绿帽|蓝帽|white|red|black|yellow|green|blue)/i.test(text)) return text;
+  const base = text.replace(mentionRe, '').replace(/\s+/g, ' ').trim();
+  return base ? `${hatLabel} ${base}` : hatLabel;
+}
+
 /** 供外层统一输入条绑定（嵌入创新方法对话时） */
 export type HatStudioComposerBind = {
   send: (text: string) => Promise<void>;
@@ -152,8 +176,8 @@ type Props = {
   active?: boolean;
   /** 嵌入时隐藏内部发言框，改由外层统一输入条发送 */
   onBindComposer?: (composer: HatStudioComposerBind | null) => void;
-  /** 嵌入时 @帽子 写入外层输入框 */
-  onRequestAppendInput?: (piece: string) => void;
+  /** 切换帽子时同步外层输入框：若已 @ 其他帽子则替换为当前帽子 */
+  onRequestAppendInput?: (hatLabel: string) => void;
   /** 嵌入时渲染在左侧讨论区底部（输入条靠左，工作区可拉满整卡高度） */
   composerFooter?: ReactNode;
 };
@@ -184,6 +208,7 @@ export default function IdeationHatStudio({
   const [isPlaying, setIsPlaying] = useState(false);
   const [submittingIdea, setSubmittingIdea] = useState(false);
   const [resetting, setResetting] = useState(false);
+  const [hatSession, setHatSession] = useState<HatSessionState | null>(null);
   const chatScrollRef = useRef<HTMLDivElement>(null);
   /** 防止 Strict Mode / 重复 effect 并发自动开场 */
   const autoStartLockRef = useRef(false);
@@ -192,6 +217,8 @@ export default function IdeationHatStudio({
     setDraft(studio.draft || emptyDraft(studio.draftDefs || []));
     setDraftDefs(studio.draftDefs || []);
     setFilledCount(studio.filledCount || 0);
+    const hs = studio.hatSession || studio.transcript?.hatSession || null;
+    if (hs) setHatSession(hs);
     if (opts?.syncMessages !== false && studio.transcript?.messages) {
       setMessages(studio.transcript.messages);
     }
@@ -295,7 +322,7 @@ export default function IdeationHatStudio({
     }
   };
 
-  // 切到六帽且尚无会话时自动开始
+  // 切到六帽（或独立页激活）且尚无会话时自动开始，无需点「开始」按钮
   useEffect(() => {
     if (!active || disabled || loading) return;
     if (messages.length > 0) return;
@@ -311,7 +338,7 @@ export default function IdeationHatStudio({
     if (!classId?.trim() || disabled) return;
     setResetting(true);
     try {
-      // 与学生端一致：清空讨论同时清空右侧创意工作区
+      // 清空讨论同时清空右侧创意工作区，避免旧内容残留
       const { roundMessages, studio } = await hatStudioReset(classId.trim(), studentDisplayName, {
         clearDraft: true,
       });
@@ -338,10 +365,7 @@ export default function IdeationHatStudio({
       message.warning('请尽量完整描述你的创意（问题、用户、方案等），便于六帽引导');
       return;
     }
-    if (awaitingStudentIdea && parseHatStudioMentionedHat(text) && text.replace(/@\S+/g, '').trim().length < 8) {
-      message.warning('请先描述你的创意内容，再 @ 某一顶帽子追问');
-      return;
-    }
+    const activeHat = hatSession?.activeHat || 'white';
     const prevLen = messages.length;
     const tempId = `temp-${crypto.randomUUID()}`;
     setUserInput('');
@@ -359,43 +383,22 @@ export default function IdeationHatStudio({
     ]);
     setIsDebating(true);
     try {
-      const mentioned = parseHatStudioMentionedHat(text);
-      if (mentioned && !awaitingStudentIdea) {
-        const { message: reply, studio } = await hatStudioDebateReply(
-          classId.trim(),
-          studentDisplayName,
-          text,
-          mentioned
-        );
-        applyStudio(studio, { syncMessages: false });
-        const serverUser = studio.transcript?.messages?.[prevLen];
-        setMessages((prev) => {
-          const base = prev.filter((m) => m.id !== tempId);
-          if (serverUser?.hat === 'user' && !base.some((m) => m.id === serverUser.id)) {
-            base.push(serverUser);
-          }
-          return base;
-        });
-        await playMessagesSequential([reply]);
-        await refresh();
-      } else {
-        const { roundMessages, studio } = await hatStudioDebateRound(
-          classId.trim(),
-          studentDisplayName,
-          text
-        );
-        applyStudio(studio, { syncMessages: false });
-        const serverUser = studio.transcript?.messages?.[prevLen];
-        setMessages((prev) => {
-          const base = prev.filter((m) => m.id !== tempId);
-          if (serverUser?.hat === 'user' && !base.some((m) => m.id === serverUser.id)) {
-            base.push(serverUser);
-          }
-          return base;
-        });
-        await playMessagesSequential(roundMessages.filter((m) => m.hat !== 'user'));
-        await refresh();
-      }
+      // 视角切换后与当前帽对话（含顺序轮询作答）
+      const res = await hatStudioDebateReply(classId.trim(), studentDisplayName, text, activeHat);
+      applyStudio(res.studio, { syncMessages: false });
+      const serverUser = res.studio.transcript?.messages?.[prevLen];
+      setMessages((prev) => {
+        const base = prev.filter((m) => m.id !== tempId);
+        if (serverUser?.hat === 'user' && !base.some((m) => m.id === serverUser.id)) {
+          base.push(serverUser);
+        }
+        return base;
+      });
+      const toPlay =
+        res.roundMessages?.filter((m) => m.hat !== 'user') ||
+        (res.message ? [res.message] : []);
+      if (toPlay.length) await playMessagesSequential(toPlay);
+      await refresh();
     } catch (e) {
       setMessages((prev) => prev.filter((m) => m.id !== tempId));
       setUserInput(text);
@@ -409,7 +412,7 @@ export default function IdeationHatStudio({
     await sendWithText(userInput);
   };
 
-  // 嵌入模式：用 ref 绑定外层输入条，避免 onBindComposer 身份变化导致 Maximum update depth
+  // 嵌入模式：把发送能力交给外层统一输入条（用 ref，避免回调身份变化触发死循环）
   const onBindComposerRef = useRef(onBindComposer);
   onBindComposerRef.current = onBindComposer;
   const sendWithTextRef = useRef(sendWithText);
@@ -425,14 +428,14 @@ export default function IdeationHatStudio({
           : '讨论准备中，请稍候…'
         : awaitingStudentIdea
           ? '例如：我想做校园二手教材流转，解决买书贵、闲置浪费…'
-          : '继续补充想法；或不输入 @ 开下一轮六帽；或 @白帽 等追问';
+          : `与${hatConfig[hatSession?.activeHat || 'white'].hatLabel}对话（提问不代改）…`;
     bind({
       send: (text) => sendWithTextRef.current(text),
       canSend: !disabled && !isDebating && !isPlaying && messages.length > 0,
       busy: isDebating || isPlaying,
       placeholder,
     });
-  }, [awaitingStudentIdea, disabled, isDebating, isPlaying, loading, messages.length]);
+  }, [awaitingStudentIdea, disabled, hatSession?.activeHat, isDebating, isPlaying, loading, messages.length]);
 
   useEffect(() => {
     return () => {
@@ -492,17 +495,19 @@ export default function IdeationHatStudio({
     }
   };
 
-  const insertMention = (hat: HatKey) => {
-    const label = hatConfig[hat].hatLabel;
-    const piece = `@${label} `;
-    if (embedded && onRequestAppendInput) {
-      onRequestAppendInput(piece);
-      return;
+  /** 切换帽子视角；若输入框已 @ 其他帽子则同步替换 */
+  const switchPerspective = async (hat: HatKey) => {
+    if (!classId?.trim() || disabled || isDebating || isPlaying || messages.length === 0) return;
+    const mention = `@${hatConfig[hat].hatLabel}`;
+    try {
+      const { studio } = await hatStudioSwitchHat(classId.trim(), hat);
+      applyStudio(studio, { syncMessages: false });
+      setUserInput((prev) => syncHatMentionInText(prev, mention));
+      onRequestAppendInput?.(mention);
+      message.info(`已切换到${hatConfig[hat].hatLabel}视角（${hatConfig[hat].role}）`);
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '切换视角失败');
     }
-    setUserInput((prev) => {
-      const t = prev.trim();
-      return t ? `${t} ${piece}` : piece;
-    });
   };
 
   return (
@@ -511,16 +516,20 @@ export default function IdeationHatStudio({
         <div className="bg-violet-50 border border-violet-200 rounded-xl p-4">
           <h4 className="text-sm font-bold text-violet-900 mb-1">六帽创想室</h4>
           <p className="text-xs text-violet-700">
-            ① 进入后自动开启讨论 → ② 描述创意并发送 → ③ 六帽引导多轮对话（可 @ 或不 @）→ ④ 写入右侧工作区 → ⑤ AI 汇总并入库。可随时「清空重开」。
+            ① 描述创意 → ② 按白→绿→黄→黑→红→蓝顺序苏格拉底追问（提问不代改）→ ③ 可随时切换帽子视角 → ④ 写入右侧工作区 → ⑤ AI 汇总入库。
           </p>
         </div>
       )}
 
+      {/*
+        视口高度锁定双栏：消息/工作区各自内部滚动；
+        嵌入模式填满父级对话卡片，避免把发送条顶出屏幕。
+      */}
       <div
         className={
           embedded
             ? 'grid grid-cols-1 lg:grid-cols-5 gap-2 flex-1 min-h-0 h-full lg:items-stretch'
-            : 'grid grid-cols-1 lg:grid-cols-5 gap-4 lg:h-[calc(100dvh-15rem)] lg:min-h-[420px] lg:max-h-[720px]'
+            : 'grid grid-cols-1 lg:grid-cols-5 gap-4 lg:h-[calc(100dvh-12rem)] lg:min-h-[420px] lg:max-h-[900px]'
         }
       >
         <div
@@ -530,48 +539,80 @@ export default function IdeationHatStudio({
               : 'lg:col-span-3 flex flex-col h-[min(58dvh,520px)] lg:h-full rounded-xl border border-gray-200 bg-white overflow-hidden'
           }
         >
-          {/* Header：标题 + 六帽小图标 + 清空，同一行 */}
-          <div className="px-3 py-1.5 border-b border-gray-100 flex items-center gap-2.5 shrink-0 min-w-0">
-            <span className="text-sm font-semibold text-gray-800 shrink-0">讨论区</span>
-            {messages.length > 0 ? (
-              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-50 text-violet-700 border border-violet-100 whitespace-nowrap shrink-0 hidden sm:inline">
-                进行中
-              </span>
-            ) : null}
-            <div className="flex-1 min-w-0" />
-            <div className="flex items-center gap-1.5 shrink-0">
-              {HAT_HEADER_ORDER.map((h) => {
-                const cfg = hatConfig[h];
-                const speaking = currentSpeaker === h;
-                return (
-                  <button
-                    key={h}
-                    type="button"
-                    disabled={disabled || isDebating || isPlaying || awaitingStudentIdea || messages.length === 0}
-                    onClick={() => insertMention(h)}
-                    className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 transition-all cursor-pointer ${
-                      speaking ? 'ring-1 ring-violet-300 border-violet-400' : cfg.borderColor
-                    } ${cfg.color} ${cfg.textColor} ${
-                      awaitingStudentIdea || messages.length === 0 ? 'opacity-45' : 'hover:opacity-90'
-                    }`}
-                    title={awaitingStudentIdea ? '请先发送你的创意后再 @ 帽子' : `@${cfg.hatLabel} · ${cfg.role}`}
-                  >
-                    <img src={cfg.avatar} alt="" className="w-4 h-4 rounded-full object-cover shrink-0" />
-                    <span className="text-[10px] font-medium leading-none whitespace-nowrap">{cfg.hatLabel}</span>
-                  </button>
-                );
-              })}
+          {/* Header：标题 + 缩小六帽 + 清空同一行，下方提示 */}
+          <div className="px-3 py-1.5 border-b border-gray-100 shrink-0">
+            <div className="grid grid-cols-[auto_1fr_auto] items-start gap-3 min-w-0">
+              <span className="text-sm font-semibold text-gray-800 shrink-0 pt-1">六帽创想室</span>
+              <div className="flex items-start justify-center gap-3 min-w-0 overflow-x-auto py-1">
+                {HAT_HEADER_ORDER.map((h) => {
+                  const cfg = hatConfig[h];
+                  const speaking = currentSpeaker === h;
+                  const isActive = (hatSession?.activeHat || 'white') === h || speaking;
+                  const done = hatSession?.completedHats?.includes(h);
+                  return (
+                    <div key={h} className="relative shrink-0 flex flex-col items-center gap-0.5 min-w-[2.75rem]">
+                      <Popover
+                        trigger="click"
+                        placement="bottom"
+                        title={`${cfg.hatLabel} · ${cfg.role}`}
+                        content={<p className="max-w-xs text-xs text-gray-700 leading-relaxed m-0">{cfg.detail}</p>}
+                      >
+                        <button
+                          type="button"
+                          className="absolute -top-1 -right-1 z-10 w-3.5 h-3.5 rounded-full bg-sky-500 text-white text-[9px] font-bold leading-none flex items-center justify-center shadow-sm hover:bg-sky-600 cursor-pointer"
+                          aria-label={`${cfg.hatLabel}职能介绍`}
+                          title="查看职能介绍"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          !
+                        </button>
+                      </Popover>
+                      <button
+                        type="button"
+                        disabled={disabled || isDebating || isPlaying || messages.length === 0}
+                        onClick={() => void switchPerspective(h)}
+                        className="relative flex flex-col items-center gap-0.5 transition-opacity cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed hover:opacity-100 opacity-90"
+                        title={`切换到${cfg.hatLabel}：${cfg.role}${done ? '（顺序已完成）' : ''}`}
+                      >
+                        <img
+                          src={cfg.avatar}
+                          alt={cfg.hatLabel}
+                          className={`w-7 h-7 rounded-full object-cover border-2 ${cfg.borderColor}`}
+                        />
+                        {/* 顶栏在白底上展示帽名：黑帽气泡用白字，此处须用深色字否则看不见 */}
+                        <span
+                          className={`relative inline-block text-[10px] font-bold leading-none ${
+                            h === 'black' ? 'text-gray-900' : cfg.textColor
+                          }`}
+                        >
+                          {cfg.hatLabel}
+                          {done ? '✓' : ''}
+                          {isActive ? (
+                            <span
+                              className="absolute -top-1 -right-1.5 w-1.5 h-1.5 rounded-full bg-emerald-500 ring-1 ring-white"
+                              aria-hidden
+                            />
+                          ) : null}
+                        </span>
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+              <Button
+                size="small"
+                danger
+                loading={resetting}
+                disabled={disabled || isDebating || isPlaying || loading || messages.length === 0}
+                onClick={() => void handleReset()}
+                className="shrink-0 !text-xs !h-7 !px-2.5"
+              >
+                清空重开
+              </Button>
             </div>
-            <Button
-              size="small"
-              danger
-              loading={resetting}
-              disabled={disabled || isDebating || isPlaying || loading || messages.length === 0}
-              onClick={() => void handleReset()}
-              className="shrink-0 !text-xs !h-7 !px-2.5 ml-0.5"
-            >
-              清空重开
-            </Button>
+            <p className="mt-1 text-[11px] text-gray-500 leading-snug">
+              点击帽子切换视角；若输入框已 @ 其他帽子，将同步为当前帽子。顺序：白→绿→黄→黑→红→蓝。
+            </p>
           </div>
           <div ref={chatScrollRef} className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-3 space-y-3">
             {loading && <div className="text-sm text-gray-400 text-center py-8">加载中…</div>}
@@ -600,11 +641,7 @@ export default function IdeationHatStudio({
                     {!isGuide && msg.hat !== 'user' ? ` · ${cfg.role}` : ''}
                     {msg.hat === 'user' ? ' · 我的发言' : ''}
                   </div>
-                  {msg.hat === 'user' ? (
-                    <p className={`text-sm whitespace-pre-wrap leading-relaxed ${cfg.textColor}`}>{msg.content}</p>
-                  ) : (
-                    <DemoMarkdown text={msg.content || ''} className={`text-sm leading-relaxed ${cfg.textColor}`} />
-                  )}
+                  <p className={`text-sm whitespace-pre-wrap leading-relaxed ${cfg.textColor}`}>{msg.content}</p>
                   {adopts.length > 0 && !isGuide && msg.hat !== 'user' && (
                     <div className="mt-2 flex flex-wrap gap-2">
                       {adopts.map((a) => {
@@ -655,10 +692,11 @@ export default function IdeationHatStudio({
             })}
             {(isDebating || isPlaying) && (
               <div className="text-xs text-violet-600 animate-pulse">
-                {awaitingStudentIdea ? '等待你的创意描述…' : '六帽正在根据你的内容引导讨论…'}
+                {awaitingStudentIdea ? '等待你的创意描述…' : '帽子正在根据你的内容引导讨论…'}
               </div>
             )}
           </div>
+          {/* 嵌入：外层输入条压在讨论区底部左侧；非嵌入：自带发送框 */}
           {embedded && composerFooter ? (
             <div className="shrink-0 border-t border-gray-100 bg-white">{composerFooter}</div>
           ) : null}

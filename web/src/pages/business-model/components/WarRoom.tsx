@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { message } from 'antd';
+import { Popover, message } from 'antd';
 import AppModalPortal from '../../../components/AppModalPortal';
 import {
   WAR_ROOM_MODULE_DEFS,
-  adoptWarRoomMessage,
   fetchBusinessModelWorkspace,
   fetchWarRoomMemberRecord,
   parseMentionedHat,
@@ -12,6 +11,7 @@ import {
   warRoomDebateReply,
   warRoomDebateRound,
   warRoomDebateStart,
+  warRoomSwitchHat,
   type WarRoomCanvas,
   type WarRoomDebateMessage,
   type WarRoomHat,
@@ -26,7 +26,7 @@ import imgLan from '../../../assets/images/lan.jpg';
 
 type HatKey = Exclude<WarRoomHat, 'user'>;
 
-const HAT_HEADER_ORDER: HatKey[] = ['white', 'red', 'black', 'yellow', 'green', 'blue'];
+const HAT_HEADER_ORDER: HatKey[] = ['white', 'green', 'yellow', 'black', 'red', 'blue'];
 
 const hatConfig: Record<
   HatKey | 'user',
@@ -34,6 +34,8 @@ const hatConfig: Record<
     name: string;
     hatLabel: string;
     role: string;
+    /** 气泡叹号弹出的职能详解 */
+    detail: string;
     color: string;
     textColor: string;
     borderColor: string;
@@ -46,9 +48,11 @@ const hatConfig: Record<
   }
 > = {
   white: {
-    name: '白帽 - 数据分析师',
+    name: '白帽 - 客观事实｜补信息',
     hatLabel: '白帽',
-    role: '数据分析师',
+    role: '客观事实｜补信息',
+    detail:
+      '白帽（客观事实思维｜补信息）：聚焦事实、数据、已知信息，不做主观评判。引导学生区分「主观猜想」和「客观可验证信息」，找出缺少的资料、数据、前提条件。提问句式：你有哪些可验证的数据？这个说法依据是什么？还缺少哪些信息？',
     color: 'bg-gray-100',
     textColor: 'text-gray-900',
     borderColor: 'border-gray-300',
@@ -60,9 +64,11 @@ const hatConfig: Record<
     ringGlow: 'shadow-[0_0_0_2px_rgba(156,163,175,0.5)]',
   },
   red: {
-    name: '红帽 - 用户代表',
+    name: '红帽 - 用户共情｜贴需求',
     hatLabel: '红帽',
-    role: '用户代表',
+    role: '用户共情｜贴需求',
+    detail:
+      '红帽（用户共情思维｜贴需求）：关注感受、情绪、直觉，站在用户视角体会好恶与真实感受。提问句式：用户看到这个方案第一感受是什么？用户会担心什么？什么场景下用户会抵触？',
     color: 'bg-red-100',
     textColor: 'text-red-900',
     borderColor: 'border-red-300',
@@ -74,9 +80,11 @@ const hatConfig: Record<
     ringGlow: 'shadow-[0_0_0_2px_rgba(248,113,113,0.55)]',
   },
   black: {
-    name: '黑帽 - 风险预警员',
+    name: '黑帽 - 风险批判｜查风险',
     hatLabel: '黑帽',
-    role: '风险预警员',
+    role: '风险批判｜查风险',
+    detail:
+      '黑帽（风险批判思维｜查风险）：理性审视隐患、短板、潜在风险，识别方案漏洞与落地障碍，审慎评估而非抬杠。提问句式：这个方案最大隐患是什么？哪一步最容易出问题？有哪些不可控因素？',
     color: 'bg-gray-900',
     textColor: 'text-white',
     borderColor: 'border-gray-700',
@@ -88,9 +96,11 @@ const hatConfig: Record<
     ringGlow: 'shadow-[0_0_0_2px_rgba(31,41,55,0.45)]',
   },
   yellow: {
-    name: '黄帽 - 乐观倡导者',
+    name: '黄帽 - 正向价值｜判价值',
     hatLabel: '黄帽',
-    role: '乐观倡导者',
+    role: '正向价值｜判价值',
+    detail:
+      '黄帽（正向价值思维｜判价值）：挖掘项目的价值、优势、收益，思考为什么可行、用户能获得什么价值。提问句式：这个方案最大的价值是什么？用户为什么愿意选择你？长期能带来什么收益？',
     color: 'bg-yellow-100',
     textColor: 'text-yellow-900',
     borderColor: 'border-yellow-300',
@@ -102,9 +112,11 @@ const hatConfig: Record<
     ringGlow: 'shadow-[0_0_0_2px_rgba(250,204,21,0.55)]',
   },
   green: {
-    name: '绿帽 - 创意设计师',
+    name: '绿帽 - 发散创新｜找创新',
     hatLabel: '绿帽',
-    role: '创意设计师',
+    role: '发散创新｜找创新',
+    detail:
+      '绿帽（发散创新思维｜找创新）：鼓励发散、跳出固有方案，挖掘创意可能性、替代方案、差异化亮点，不否定原有想法。提问句式：还有别的实现方式吗？可以增加什么新亮点？有没有不一样的解决思路？',
     color: 'bg-green-100',
     textColor: 'text-green-900',
     borderColor: 'border-green-300',
@@ -116,9 +128,11 @@ const hatConfig: Record<
     ringGlow: 'shadow-[0_0_0_2px_rgba(34,197,94,0.5)]',
   },
   blue: {
-    name: '蓝帽 - 项目经理',
+    name: '蓝帽 - 全局系统｜做统筹',
     hatLabel: '蓝帽',
-    role: '项目经理',
+    role: '全局系统｜做统筹',
+    detail:
+      '蓝帽（全局系统思维｜做统筹）：把控整体框架，整合前面各帽结论，规划后续行动，收敛思路。提问句式：综合前面分析，当前最大问题是什么？下一步优先做什么？整体框架如何调整？',
     color: 'bg-blue-100',
     textColor: 'text-blue-900',
     borderColor: 'border-blue-300',
@@ -133,6 +147,7 @@ const hatConfig: Record<
     name: '学生',
     hatLabel: '我',
     role: '学生',
+    detail: '学生本人发言。',
     color: 'bg-teal-50',
     textColor: 'text-teal-900',
     borderColor: 'border-teal-200',
@@ -154,11 +169,23 @@ const HAT_MENTION_LABELS: { hat: HatKey; label: string }[] = [
   { hat: 'blue', label: '@蓝帽' },
 ];
 
+/**
+ * 清除输入中的 @帽子。
+ * 注意：中文帽名后不能用 \b（中文非 \w，边界永不成立），否则连续点 @ 会叠多个帽子。
+ */
 const MENTION_STRIP_RE =
-  /@\s*(白帽|红帽|黑帽|黄帽|绿帽|蓝帽|white|red|black|yellow|green|blue)\b/gi;
+  /@\s*(白帽|红帽|黑帽|黄帽|绿帽|蓝帽|white|red|black|yellow|green|blue)/gi;
 
 function stripHatMentions(text: string) {
   return text.replace(MENTION_STRIP_RE, '').replace(/\s+/g, ' ').trim();
+}
+
+/** 输入框已有 @某帽 时，替换为切换后的帽子；无 @ 则不动 */
+function syncHatMentionInText(text: string, hatLabel: string) {
+  const hasMention = /@\s*(白帽|红帽|黑帽|黄帽|绿帽|蓝帽|white|red|black|yellow|green|blue)/i.test(text);
+  if (!hasMention) return text;
+  const base = stripHatMentions(text);
+  return base ? `${hatLabel} ${base}` : `${hatLabel} `;
 }
 
 function emptyCanvas(): WarRoomCanvas {
@@ -178,32 +205,6 @@ function messageDelay(content: string) {
   return Math.min(1200, Math.max(280, String(content || '').length * 8));
 }
 
-function moduleTitle(key: string) {
-  return WAR_ROOM_MODULE_DEFS.find((m) => m.key === key)?.title || key;
-}
-
-function getAdoptableFills(msg: WarRoomDebateMessage) {
-  if (msg.hat === 'user' || msg.status === 'ignored') return [];
-  const adopted = new Set(msg.adoptedModules || []);
-  if (msg.status === 'adopted' && msg.targetModule) adopted.add(msg.targetModule);
-  const list: { targetModule: string; moduleContent: string }[] = [];
-  if (msg.fills?.length) {
-    for (const f of msg.fills) {
-      if (f.targetModule && f.moduleContent?.trim() && !adopted.has(f.targetModule)) {
-        list.push(f);
-      }
-    }
-  } else if (
-    msg.targetModule &&
-    msg.moduleContent?.trim() &&
-    !adopted.has(msg.targetModule) &&
-    msg.status !== 'adopted'
-  ) {
-    list.push({ targetModule: msg.targetModule, moduleContent: msg.moduleContent });
-  }
-  return list;
-}
-
 type WarRoomProps = {
   classId?: string;
   studentDisplayName?: string;
@@ -218,7 +219,7 @@ export default function WarRoom({ classId, studentDisplayName = '同学', onReco
   const [currentSpeaker, setCurrentSpeaker] = useState<WarRoomHat | null>(null);
   const [highlightKey, setHighlightKey] = useState<string | null>(null);
   const [userInput, setUserInput] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(() => Boolean(classId?.trim()));
   const [isDebating, setIsDebating] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [teamRecords, setTeamRecords] = useState<WarRoomTeamRecordSummary[]>([]);
@@ -231,8 +232,15 @@ export default function WarRoom({ classId, studentDisplayName = '同学', onReco
   const [recordsDialogOpen, setRecordsDialogOpen] = useState(false);
   const [savingRecord, setSavingRecord] = useState(false);
   const [canvasFocus, setCanvasFocus] = useState(false);
+  /** 当前帽子视角（用于顶栏高亮；与会话 activeHat 同步） */
+  const [activeHat, setActiveHat] = useState<HatKey>('white');
+  /** AI 等待时展示「某帽正在组织对话」 */
+  const [waitingHat, setWaitingHat] = useState<HatKey | null>(null);
   const chatScrollRef = useRef<HTMLDivElement>(null);
+  const workspaceHatSessionRef = useRef<HatKey>('white');
   const inputRef = useRef<HTMLInputElement>(null);
+  /** 无对话时自动白帽开场，防 Strict Mode 双触发 */
+  const autoStartLockRef = useRef(false);
 
   const scrollChatToBottom = useCallback(() => {
     const el = chatScrollRef.current;
@@ -269,6 +277,11 @@ export default function WarRoom({ classId, studentDisplayName = '同学', onReco
         setMessages(wr.transcript.messages);
       }
       setFilledCount(wr?.filledCount ?? 0);
+      if (wr?.hatSession?.activeHat) {
+        const hat = wr.hatSession.activeHat as HatKey;
+        workspaceHatSessionRef.current = hat;
+        setActiveHat(hat);
+      }
       if (ws.warRoomTeamRecords) setTeamRecords(ws.warRoomTeamRecords);
       if (ws.studentId) setCurrentStudentId(ws.studentId);
     },
@@ -325,31 +338,39 @@ export default function WarRoom({ classId, studentDisplayName = '同学', onReco
   };
 
   const handleStartDebate = async () => {
-    if (!classId?.trim()) {
-      message.warning('缺少班级信息');
-      return;
-    }
-    if (messages.length > 0) {
-      message.info('辩论已开始，请在下方输入或 @ 某一顶帽子');
-      return;
-    }
+    if (!classId?.trim() || disabled) return;
+    if (messages.length > 0) return;
     setIsDebating(true);
+    setWaitingHat('white');
     try {
       const { roundMessages, workspace } = await warRoomDebateStart(classId.trim(), studentDisplayName);
       applyWorkspace(workspace, { syncMessages: false, syncCanvas: false });
+      setWaitingHat(null);
       await playMessagesSequential(roundMessages);
       await refreshWorkspace();
     } catch (e) {
-      message.error(e instanceof Error ? e.message : '开始辩论失败');
+      message.error(e instanceof Error ? e.message : '白帽开场失败');
+      autoStartLockRef.current = false;
     } finally {
+      setWaitingHat(null);
       setIsDebating(false);
     }
   };
 
+  // 无对话记录时自动由白帽开场（去掉「开始辩论」按钮）
+  useEffect(() => {
+    if (!classId?.trim() || disabled || loading) return;
+    if (messages.length > 0) return;
+    if (autoStartLockRef.current || isDebating) return;
+    autoStartLockRef.current = true;
+    void handleStartDebate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [classId, disabled, loading, messages.length]);
+
   const handleSend = async () => {
     if (!classId?.trim() || !userInput.trim() || isDebating || isPlaying) return;
     if (messages.length === 0) {
-      message.warning('请先点击开始辩论');
+      message.warning('请稍候，白帽正在开场');
       return;
     }
     const text = userInput.trim();
@@ -366,83 +387,39 @@ export default function WarRoom({ classId, studentDisplayName = '同学', onReco
     };
     setUserInput('');
     setMessages((prev) => [...prev, optimistic]);
+    // @某帽 优先，避免仍按当前会话帽回复
+    const replyHat = (parseMentionedHat(text) || workspaceHatSessionRef.current || 'white') as HatKey;
     setIsDebating(true);
+    setWaitingHat(replyHat);
     try {
-      const mentioned = parseMentionedHat(text);
-      if (mentioned) {
-        const { message: reply, workspace } = await warRoomDebateReply(
-          classId.trim(),
-          studentDisplayName,
-          text,
-          mentioned
-        );
-        applyWorkspace(workspace, { syncMessages: false, syncCanvas: false });
-        const serverUser = workspace.warRoom?.transcript?.messages?.[prevLen];
-        setMessages((prev) => {
-          const base = prev.filter((m) => m.id !== tempId);
-          if (serverUser?.hat === 'user' && !base.some((m) => m.id === serverUser.id)) {
-            base.push(serverUser);
-          }
-          return base;
-        });
-        await playMessagesSequential([reply]);
-        await refreshWorkspace();
-      } else {
-        const { roundMessages, workspace } = await warRoomDebateRound(
-          classId.trim(),
-          studentDisplayName,
-          text
-        );
-        applyWorkspace(workspace, { syncMessages: false, syncCanvas: false });
-        const serverUser = workspace.warRoom?.transcript?.messages?.[prevLen];
-        setMessages((prev) => {
-          const base = prev.filter((m) => m.id !== tempId);
-          if (serverUser?.hat === 'user' && !base.some((m) => m.id === serverUser.id)) {
-            base.push(serverUser);
-          }
-          return base;
-        });
-        const aiOnly = roundMessages.filter((m) => m.hat !== 'user');
-        await playMessagesSequential(aiOnly);
-        await refreshWorkspace();
+      const res = await warRoomDebateReply(classId.trim(), studentDisplayName, text, replyHat);
+      applyWorkspace(res.workspace, { syncMessages: false, syncCanvas: false });
+      if (res.workspace.warRoom?.hatSession?.activeHat) {
+        workspaceHatSessionRef.current = res.workspace.warRoom.hatSession.activeHat as HatKey;
+        setActiveHat(res.workspace.warRoom.hatSession.activeHat as HatKey);
       }
+      const serverUser = res.workspace.warRoom?.transcript?.messages?.[prevLen];
+      setMessages((prev) => {
+        const base = prev.filter((m) => m.id !== tempId);
+        if (serverUser?.hat === 'user' && !base.some((m) => m.id === serverUser.id)) {
+          base.push(serverUser);
+        }
+        return base;
+      });
+      setWaitingHat(null);
+      const toPlay =
+        res.roundMessages?.filter((m) => m.hat !== 'user') ||
+        (res.message ? [res.message] : []);
+      if (toPlay.length) await playMessagesSequential(toPlay);
+      await refreshWorkspace();
     } catch (e) {
       setMessages((prev) => prev.filter((m) => m.id !== tempId));
       setUserInput(text);
       message.error(e instanceof Error ? e.message : '发送失败');
     } finally {
+      setWaitingHat(null);
       setIsDebating(false);
     }
-  };
-
-  const handleAdopt = async (msg: WarRoomDebateMessage, moduleKey: string) => {
-    if (!classId?.trim() || !moduleKey) return;
-    try {
-      const ws = await adoptWarRoomMessage(classId.trim(), msg.id, moduleKey);
-      applyWorkspace(ws, { syncMessages: false });
-      const updated = ws.warRoom?.transcript?.messages?.find((m) => m.id === msg.id);
-      setMessages((prev) =>
-        prev.map((m) => {
-          if (m.id !== msg.id) return m;
-          if (updated) return updated;
-          const adoptedModules = [...new Set([...(m.adoptedModules || []), moduleKey])];
-          const required =
-            m.fills?.map((f) => f.targetModule) || (m.targetModule ? [m.targetModule] : []);
-          const allAdopted = required.length > 0 && required.every((k) => adoptedModules.includes(k));
-          return { ...m, adoptedModules, status: allAdopted ? ('adopted' as const) : m.status };
-        })
-      );
-      highlightModule(moduleKey);
-      message.success('已采纳并更新画布');
-    } catch (e) {
-      message.error(e instanceof Error ? e.message : '采纳失败');
-    }
-  };
-
-  const handleIgnore = (messageId: string) => {
-    setMessages((prev) =>
-      prev.map((m) => (m.id === messageId ? { ...m, status: 'ignored' as const } : m))
-    );
   };
 
   const handleCanvasBlur = async (moduleKey: string, content: string) => {
@@ -455,14 +432,30 @@ export default function WarRoom({ classId, studentDisplayName = '同学', onReco
     }
   };
 
-  const insertMention = (label: string) => {
-    setUserInput((prev) => {
-      const hadLabel = prev.includes(label);
-      const base = stripHatMentions(prev);
-      if (hadLabel) return base ? `${base} ` : '';
-      return base ? `${base} ${label} ` : `${label} `;
-    });
-    inputRef.current?.focus();
+  /**
+   * 切换帽子视角。
+   * forceMention：点击底部 @某帽 时强制写入该 @；顶栏切换仅在已有 @ 时同步替换。
+   */
+  const handleSwitchHat = async (hat: HatKey, opts?: { forceMention?: boolean }) => {
+    if (!classId?.trim() || disabled || isDebating || isPlaying || messages.length === 0) return;
+    const mentionLabel = HAT_MENTION_LABELS.find((x) => x.hat === hat)?.label || `@${hatConfig[hat].hatLabel}`;
+    try {
+      const { workspace } = await warRoomSwitchHat(classId.trim(), hat);
+      applyWorkspace(workspace, { syncMessages: false });
+      workspaceHatSessionRef.current = hat;
+      setActiveHat(hat);
+      setUserInput((prev) => {
+        if (opts?.forceMention) {
+          const base = stripHatMentions(prev);
+          return base ? `${mentionLabel} ${base}` : `${mentionLabel} `;
+        }
+        return syncHatMentionInText(prev, mentionLabel);
+      });
+      if (opts?.forceMention) inputRef.current?.focus();
+      message.info(`已切换到${hatConfig[hat].hatLabel}视角`);
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '切换失败');
+    }
   };
 
   const handleSaveRecord = async () => {
@@ -508,7 +501,10 @@ export default function WarRoom({ classId, studentDisplayName = '同学', onReco
     return name.length > 4 ? `${name.slice(0, 4)}…` : name;
   };
   const debateStarted = messages.length > 0;
-  const waitingAi = isDebating && !isPlaying && debateStarted;
+  const waitingAi = Boolean(waitingHat) && isDebating && !isPlaying;
+  const waitingHint = waitingHat
+    ? `${hatConfig[waitingHat].hatLabel}正在组织对话…`
+    : '思考中…';
   const canSaveCanvas = filledCount >= WAR_ROOM_MODULE_DEFS.length && !savingRecord;
 
   const renderMessageMeta = (msg: WarRoomDebateMessage) => {
@@ -516,7 +512,11 @@ export default function WarRoom({ classId, studentDisplayName = '同学', onReco
       return { ...hatConfig.user, displayName: studentDisplayName };
     }
     const cfg = hatConfig[msg.hat as HatKey];
-    return { ...cfg, displayName: cfg?.name || msg.hat };
+    // 只展示「白帽 · 职责」，避免 name 与气泡正文标题重复
+    return {
+      ...cfg,
+      displayName: cfg ? `${cfg.hatLabel} · ${cfg.role}` : msg.hat,
+    };
   };
 
   const renderRecordCanvasGrid = (recordCanvas: WarRoomCanvas) => (
@@ -543,68 +543,65 @@ export default function WarRoom({ classId, studentDisplayName = '同学', onReco
       className={
         canvasFocus
           ? 'fixed inset-0 z-[200] flex bg-gray-100'
-          : 'h-[min(72vh,680px)] min-h-[480px] flex bg-gray-50 rounded-xl border border-gray-100 overflow-hidden'
+          : 'h-[calc(100dvh-11rem)] min-h-[420px] max-h-[900px] flex bg-gray-50 rounded-xl border border-gray-100 overflow-hidden'
       }
     >
       <div
-        className={`bg-white border-r border-gray-200 flex flex-col min-h-0 shrink-0 ${
-          canvasFocus ? 'w-[min(400px,36vw)] max-w-[440px]' : 'w-[42%] min-w-[320px]'
-        }`}
+        className="bg-white flex flex-col min-h-0 flex-1 w-full"
       >
-        <div className="p-4 border-b border-gray-200 bg-gradient-to-r from-gray-50 to-white shrink-0">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="text-lg font-bold text-gray-900">虚拟董事会</h3>
-            <button
-              type="button"
-              onClick={handleStartDebate}
-              disabled={isDebating || isPlaying || debateStarted || loading}
-              className={`px-4 py-2 text-sm font-medium rounded-lg whitespace-nowrap transition-all ${
-                isDebating || isPlaying || debateStarted || loading
-                  ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
-                  : 'bg-gradient-to-r from-teal-500 to-emerald-500 text-white hover:shadow-lg cursor-pointer'
-              }`}
-            >
-              {isDebating ? (
-                <>
-                  <i className="ri-loader-4-line animate-spin mr-2"></i>
-                  生成中…
-                </>
-              ) : (
-                <>
-                  <i className="ri-play-line mr-2"></i>
-                  开始辩论
-                </>
-              )}
-            </button>
-          </div>
-          <div className="flex items-start justify-between gap-0.5">
-            {HAT_HEADER_ORDER.map((hat) => {
-              const cfg = hatConfig[hat];
-              const active = currentSpeaker === hat;
-              return (
-                <button
-                  key={hat}
-                  type="button"
-                  title={cfg.name}
-                  onClick={() => insertMention(HAT_MENTION_LABELS.find((x) => x.hat === hat)?.label || `@${hat}`)}
-                  className={`relative flex flex-col items-center gap-0.5 min-w-0 flex-1 transition-all duration-300 cursor-pointer ${
-                    active ? 'scale-105 z-10' : 'opacity-90 hover:opacity-100'
-                  }`}
-                >
-                  <img
-                    src={cfg.avatar}
-                    alt={cfg.hatLabel}
-                    className={`w-11 h-11 rounded-full object-cover border-2 ${
-                      active ? cfg.avatarBorderActive : cfg.avatarBorder
-                    } ${active ? cfg.ringGlow : ''}`}
-                  />
-                  <span className={`text-[10px] font-bold leading-none ${cfg.labelColor}`}>{cfg.hatLabel}</span>
-                  <span className="text-[9px] text-gray-500 leading-tight text-center w-full truncate px-0.5">
-                    {cfg.role}
-                  </span>
-                </button>
-              );
-            })}
+        <div className="px-3 py-2 border-b border-gray-200 bg-gradient-to-r from-gray-50 to-white shrink-0">
+          <div className="grid grid-cols-[auto_1fr] items-start gap-3 min-w-0">
+            <h3 className="text-base font-bold text-gray-900 shrink-0 pt-1">虚拟董事会</h3>
+            <div className="flex items-start justify-center gap-3 min-w-0 overflow-x-auto py-1">
+              {HAT_HEADER_ORDER.map((hat) => {
+                const cfg = hatConfig[hat];
+                const speaking = currentSpeaker === hat;
+                const isActive = activeHat === hat || speaking;
+                return (
+                  <div key={hat} className="relative shrink-0 flex flex-col items-center gap-0.5 min-w-[2.75rem]">
+                    {/* 头像右上角叹号：角色职能介绍 */}
+                    <Popover
+                      trigger="click"
+                      placement="bottom"
+                      title={`${cfg.hatLabel} · ${cfg.role}`}
+                      content={<p className="max-w-xs text-xs text-gray-700 leading-relaxed m-0">{cfg.detail}</p>}
+                    >
+                      <button
+                        type="button"
+                        className="absolute -top-1 -right-1 z-10 w-3.5 h-3.5 rounded-full bg-sky-500 text-white text-[9px] font-bold leading-none flex items-center justify-center shadow-sm hover:bg-sky-600 cursor-pointer"
+                        aria-label={`${cfg.hatLabel}职能介绍`}
+                        title="查看职能介绍"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        !
+                      </button>
+                    </Popover>
+                    <button
+                      type="button"
+                      title={`${cfg.name}（点击切换视角）`}
+                      disabled={disabled || isDebating || isPlaying || messages.length === 0}
+                      onClick={() => void handleSwitchHat(hat)}
+                      className="relative flex flex-col items-center gap-0.5 transition-opacity cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed hover:opacity-100 opacity-90"
+                    >
+                      <img
+                        src={cfg.avatar}
+                        alt={cfg.hatLabel}
+                        className={`w-7 h-7 rounded-full object-cover border-2 ${cfg.avatarBorder}`}
+                      />
+                      <span className={`relative inline-block text-[10px] font-bold leading-none ${cfg.labelColor}`}>
+                        {cfg.hatLabel}
+                        {isActive ? (
+                          <span
+                            className="absolute -top-1 -right-1.5 w-1.5 h-1.5 rounded-full bg-emerald-500 ring-1 ring-white"
+                            aria-hidden
+                          />
+                        ) : null}
+                      </span>
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
 
@@ -614,16 +611,19 @@ export default function WarRoom({ classId, studentDisplayName = '同学', onReco
           ) : messages.length === 0 ? (
             <div className="text-center py-10">
               <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-3">
-                <i className="ri-chat-3-line text-2xl text-gray-400"></i>
+                {waitingAi ? (
+                  <i className="ri-loader-4-line text-2xl text-teal-500 animate-spin"></i>
+                ) : (
+                  <i className="ri-chat-3-line text-2xl text-gray-400"></i>
+                )}
               </div>
-              <p className="text-sm text-gray-500">点击「开始辩论」，六顶帽子将围绕商业模式展开讨论</p>
+              <p className="text-sm text-gray-500">
+                {waitingAi ? waitingHint : '白帽即将开场，按白→绿→黄→黑→红→蓝依次苏格拉底追问'}
+              </p>
             </div>
           ) : (
             messages.map((msg) => {
               const meta = renderMessageMeta(msg);
-              const adoptableFills = getAdoptableFills(msg);
-              const partialAdopted =
-                (msg.adoptedModules?.length ?? 0) > 0 && msg.status !== 'adopted' && msg.status !== 'ignored';
               return (
                 <div key={msg.id} className="flex items-start gap-2">
                   {msg.hat === 'user' ? (
@@ -647,65 +647,33 @@ export default function WarRoom({ classId, studentDisplayName = '同学', onReco
                       </span>
                     </div>
                     <div
-                      className={`${meta.color} ${meta.textColor} px-3 py-2 rounded-xl text-sm leading-relaxed`}
+                      className={`${meta.color} ${meta.textColor} px-3 py-2 rounded-xl text-sm leading-relaxed whitespace-pre-wrap`}
                     >
                       {msg.content}
                     </div>
-                    {adoptableFills.length > 0 && (
-                      <div className="flex flex-wrap items-center gap-2 mt-1.5">
-                        {adoptableFills.map((fill) => (
-                          <button
-                            key={fill.targetModule}
-                            type="button"
-                            onClick={() => handleAdopt(msg, fill.targetModule)}
-                            className="px-2.5 py-1 bg-green-100 text-green-700 text-xs font-medium rounded-lg hover:bg-green-200 cursor-pointer"
-                          >
-                            <i className="ri-check-line mr-1"></i>
-                            采纳·{moduleTitle(fill.targetModule)}
-                          </button>
-                        ))}
-                        <button
-                          type="button"
-                          onClick={() => handleIgnore(msg.id)}
-                          className="px-2.5 py-1 bg-gray-100 text-gray-600 text-xs font-medium rounded-lg hover:bg-gray-200 cursor-pointer"
-                        >
-                          忽略
-                        </button>
-                      </div>
-                    )}
-                    {partialAdopted && (
-                      <p className="mt-1 text-xs text-teal-600">部分格子已采纳，可继续采纳其余建议</p>
-                    )}
-                    {msg.status === 'adopted' && (
-                      <p className="mt-1 text-xs text-green-600">
-                        <i className="ri-check-double-line mr-1"></i>
-                        已采纳
-                      </p>
-                    )}
-                    {msg.status === 'ignored' && (
-                      <p className="mt-1 text-xs text-gray-400">已忽略</p>
-                    )}
                   </div>
                 </div>
               );
             })
           )}
-          {waitingAi ? (
-            <div className="flex items-center gap-2 text-sm text-gray-500 py-1">
+          {waitingAi && messages.length > 0 ? (
+            <div className="flex items-center gap-2 text-sm text-teal-600 py-1">
               <i className="ri-loader-4-line animate-spin"></i>
-              思考中…
+              <span>{waitingHint}</span>
+              <span className="tracking-widest text-gray-400">...</span>
             </div>
           ) : null}
         </div>
 
         <div className="p-3 border-t border-gray-200 bg-white shrink-0">
           <div className="flex flex-wrap gap-1 mb-2">
-            {HAT_MENTION_LABELS.map(({ label }) => (
+            {HAT_MENTION_LABELS.map(({ hat, label }) => (
               <button
                 key={label}
                 type="button"
-                onClick={() => insertMention(label)}
-                className="px-2 py-0.5 text-xs rounded-md bg-gray-100 text-gray-600 hover:bg-teal-50 hover:text-teal-700 cursor-pointer"
+                disabled={disabled || isDebating || isPlaying || messages.length === 0}
+                onClick={() => void handleSwitchHat(hat, { forceMention: true })}
+                className="px-2 py-0.5 text-xs rounded-md bg-gray-100 text-gray-600 hover:bg-teal-50 hover:text-teal-700 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 {label}
               </button>
@@ -719,7 +687,9 @@ export default function WarRoom({ classId, studentDisplayName = '同学', onReco
               onChange={(e) => setUserInput(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleSend()}
               disabled={!debateStarted || isDebating || isPlaying}
-              placeholder={debateStarted ? `@帽子或发表观点，未 @ 时将开启新一轮讨论` : '请先开始辩论'}
+              placeholder={
+                debateStarted ? '针对当前帽子视角作答；或 @某帽 只问该帽…' : '白帽开场中，请稍候…'
+              }
               className="flex-1 px-3 py-2.5 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 disabled:bg-gray-50"
             />
             <button
@@ -734,7 +704,7 @@ export default function WarRoom({ classId, studentDisplayName = '同学', onReco
         </div>
       </div>
 
-      <div className="flex-1 min-w-0 flex flex-col min-h-0 bg-gray-50">
+      <div className="hidden flex-1 min-w-0 flex-col min-h-0 bg-gray-50" aria-hidden="true">
         <div className="px-4 py-3 border-b border-gray-200 bg-white shrink-0 flex items-center justify-between gap-2">
           <div className="min-w-0">
             <h3 className="text-sm font-bold text-gray-900">商业模式画布</h3>
@@ -830,9 +800,8 @@ export default function WarRoom({ classId, studentDisplayName = '同学', onReco
           </div>
           {!canvasFocus ? (
             <div className="mt-4 max-w-6xl mx-auto bg-teal-50 border border-teal-200 rounded-xl p-4 text-sm text-teal-800 space-y-1">
-              <p>• 点击「开始辩论」后，将按白帽 → 四帽随机 → 蓝帽顺序讨论</p>
-              <p>• 提及某模块时右侧格子会高亮；可采纳建议替换该格内容</p>
-              <p>• @ 某一顶帽子单独回复；未 @ 时发送将开启新一轮六帽讨论</p>
+              <p>• 进入后由白帽自动开场，按白 → 绿 → 黄 → 黑 → 红 → 蓝顺序苏格拉底追问</p>
+              <p>• @ 某一顶帽子仅该帽回复；未 @ 时按当前视角作答</p>
             </div>
           ) : null}
         </div>

@@ -5,6 +5,10 @@
 
 import { JSON_OUTPUT_HARD_RULES } from './llmJsonOutputRules.js';
 
+/** 开场欢迎语：本地固定文案，禁止为开场调 LLM */
+export const MIDWIFERY_WELCOME_TEXT =
+  '你好！我是启思智能体。很高兴能陪你一起打磨创业想法。\n\n在开始深入探讨之前，我想先听听你目前的构想。请用自己的话简单描述一下：你想解决什么具体问题？或者你的创业想法雏形是什么？';
+
 /**
  * 从对话历史解析「正式追问」最高轮次，以及学生是否已在第 3 轮提问后作答
  * （避免模型把 roundIndex 标错导致 canGenerate 永远不解锁）

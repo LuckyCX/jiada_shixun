@@ -17,6 +17,7 @@ import {
   pickTopicMappedFields,
 } from '../lib/ideationPrompts.js';
 import {
+  MIDWIFERY_WELCOME_TEXT,
   getMidwiferyGeneratePrompt,
   getMidwiferyTurnPrompt,
   resolveMidwiferyCanGenerate,
@@ -24,16 +25,30 @@ import {
 import {
   HAT_STUDIO_DRAFT_KEYS,
   HAT_STUDIO_DRAFT_LABELS,
-  HAT_STUDIO_ROUND_SYSTEM_PROMPT,
+  HAT_STUDIO_ASK_SYSTEM_PROMPT,
   HAT_STUDIO_SINGLE_REPLY_SYSTEM_PROMPT,
-  buildHatStudioRoundOrder,
-  buildHatStudioRoundUserPrompt,
+  buildHatStudioAskUserPrompt,
   buildHatStudioSingleReplyUserPrompt,
-  parseHatStudioRoundFromLlmText,
+  parseHatStudioAskFromLlmText,
   parseHatStudioSingleReplyFromLlmText,
   parseMentionedHatFromText,
 } from '../lib/ideationHatStudioPrompts.js';
+import {
+  afterHatStudentAnswer,
+  coerceHatSession,
+  completeHatAfterAnswer,
+  defaultHatSession,
+  markAwaitingAnswer,
+  nextIncompleteHat,
+  switchHatPerspective,
+} from '../lib/sixHatsSession.js';
+import { assembleBusinessModelAiBundle } from '../lib/businessModelContext.js';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { evaluateModulePrerequisiteForStudent } from '../lib/trainingModulePrerequisite.js';
+
+const __dirnameIdeation = path.dirname(fileURLToPath(import.meta.url));
+const HAT_STUDIO_UPLOAD_ROOT = path.join(__dirnameIdeation, '../../uploads');
 
 /** 对话方法可写入创意库的 methodKey（含历史只读键，analyze 仍可入库） */
 const CHAT_GENERATE_METHODS = new Set(['brainstorm', 'ai', 'midwifery', 'six_hats', 'scamper', 'triz']);
@@ -1050,12 +1065,24 @@ router.post(
       const team = await getConfirmedTeam(pool, sid, classId);
       if (!team) return bad(req, res, 400, 40014, '教师确认组队后可使用启思智能体');
 
+      const hasUserMessage = messages.some((m) => m.role === 'user' && String(m.content || '').trim());
+
+      // 无学生发言 = 开场欢迎：固定文案，不调 LLM
+      if (!hasUserMessage) {
+        return ok(req, res, {
+          assistantText: MIDWIFERY_WELCOME_TEXT,
+          roundIndex: 0,
+          canGenerate: false,
+          doneHint: '',
+        });
+      }
+
       const provider = await getEnabledProvider('multimodal');
       if (!provider) return bad(req, res, 400, 40011, '未配置已启用的多模态模型');
 
       const userPrompt = `当前已知轮次（学生侧）：${roundIndex}
 对话历史（JSON）：
-${JSON.stringify(messages.length ? messages : [{ role: 'system', content: '（新会话，请发起第 1 轮提问）' }], null, 2)}
+${JSON.stringify(messages, null, 2)}
 
 请输出本轮启思智能体回复 JSON。`;
 
@@ -1065,18 +1092,13 @@ ${JSON.stringify(messages.length ? messages : [{ role: 'system', content: '（�
         user: userPrompt,
       });
 
-      // 开场/确认想法阶段允许 roundIndex=0；正式追问从 1 起
+      // 正式追问从 1 起；模型未给 roundIndex 时按客户端轮次推进
       const parsedRound = Number(parsed.roundIndex);
       const nextRound = Number.isFinite(parsedRound)
         ? Math.max(0, Math.floor(parsedRound))
-        : messages.some((m) => m.role === 'user')
-          ? Math.max(1, roundIndex + 1)
-          : 0;
+        : Math.max(1, roundIndex + 1);
       const assistantText =
-        String(parsed.assistantText || '').trim() ||
-        (nextRound === 0
-          ? '你好！我是启思智能体。先用自己的话聊聊：你想解决什么问题、给谁用？想清楚一点后我们再深入追问。'
-          : '请继续补充你的想法。');
+        String(parsed.assistantText || '').trim() || '请继续补充你的想法。';
       // 解锁：客户端轮次 / 对话里「第3轮」已答 / 模型 JSON / 正文引导生成（防轮次标错导致无按钮）
       const canGenerate = resolveMidwiferyCanGenerate({
         messages,
@@ -1259,12 +1281,12 @@ router.post('/student/personal-classes/:classId/ideation/discussions', requireAu
 /* ========== 六帽创想室 ========== */
 
 const HAT_STUDIO_UPDATED_BY = {
-  white: '白帽 - 数据分析师',
-  red: '红帽 - 用户代表',
-  black: '黑帽 - 风险预警员',
-  yellow: '黄帽 - 乐观倡导者',
-  green: '绿帽 - 创意设计师',
-  blue: '蓝帽 - 项目经理',
+  white: '白帽 - 客观事实｜补信息',
+  green: '绿帽 - 发散创新｜找创新',
+  yellow: '黄帽 - 正向价值｜判价值',
+  black: '黑帽 - 风险批判｜查风险',
+  red: '红帽 - 用户共情｜贴需求',
+  blue: '蓝帽 - 全局系统｜做统筹',
 };
 
 function defaultHatStudioDraft() {
@@ -1300,7 +1322,7 @@ function coerceHatStudioFills(arr) {
 }
 
 function coerceHatStudioTranscript(j) {
-  const empty = { messages: [], roundCount: 0 };
+  const empty = { messages: [], roundCount: 0, hatSession: defaultHatSession() };
   if (!j || typeof j !== 'object') return empty;
   const messages = Array.isArray(j.messages)
     ? j.messages.map((m) => ({
@@ -1314,12 +1336,18 @@ function coerceHatStudioTranscript(j) {
           ? m.adoptedModules.filter((x) => HAT_STUDIO_DRAFT_KEYS.includes(x))
           : [],
         status:
-          m.status === 'adopted' || m.status === 'ignored' || m.status === 'guide' ? m.status : undefined,
+          m.status === 'adopted' || m.status === 'ignored' || m.status === 'guide' || m.status === 'ask'
+            ? m.status
+            : undefined,
         roundIndex: Number(m.roundIndex || 0),
         createdAt: String(m.createdAt || new Date().toISOString()),
       }))
     : [];
-  return { messages, roundCount: Number(j.roundCount || 0) };
+  return {
+    messages,
+    roundCount: Number(j.roundCount || 0),
+    hatSession: coerceHatSession(j.hatSession),
+  };
 }
 
 function mapHatStudioMessage(m) {
@@ -1391,7 +1419,10 @@ async function loadHatStudioMember(pool, teamId, studentId) {
     [teamId, studentId]
   );
   if (!rows.length) {
-    return { draft: defaultHatStudioDraft(), transcript: { messages: [], roundCount: 0 } };
+    return {
+      draft: defaultHatStudioDraft(),
+      transcript: { messages: [], roundCount: 0, hatSession: defaultHatSession() },
+    };
   }
   return {
     draft: coerceHatStudioDraft(rows[0].draft_json),
@@ -1414,15 +1445,60 @@ async function upsertHatStudioMember(pool, teamId, studentId, draft, transcript)
 
 function buildHatStudioApiPayload(draft, transcript) {
   const filledCount = HAT_STUDIO_DRAFT_KEYS.filter((k) => String(draft[k]?.content || '').trim()).length;
+  const hatSession = coerceHatSession(transcript.hatSession);
   return {
     draft,
     draftDefs: HAT_STUDIO_DRAFT_KEYS.map((key) => ({ key, label: HAT_STUDIO_DRAFT_LABELS[key] })),
     transcript: {
       messages: transcript.messages.map(mapHatStudioMessage),
       roundCount: transcript.roundCount,
+      hatSession,
     },
+    hatSession,
     filledCount,
   };
+}
+
+/** 为指定帽子生成最多 3 个苏格拉底追问并写入 transcript */
+async function generateHatStudioAsk(provider, ctx, state, transcript, activeHat, studentDisplayName) {
+  const contextText = await loadHatStudioContextText(ctx.pool, ctx.teamId);
+  let priorStageText = '';
+  try {
+    priorStageText = await assembleBusinessModelAiBundle(ctx.pool, ctx.teamId, HAT_STUDIO_UPLOAD_ROOT);
+  } catch {
+    priorStageText = '';
+  }
+  const user = buildHatStudioAskUserPrompt({
+    contextText,
+    priorStageText,
+    transcriptMessages: transcript.messages,
+    activeHat,
+    studentDisplayName,
+    draftSnapshot: state.draft,
+  });
+  const raw = await runHatStudioJsonLlm(provider, HAT_STUDIO_ASK_SYSTEM_PROMPT, user, {
+    extraBody: buildNoThinkingExtraBody(provider),
+  });
+  const norm = parseHatStudioAskFromLlmText(raw, activeHat);
+  if (norm.error) return { error: norm.error };
+  const msg = {
+    id: randomUUID(),
+    hat: norm.message.hat,
+    content: norm.message.content,
+    targetModule: null,
+    moduleContent: '',
+    adoptedModules: [],
+    status: 'ask',
+    roundIndex: transcript.roundCount,
+    createdAt: new Date().toISOString(),
+  };
+  const next = {
+    ...transcript,
+    messages: [...transcript.messages, msg],
+    roundCount: transcript.roundCount + 1,
+    hatSession: markAwaitingAnswer(transcript.hatSession, activeHat),
+  };
+  return { transcript: next, message: msg };
 }
 
 async function requireHatStudioTeam(req, res) {
@@ -1443,6 +1519,34 @@ async function requireHatStudioTeam(req, res) {
     return null;
   }
   return { pool, sid, classId, teamId: Number(team.id) };
+}
+
+/** 六帽创想室对话写入驾驶舱 AI 交互日志 */
+async function logHatStudioTurn(ctx, userMessage, transcript, transcriptStartLen, activeHat) {
+  try {
+    const { insertChatTurnLogs } = await import('../lib/teamAiInteractionLog.js');
+    const assistantContent = (transcript.messages || [])
+      .slice(transcriptStartLen)
+      .filter((m) => m && m.hat !== 'user')
+      .map((m) => String(m.content || '').trim())
+      .filter(Boolean)
+      .join('\n')
+      .slice(0, 2000);
+    await insertChatTurnLogs({
+      classId: ctx.classId,
+      teamId: ctx.teamId,
+      studentId: ctx.sid,
+      moduleKey: 'ideation',
+      scene: 'hat_studio_turn',
+      threadId: `hat-studio-${ctx.teamId}-${ctx.sid}`,
+      roundIndex: Math.max(0, Number(transcript.roundCount) || 0),
+      userContent: userMessage,
+      assistantContent,
+      meta: { activeHat: activeHat || transcript.hatSession?.activeHat || null },
+    });
+  } catch (logErr) {
+    logError('hat-studio turn interaction log', logErr);
+  }
 }
 
 function normalizeHatStudioHat(h) {
@@ -1469,7 +1573,7 @@ function buildHatStudioGuideMessage(studentDisplayName) {
   return {
     id: randomUUID(),
     hat: 'blue',
-    content: `${name}，欢迎进入六帽创想室。请先在下方用几句话描述你的创业创意：想解决什么问题、给谁用、大致怎么做。点击「发送发言」后，六顶思考帽会基于你的内容展开引导式讨论；之后也可 @白帽/@红帽/@黑帽/@黄帽/@绿帽/@蓝帽 追问某一角色，或不 @ 继续多轮讨论。讨论中出现的要点可点「采纳/写入」到右侧创意工作区。`,
+    content: `${name}，欢迎进入六帽创想室。请先描述你的创业创意（想解决什么问题、给谁用、大致怎么做）。发送后将按「白→绿→黄→黑→红→蓝」顺序，每顶帽子提出最多 3 个苏格拉底式追问，并可进行最多 3 轮对话后再进入下一帽；你也可随时 @某帽 专项深挖。核心原则：提问不代改。讨论要点可写入右侧创意工作区。`,
     targetModule: null,
     moduleContent: '',
     adoptedModules: [],
@@ -1491,10 +1595,13 @@ router.post(
       if (state.transcript.messages.length > 0) {
         return bad(req, res, 400, 40021, '讨论已开始，请在下方继续发言或点击「清空重开」');
       }
-      // 开始讨论：不立刻调模型，先插入引导语，等学生描述创意后再进入六帽引导
       const studentDisplayName = String(req.body?.studentDisplayName || '同学').trim() || '同学';
       const guide = buildHatStudioGuideMessage(studentDisplayName);
-      const transcript = { messages: [guide], roundCount: 0 };
+      const transcript = {
+        messages: [guide],
+        roundCount: 0,
+        hatSession: defaultHatSession(),
+      };
       await upsertHatStudioMember(ctx.pool, ctx.teamId, ctx.sid, state.draft, transcript);
       return ok(req, res, {
         roundMessages: [mapHatStudioMessage(guide)],
@@ -1508,7 +1615,6 @@ router.post(
   }
 );
 
-/** 清空本轮讨论记录并重新插入引导语，便于重新开始 */
 router.post(
   '/student/personal-classes/:classId/ideation/hat-studio/reset',
   requireAuth(),
@@ -1521,7 +1627,11 @@ router.post(
       const studentDisplayName = String(req.body?.studentDisplayName || '同学').trim() || '同学';
       const clearDraft = req.body?.clearDraft === true;
       const guide = buildHatStudioGuideMessage(studentDisplayName);
-      const transcript = { messages: [guide], roundCount: 0 };
+      const transcript = {
+        messages: [guide],
+        roundCount: 0,
+        hatSession: defaultHatSession(),
+      };
       const nextDraft = clearDraft ? defaultHatStudioDraft() : state.draft;
       await upsertHatStudioMember(ctx.pool, ctx.teamId, ctx.sid, nextDraft, transcript);
       return ok(req, res, {
@@ -1536,8 +1646,41 @@ router.post(
   }
 );
 
+/** 切换帽子视角 */
 router.post(
-  '/student/personal-classes/:classId/ideation/hat-studio/debate/round',
+  '/student/personal-classes/:classId/ideation/hat-studio/debate/switch-hat',
+  requireAuth(),
+  requireStudent(),
+  async (req, res) => {
+    try {
+      const ctx = await requireHatStudioTeam(req, res);
+      if (!ctx) return;
+      const hat = normalizeHatStudioHat(req.body?.hat);
+      if (!hat) return bad(req, res, 400, 40004, '请选择有效的帽子视角');
+      const state = await loadHatStudioMember(ctx.pool, ctx.teamId, ctx.sid);
+      if (!state.transcript.messages.length) {
+        return bad(req, res, 400, 40023, '请先点击开始讨论');
+      }
+      const switched = switchHatPerspective(state.transcript.hatSession, hat);
+      if (switched.error) return bad(req, res, 400, 40004, switched.error);
+      const transcript = { ...state.transcript, hatSession: switched.session };
+      await upsertHatStudioMember(ctx.pool, ctx.teamId, ctx.sid, state.draft, transcript);
+      return ok(req, res, { studio: buildHatStudioApiPayload(state.draft, transcript) });
+    } catch (e) {
+      logError(`POST hat-studio switch-hat traceId=${req.traceId}`, e);
+      return bad(req, res, 500, 50000, e.message);
+    }
+  }
+);
+
+/**
+ * 统一发言入口：带 activeHat。
+ * - 顺序轮询且 awaitingAnswer：学生作答 → 标记完成 → 自动下一帽追问
+ * - 否则：当前帽自由追问回复；若顺序未完成且存在 resumeHat，答完后切回
+ * - 首次创意陈述（尚无 ask）：由白帽发起追问
+ */
+router.post(
+  '/student/personal-classes/:classId/ideation/hat-studio/debate/reply',
   requireAuth(),
   requireStudent(),
   async (req, res) => {
@@ -1545,16 +1688,24 @@ router.post(
       const ctx = await requireHatStudioTeam(req, res);
       if (!ctx) return;
       const userMessage = String(req.body?.userMessage ?? '').trim();
-      if (parseMentionedHatFromText(userMessage)) {
-        return bad(req, res, 400, 40022, '已 @ 某顶帽子，请使用单帽回复接口');
-      }
-      if (!userMessage) return bad(req, res, 400, 40004, '请先描述你的创意或继续发言');
+      if (!userMessage) return bad(req, res, 400, 40004, '请输入发言内容');
+      let activeHat =
+        normalizeHatStudioHat(req.body?.activeHat) ||
+        normalizeHatStudioHat(req.body?.hat) ||
+        parseMentionedHatFromText(userMessage);
+
       const state = await loadHatStudioMember(ctx.pool, ctx.teamId, ctx.sid);
       if (!state.transcript.messages.length) {
         return bad(req, res, 400, 40023, '请先点击开始讨论');
       }
 
-      let transcript = { ...state.transcript, messages: [...state.transcript.messages] };
+      let transcript = {
+        ...state.transcript,
+        messages: [...state.transcript.messages],
+        hatSession: coerceHatSession(state.transcript.hatSession),
+      };
+      if (!activeHat) activeHat = transcript.hatSession.activeHat || 'white';
+
       const transcriptStartLen = transcript.messages.length;
       transcript.messages.push({
         id: randomUUID(),
@@ -1570,88 +1721,127 @@ router.post(
       const provider = await getEnabledProvider('multimodal');
       if (!provider) return bad(req, res, 400, 40011, '未配置已启用的多模态模型');
 
-      const contextText = await loadHatStudioContextText(ctx.pool, ctx.teamId);
       const studentDisplayName = String(req.body?.studentDisplayName || '同学').trim() || '同学';
-      const roundIndex = transcript.roundCount;
-      const hatOrder = buildHatStudioRoundOrder();
-      // 完整 transcript（含引导语 + 历史 + 本轮学生发言）传入模型，保证多轮不丢上下文
-      const user = buildHatStudioRoundUserPrompt({
-        contextText,
-        transcriptMessages: transcript.messages,
-        roundIndex,
-        hatOrder,
-        studentDisplayName,
-        draftSnapshot: state.draft,
-      });
-      const raw = await runHatStudioJsonLlm(provider, HAT_STUDIO_ROUND_SYSTEM_PROMPT, user, {
-        extraBody: buildNoThinkingExtraBody(provider),
-      });
-      const norm = parseHatStudioRoundFromLlmText(raw, hatOrder);
-      if (norm.error) return bad(req, res, 400, 40016, norm.error);
+      const session = transcript.hatSession;
+      const hasAsk = transcript.messages.some((m) => m.status === 'ask' || (m.hat !== 'user' && m.hat !== 'blue' && m.status !== 'guide'));
+      const onlyGuide = transcript.messages.every((m) => m.hat === 'user' || m.status === 'guide');
 
-      transcript = appendHatStudioRound(transcript, norm.messages, roundIndex);
-      await upsertHatStudioMember(ctx.pool, ctx.teamId, ctx.sid, state.draft, transcript);
-      const roundMessages = transcript.messages.slice(transcriptStartLen).map(mapHatStudioMessage);
-      return ok(req, res, {
-        roundMessages,
-        studio: buildHatStudioApiPayload(state.draft, transcript),
-      });
-    } catch (e) {
-      logError(`POST hat-studio debate/round traceId=${req.traceId}`, e);
-      return bad(req, res, 500, 50000, friendlyLlmErrorMessage(e));
-    }
-  }
-);
-
-router.post(
-  '/student/personal-classes/:classId/ideation/hat-studio/debate/reply',
-  requireAuth(),
-  requireStudent(),
-  async (req, res) => {
-    try {
-      const ctx = await requireHatStudioTeam(req, res);
-      if (!ctx) return;
-      const userMessage = String(req.body?.userMessage ?? '').trim();
-      if (!userMessage) return bad(req, res, 400, 40004, '请输入发言内容');
-      let mentionedHat = normalizeHatStudioHat(req.body?.hat);
-      if (!mentionedHat) mentionedHat = parseMentionedHatFromText(userMessage);
-      if (!mentionedHat) return bad(req, res, 400, 40024, '请 @ 某一顶帽子后再发言');
-
-      const state = await loadHatStudioMember(ctx.pool, ctx.teamId, ctx.sid);
-      if (!state.transcript.messages.length) {
-        return bad(req, res, 400, 40023, '请先点击开始讨论');
+      // 首次描述创意：白帽发起追问
+      if (onlyGuide || (!session.awaitingAnswer && !session.completedHats.length && !hasAsk)) {
+        const ask = await generateHatStudioAsk(provider, ctx, state, transcript, 'white', studentDisplayName);
+        if (ask.error) return bad(req, res, 400, 40016, ask.error);
+        transcript = ask.transcript;
+        await upsertHatStudioMember(ctx.pool, ctx.teamId, ctx.sid, state.draft, transcript);
+        await logHatStudioTurn(ctx, userMessage, transcript, transcriptStartLen, 'white');
+        return ok(req, res, {
+          roundMessages: transcript.messages.slice(transcriptStartLen).map(mapHatStudioMessage),
+          message: mapHatStudioMessage(ask.message),
+          studio: buildHatStudioApiPayload(state.draft, transcript),
+        });
       }
 
-      let transcript = { ...state.transcript, messages: [...state.transcript.messages] };
-      transcript.messages.push({
-        id: randomUUID(),
-        hat: 'user',
-        content: userMessage,
-        targetModule: null,
-        moduleContent: '',
-        adoptedModules: [],
-        roundIndex: transcript.roundCount,
-        createdAt: new Date().toISOString(),
-      });
+      // 顺序轮询：学生回答当前帽追问 → 未满 3 轮续问本帽；满 3 轮再下一帽
+      if (session.mode === 'sequential' && !session.sequentialDone && session.awaitingAnswer) {
+        const answeredHat = session.activeHat;
+        const progressed = afterHatStudentAnswer(session, answeredHat);
+        transcript.hatSession = progressed.session;
 
-      const provider = await getEnabledProvider('multimodal');
-      if (!provider) return bad(req, res, 400, 40011, '未配置已启用的多模态模型');
+        let priorStageText = '';
+        try {
+          priorStageText = await assembleBusinessModelAiBundle(ctx.pool, ctx.teamId, HAT_STUDIO_UPLOAD_ROOT);
+        } catch {
+          priorStageText = '';
+        }
+        const contextText = await loadHatStudioContextText(ctx.pool, ctx.teamId);
+        const user = buildHatStudioSingleReplyUserPrompt({
+          contextText,
+          priorStageText,
+          transcriptMessages: transcript.messages,
+          mentionedHat: answeredHat,
+          userMessage,
+          studentDisplayName,
+          draftSnapshot: state.draft,
+        });
+        const raw = await runHatStudioJsonLlm(provider, HAT_STUDIO_SINGLE_REPLY_SYSTEM_PROMPT, user);
+        const norm = parseHatStudioSingleReplyFromLlmText(raw, answeredHat);
 
+        // 同帽续轮：承接并继续追问，不切帽
+        if (progressed.stayOnHat) {
+          if (norm.error) return bad(req, res, 400, 40016, norm.error);
+          transcript.messages.push({
+            id: randomUUID(),
+            hat: norm.message.hat,
+            content: norm.message.content,
+            targetModule: norm.message.targetModule,
+            moduleContent: norm.message.moduleContent,
+            fills: norm.message.fills,
+            adoptedModules: [],
+            status: 'ask',
+            roundIndex: transcript.roundCount,
+            createdAt: new Date().toISOString(),
+          });
+          transcript.hatSession = markAwaitingAnswer(progressed.session, answeredHat);
+          await upsertHatStudioMember(ctx.pool, ctx.teamId, ctx.sid, state.draft, transcript);
+          await logHatStudioTurn(ctx, userMessage, transcript, transcriptStartLen, answeredHat);
+          return ok(req, res, {
+            roundMessages: transcript.messages.slice(transcriptStartLen).map(mapHatStudioMessage),
+            studio: buildHatStudioApiPayload(state.draft, transcript),
+          });
+        }
+
+        if (!norm.error) {
+          transcript.messages.push({
+            id: randomUUID(),
+            hat: norm.message.hat,
+            content: norm.message.content,
+            targetModule: norm.message.targetModule,
+            moduleContent: norm.message.moduleContent,
+            fills: norm.message.fills,
+            adoptedModules: [],
+            roundIndex: transcript.roundCount,
+            createdAt: new Date().toISOString(),
+          });
+        }
+
+        const nextHat = progressed.session.sequentialDone ? null : progressed.session.activeHat;
+        if (nextHat && !progressed.session.sequentialDone) {
+          const ask = await generateHatStudioAsk(provider, ctx, state, transcript, nextHat, studentDisplayName);
+          if (ask.error) return bad(req, res, 400, 40016, ask.error);
+          transcript = ask.transcript;
+        } else {
+          transcript.hatSession = { ...progressed.session, awaitingAnswer: false };
+        }
+
+        await upsertHatStudioMember(ctx.pool, ctx.teamId, ctx.sid, state.draft, transcript);
+        await logHatStudioTurn(ctx, userMessage, transcript, transcriptStartLen, answeredHat);
+        return ok(req, res, {
+          roundMessages: transcript.messages.slice(transcriptStartLen).map(mapHatStudioMessage),
+          studio: buildHatStudioApiPayload(state.draft, transcript),
+        });
+      }
+
+      // 自由 / 手动切换视角下的多轮对话
+      let priorStageText = '';
+      try {
+        priorStageText = await assembleBusinessModelAiBundle(ctx.pool, ctx.teamId, HAT_STUDIO_UPLOAD_ROOT);
+      } catch {
+        priorStageText = '';
+      }
       const contextText = await loadHatStudioContextText(ctx.pool, ctx.teamId);
-      const studentDisplayName = String(req.body?.studentDisplayName || '同学').trim() || '同学';
       const user = buildHatStudioSingleReplyUserPrompt({
         contextText,
+        priorStageText,
         transcriptMessages: transcript.messages,
-        mentionedHat,
+        mentionedHat: activeHat,
         userMessage,
         studentDisplayName,
         draftSnapshot: state.draft,
       });
       const raw = await runHatStudioJsonLlm(provider, HAT_STUDIO_SINGLE_REPLY_SYSTEM_PROMPT, user);
-      const norm = parseHatStudioSingleReplyFromLlmText(raw, mentionedHat);
+      const norm = parseHatStudioSingleReplyFromLlmText(raw, activeHat);
       if (norm.error) return bad(req, res, 400, 40016, norm.error);
 
-      const reply = {
+      transcript.messages.push({
         id: randomUUID(),
         hat: norm.message.hat,
         content: norm.message.content,
@@ -1661,17 +1851,62 @@ router.post(
         adoptedModules: [],
         roundIndex: transcript.roundCount,
         createdAt: new Date().toISOString(),
-      };
-      transcript.messages.push(reply);
+      });
+
+      // 手动视角对话后：若顺序未完成，切回尚未完成的下一帽并发起追问
+      if (!session.sequentialDone && session.mode === 'sequential' && session.resumeHat) {
+        const progressed = completeHatAfterAnswer(
+          { ...session, activeHat, awaitingAnswer: true },
+          activeHat
+        );
+        // 手动切过的帽若原本未完成，上面会标记完成；再回到 resume/next
+        let nextSession = progressed.session;
+        const resume = nextIncompleteHat(nextSession);
+        if (resume) {
+          nextSession = { ...nextSession, activeHat: resume, resumeHat: null, awaitingAnswer: false };
+          transcript.hatSession = nextSession;
+          const ask = await generateHatStudioAsk(provider, ctx, state, transcript, resume, studentDisplayName);
+          if (!ask.error) transcript = ask.transcript;
+        } else {
+          transcript.hatSession = nextSession;
+        }
+      } else {
+        transcript.hatSession = { ...session, activeHat };
+      }
+
       await upsertHatStudioMember(ctx.pool, ctx.teamId, ctx.sid, state.draft, transcript);
+      await logHatStudioTurn(ctx, userMessage, transcript, transcriptStartLen, activeHat);
       return ok(req, res, {
-        message: mapHatStudioMessage(reply),
+        roundMessages: transcript.messages.slice(transcriptStartLen).map(mapHatStudioMessage),
+        message: mapHatStudioMessage(transcript.messages[transcript.messages.length - 1]),
         studio: buildHatStudioApiPayload(state.draft, transcript),
       });
     } catch (e) {
       logError(`POST hat-studio debate/reply traceId=${req.traceId}`, e);
       return bad(req, res, 500, 50000, friendlyLlmErrorMessage(e));
     }
+  }
+);
+
+/** 兼容旧 round：语义同 reply（前端应传 activeHat） */
+router.post(
+  '/student/personal-classes/:classId/ideation/hat-studio/debate/round',
+  requireAuth(),
+  requireStudent(),
+  (req, res, next) => {
+    req.body = { ...(req.body || {}), activeHat: req.body?.activeHat || req.body?.hat };
+    // 将 path 改为 reply，交给后续同前缀路由——不可靠，改为直接 307 由客户端重试不合适
+    // 实际：复制 reply 的核心已在 reply；此处简单 proxy 调用内部函数指针
+    const replyLayer = router.stack.find(
+      (l) =>
+        l.route &&
+        l.route.path === '/student/personal-classes/:classId/ideation/hat-studio/debate/reply' &&
+        l.route.methods.post
+    );
+    const handlers = replyLayer?.route?.stack || [];
+    const fn = handlers[handlers.length - 1]?.handle;
+    if (typeof fn !== 'function') return bad(req, res, 500, 50000, '六帽 reply 未就绪');
+    return fn(req, res, next);
   }
 );
 

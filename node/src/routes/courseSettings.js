@@ -9,6 +9,10 @@ import {
   loadSkippedModuleKeys,
   wipeClassModuleData,
 } from '../lib/courseWorkflow.js';
+import {
+  coerceMarketFeaturesForWrite,
+  normalizeModuleFeatures,
+} from '../lib/courseSettingsFeatures.js';
 
 const router = Router();
 
@@ -71,16 +75,41 @@ async function ownsPersonalClass(pool, teacherId, classId) {
 }
 
 function mapSetting(row) {
+  const moduleKey = row.module_key;
   return {
-    moduleKey: row.module_key,
+    moduleKey,
     startDate: dateOnly(row.start_date),
     deadlineDate: dateOnly(row.deadline_date),
     durationDays: Number(row.duration_days || 0),
     reminderDays: Number(row.reminder_days ?? 3),
     reminderEnabled: Boolean(row.reminder_enabled),
-    skipped: row.module_key === 'team' ? false : Boolean(row.skipped),
+    skipped: moduleKey === 'team' ? false : Boolean(row.skipped),
+    features: normalizeModuleFeatures(row.features_json, moduleKey),
     lastRemindedAt: row.last_reminded_at ? new Date(row.last_reminded_at).toISOString() : '',
     lastRemindedDeadline: dateOnly(row.last_reminded_deadline),
+  };
+}
+
+const SETTING_SELECT = `module_key,
+              to_char(start_date, 'YYYY-MM-DD') AS start_date,
+              to_char(deadline_date, 'YYYY-MM-DD') AS deadline_date,
+              duration_days, reminder_days, reminder_enabled, skipped,
+              features_json,
+              last_reminded_at,
+              to_char(last_reminded_deadline, 'YYYY-MM-DD') AS last_reminded_deadline`;
+
+function emptySettingShell(stageKey) {
+  return {
+    moduleKey: stageKey,
+    startDate: '',
+    deadlineDate: '',
+    durationDays: 0,
+    reminderDays: 3,
+    reminderEnabled: true,
+    skipped: false,
+    features: normalizeModuleFeatures({}, stageKey),
+    lastRemindedAt: '',
+    lastRemindedDeadline: '',
   };
 }
 
@@ -107,29 +136,20 @@ router.get('/teacher/personal-classes/:classId/course-settings', requireAuth(), 
     if (!classRow) return bad(req, res, 404, 40401, '班级不存在');
 
     const { rows } = await pool.query(
-      `SELECT module_key,
-              to_char(start_date, 'YYYY-MM-DD') AS start_date,
-              to_char(deadline_date, 'YYYY-MM-DD') AS deadline_date,
-              duration_days, reminder_days, reminder_enabled, skipped,
-              last_reminded_at,
-              to_char(last_reminded_deadline, 'YYYY-MM-DD') AS last_reminded_deadline
+      `SELECT ${SETTING_SELECT}
        FROM teacher_personal_class_course_settings
        WHERE teacher_personal_class_id = $1 AND teacher_id = $2`,
       [classId, teacherId]
     );
     const byKey = new Map(rows.map((row) => [row.module_key, mapSetting(row)]));
     const settings = COURSE_SETTING_STAGES.map((stage) => ({
-      moduleKey: stage.key,
-      startDate: '',
-      deadlineDate: '',
-      durationDays: 0,
-      reminderDays: 3,
-      reminderEnabled: true,
-      skipped: false,
-      lastRemindedAt: '',
-      lastRemindedDeadline: '',
+      ...emptySettingShell(stage.key),
       ...(byKey.get(stage.key) || {}),
       ...(stage.key === 'team' ? { skipped: false } : {}),
+      features: normalizeModuleFeatures(
+        byKey.get(stage.key)?.features ?? {},
+        stage.key
+      ),
     }));
     return ok(req, res, {
       classId: String(classId),
@@ -208,29 +228,17 @@ router.put('/teacher/personal-classes/:classId/course-settings/workflow', requir
     await client.query('COMMIT');
 
     const { rows } = await client.query(
-      `SELECT module_key,
-              to_char(start_date, 'YYYY-MM-DD') AS start_date,
-              to_char(deadline_date, 'YYYY-MM-DD') AS deadline_date,
-              duration_days, reminder_days, reminder_enabled, skipped,
-              last_reminded_at,
-              to_char(last_reminded_deadline, 'YYYY-MM-DD') AS last_reminded_deadline
+      `SELECT ${SETTING_SELECT}
        FROM teacher_personal_class_course_settings
        WHERE teacher_personal_class_id = $1 AND teacher_id = $2`,
       [classId, teacherId]
     );
     const byKey = new Map(rows.map((row) => [row.module_key, mapSetting(row)]));
     const settings = COURSE_SETTING_STAGES.map((stage) => ({
-      moduleKey: stage.key,
-      startDate: '',
-      deadlineDate: '',
-      durationDays: 0,
-      reminderDays: 3,
-      reminderEnabled: true,
-      skipped: false,
-      lastRemindedAt: '',
-      lastRemindedDeadline: '',
+      ...emptySettingShell(stage.key),
       ...(byKey.get(stage.key) || {}),
       ...(stage.key === 'team' ? { skipped: false } : {}),
+      features: normalizeModuleFeatures(byKey.get(stage.key)?.features ?? {}, stage.key),
     }));
     return ok(req, res, {
       settings,
@@ -301,12 +309,7 @@ router.put('/teacher/personal-classes/:classId/course-settings/:moduleKey', requ
            ELSE teacher_personal_class_course_settings.last_reminded_deadline
          END,
          updated_at = now()
-       RETURNING module_key,
-                 to_char(start_date, 'YYYY-MM-DD') AS start_date,
-                 to_char(deadline_date, 'YYYY-MM-DD') AS deadline_date,
-                 duration_days, reminder_days, reminder_enabled, skipped,
-                 last_reminded_at,
-                 to_char(last_reminded_deadline, 'YYYY-MM-DD') AS last_reminded_deadline`,
+       RETURNING ${SETTING_SELECT}`,
       [classId, teacherId, moduleKey, startDate, deadlineDate, duration, reminderDays, reminderEnabled]
     );
     return ok(req, res, { setting: mapSetting(rows[0]) });
@@ -315,5 +318,43 @@ router.put('/teacher/personal-classes/:classId/course-settings/:moduleKey', requ
     return bad(req, res, 500, 50000, e.message);
   }
 });
+
+/** 保存环节功能开关（当前仅 market：调研数据上传可关，线上问卷强制开启） */
+router.put(
+  '/teacher/personal-classes/:classId/course-settings/:moduleKey/features',
+  requireAuth(),
+  requireTeacher(),
+  async (req, res) => {
+    try {
+      const teacherId = teacherIdFromReq(req);
+      const classId = parseId(req.params.classId);
+      const moduleKey = String(req.params.moduleKey || '').trim();
+      if (!teacherId || !classId) return bad(req, res, 400, 40001, '无效班级');
+      if (moduleKey !== 'market') return bad(req, res, 400, 40002, '该环节暂不支持功能开关');
+
+      const coerced = coerceMarketFeaturesForWrite(req.body?.features ?? req.body);
+      if (coerced.error) return bad(req, res, 400, 40003, coerced.error);
+
+      const pool = getPool();
+      const classRow = await ownsPersonalClass(pool, teacherId, classId);
+      if (!classRow) return bad(req, res, 404, 40401, '班级不存在');
+
+      const { rows } = await pool.query(
+        `INSERT INTO teacher_personal_class_course_settings
+          (teacher_personal_class_id, teacher_id, module_key, features_json)
+         VALUES ($1, $2, 'market', $3::jsonb)
+         ON CONFLICT (teacher_personal_class_id, module_key) DO UPDATE SET
+           features_json = EXCLUDED.features_json,
+           updated_at = now()
+         RETURNING ${SETTING_SELECT}`,
+        [classId, teacherId, JSON.stringify(coerced.features)]
+      );
+      return ok(req, res, { setting: mapSetting(rows[0]) });
+    } catch (e) {
+      logError(`PUT course-settings features traceId=${req.traceId}`, e);
+      return bad(req, res, 500, 50000, e.message);
+    }
+  }
+);
 
 export default router;

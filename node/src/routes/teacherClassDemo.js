@@ -13,10 +13,12 @@ import { getPool } from '../lib/db.js';
 import { logError } from '../lib/logError.js';
 import { chatCompletion, getEnabledProvider } from '../lib/llmGateway.js';
 import {
+  WAR_ROOM_ASK_SYSTEM_PROMPT,
   WAR_ROOM_ROUND_SYSTEM_PROMPT,
   WAR_ROOM_SINGLE_REPLY_SYSTEM_PROMPT,
 } from '../lib/businessModelWarRoomPrompts.js';
 import {
+  HAT_STUDIO_ASK_SYSTEM_PROMPT,
   HAT_STUDIO_ROUND_SYSTEM_PROMPT,
   HAT_STUDIO_SINGLE_REPLY_SYSTEM_PROMPT,
 } from '../lib/ideationHatStudioPrompts.js';
@@ -44,10 +46,12 @@ const SCENES = {
   'market-analysis': `用中文写一份简短调研结论，分「需求判断」「竞品差异」「建议动作」三节，不要英文键名。${NO_MD}`,
   product: `只返回可直接渲染的产品设计建议 JSON，不要其它说明。Schema：${PRODUCT_DESIGN_SUGGESTION_JSON_SCHEMA}`,
   business: `根据已有商业模式笔记，用中文补全或点评，分节输出，不要英文键名。${NO_MD}`,
-  /** 演示虚拟董事会：整轮六帽 / 单帽 @ 回复，人设与学生端同一套提示 */
+  /** 演示虚拟董事会：单帽苏格拉底追问 / 单帽承接回复（与学生端同源提示） */
+  'war-room-ask': `${WAR_ROOM_ASK_SYSTEM_PROMPT}\n（课堂演示：结果只显示在当前页，勿声称已写入学生档案。）`,
   'war-room-round': `${WAR_ROOM_ROUND_SYSTEM_PROMPT}\n（课堂演示：结果只显示在当前页，勿声称已写入学生档案。）`,
   'war-room-reply': `${WAR_ROOM_SINGLE_REPLY_SYSTEM_PROMPT}\n（课堂演示：必须严格按用户给出的【你的角色】人设回复，禁止串戏。）`,
-  /** 演示六帽创想室：整轮 / 单帽 */
+  /** 演示六帽创想室：单帽追问 / 单帽承接 */
+  'hat-studio-ask': `${HAT_STUDIO_ASK_SYSTEM_PROMPT}\n（课堂演示：结果只显示在当前页，勿声称已写入学生档案。）`,
   'hat-studio-round': `${HAT_STUDIO_ROUND_SYSTEM_PROMPT}\n（课堂演示：结果只显示在当前页，勿声称已写入学生档案。）`,
   'hat-studio-reply': `${HAT_STUDIO_SINGLE_REPLY_SYSTEM_PROMPT}\n（课堂演示：必须严格按用户给出的【你的角色】人设回复，禁止串戏。）`,
   /** 演示启思智能体：与学生端同源提示词 */
@@ -64,6 +68,13 @@ final 行：{"type":"final","optimize":{"suggestions":[{"title":"课堂建议","
 users、revenue 均为累计值（大体不减），用平台期（连续多日持平）表达淡季；禁止写成当日流水导致 0/高/0/高。
 至少 4 天 profit 为负；悲观剧本禁止第 14 天强行翻盘。${NO_MD}`,
   'plan-comment': `用中文给这份商业计划书要点写一段课堂点评，并给出 0～100 的建议分，格式为「建议分：N」开头。${NO_MD}`,
+  /** 演示：按指定章节撰写计划书正文 */
+  'plan-generate-section': `你是课堂商业计划书助教。根据用户给出的前期实训资料与章节标题/写作指引，用中文撰写该章节正文。
+要求：紧扣项目事实；不要编造未给出的精确数据；可用合理推断但需标明「假设/估算」；内容充实（建议 400 字以上）；可用轻量 Markdown；不要输出 HTML；直接输出正文，不要 JSON。`,
+  /** 演示：一次生成整本计划书各章 JSON */
+  'plan-generate-full': `你是课堂商业计划书助教。根据用户给出的前期实训资料与章节列表，一次性撰写完整商业计划书各章正文。
+只返回一个 JSON 对象（不要 markdown 代码块），格式：{"sections":[{"key":"与输入一致","title":"标题","content":"充实正文"}]};
+要求：sections 与输入章节一一对应、不得漏章；每章 content 必须 500～800 汉字，可用轻量 Markdown，禁止 HTML；勿编造与资料矛盾的精确数据。`,
 };
 
 const JSON_MODE_SCENES = new Set([
@@ -71,13 +82,16 @@ const JSON_MODE_SCENES = new Set([
   'market-persona',
   'team',
   'product',
+  'war-room-ask',
   'war-room-round',
   'war-room-reply',
+  'hat-studio-ask',
   'hat-studio-round',
   'hat-studio-reply',
   'ideation-midwifery-turn',
   'ideation-midwifery-generate',
   'ideation-chat-generate',
+  'plan-generate-full',
 ]);
 
 const upload = multer({

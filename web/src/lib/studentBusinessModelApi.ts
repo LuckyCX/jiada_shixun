@@ -44,7 +44,7 @@ export type WarRoomDebateMessage = {
   moduleContent: string;
   fills?: WarRoomCanvasFill[];
   adoptedModules?: string[];
-  status?: 'adopted' | 'ignored';
+  status?: 'adopted' | 'ignored' | 'ask' | 'guide' | string;
   roundIndex: number;
   createdAt: string;
 };
@@ -93,12 +93,41 @@ export type BusinessModelWorkspacePayload = {
   bmc?: BmcPayload;
   bmcCanvasSavedAt?: string;
   bmcCanvasGeneratedAt?: string;
+  bmcReviewStatus?: 'draft' | 'pending' | 'approved' | 'rejected' | string;
+  bmcReviewComment?: string;
+  bmcReviewedAt?: string;
   warRoom?: {
     canvas: WarRoomCanvas;
     transcript: WarRoomTranscript;
     filledCount: number;
+    hatSession?: {
+      mode: string;
+      activeHat: string;
+      completedHats: string[];
+      sequentialDone: boolean;
+      awaitingAnswer: boolean;
+      hatDialogueRound?: number;
+      resumeHat?: string | null;
+      hatOrder?: string[];
+    };
   };
   warRoomTeamRecords?: WarRoomTeamRecordSummary[];
+};
+
+export type BmcAiReviewItem = {
+  id: string;
+  selfNote: string;
+  aiResult: {
+    summary?: string;
+    score?: number;
+    dimensions?: { key: string; label: string; comment?: string; pros?: string[]; cons?: string[] }[];
+    suggestions?: string[];
+  };
+  aiScore: number | null;
+  createdAt: string;
+  submittedBy: string;
+  submitterName?: string;
+  teamName?: string;
 };
 
 const base = (classId: string) =>
@@ -173,6 +202,38 @@ export type SaveBusinessModelBmcError = Error & {
   missingMembers?: { studentId: string; studentName: string }[];
 };
 
+export async function submitBmcAiReview(
+  classId: string,
+  body: { selfNote: string; bmc: BmcPayload }
+): Promise<{ review: BmcAiReviewItem; workspace: BusinessModelWorkspacePayload }> {
+  return portalAuthenticatedFetch('student', `${base(classId)}/bmc/ai-review`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  }) as Promise<{ review: BmcAiReviewItem; workspace: BusinessModelWorkspacePayload }>;
+}
+
+export async function fetchBmcAiReviews(classId: string): Promise<{ reviews: BmcAiReviewItem[] }> {
+  return portalAuthenticatedFetch('student', `${base(classId)}/bmc/ai-reviews`) as Promise<{
+    reviews: BmcAiReviewItem[];
+  }>;
+}
+
+export async function acquireBmcCellLock(
+  classId: string,
+  cellKey: string
+): Promise<{ lock: { cellKey: string; lockedById: string; lockedByName: string } }> {
+  return portalAuthenticatedFetch('student', `${base(classId)}/bmc/cell-locks`, {
+    method: 'POST',
+    body: JSON.stringify({ cellKey }),
+  }) as Promise<{ lock: { cellKey: string; lockedById: string; lockedByName: string } }>;
+}
+
+export async function releaseBmcCellLock(classId: string, cellKey: string): Promise<void> {
+  await portalAuthenticatedFetch('student', `${base(classId)}/bmc/cell-locks/${encodeURIComponent(cellKey)}`, {
+    method: 'DELETE',
+  });
+}
+
 export async function saveBusinessModelBmc(
   classId: string,
   bmc: BmcPayload
@@ -226,24 +287,51 @@ export async function warRoomDebateStart(
 export async function warRoomDebateRound(
   classId: string,
   studentDisplayName: string,
-  userMessage?: string
-): Promise<{ roundMessages: WarRoomDebateMessage[]; workspace: BusinessModelWorkspacePayload }> {
+  userMessage?: string,
+  activeHat?: WarRoomHat | string
+): Promise<{
+  roundMessages: WarRoomDebateMessage[];
+  message?: WarRoomDebateMessage;
+  workspace: BusinessModelWorkspacePayload;
+}> {
   return portalAuthenticatedFetch('student', `${base(classId)}/war-room/debate/round`, {
     method: 'POST',
-    body: JSON.stringify({ studentDisplayName, userMessage: userMessage || '' }),
-  }) as Promise<{ roundMessages: WarRoomDebateMessage[]; workspace: BusinessModelWorkspacePayload }>;
+    body: JSON.stringify({ studentDisplayName, userMessage: userMessage || '', activeHat }),
+  }) as Promise<{
+    roundMessages: WarRoomDebateMessage[];
+    message?: WarRoomDebateMessage;
+    workspace: BusinessModelWorkspacePayload;
+  }>;
 }
 
 export async function warRoomDebateReply(
   classId: string,
   studentDisplayName: string,
   userMessage: string,
-  hat?: WarRoomHat
-): Promise<{ message: WarRoomDebateMessage; workspace: BusinessModelWorkspacePayload }> {
+  activeHat?: WarRoomHat | string
+): Promise<{
+  message?: WarRoomDebateMessage;
+  roundMessages?: WarRoomDebateMessage[];
+  workspace: BusinessModelWorkspacePayload;
+}> {
   return portalAuthenticatedFetch('student', `${base(classId)}/war-room/debate/reply`, {
     method: 'POST',
-    body: JSON.stringify({ studentDisplayName, userMessage, hat }),
-  }) as Promise<{ message: WarRoomDebateMessage; workspace: BusinessModelWorkspacePayload }>;
+    body: JSON.stringify({ studentDisplayName, userMessage, activeHat, hat: activeHat }),
+  }) as Promise<{
+    message?: WarRoomDebateMessage;
+    roundMessages?: WarRoomDebateMessage[];
+    workspace: BusinessModelWorkspacePayload;
+  }>;
+}
+
+export async function warRoomSwitchHat(
+  classId: string,
+  hat: string
+): Promise<{ workspace: BusinessModelWorkspacePayload }> {
+  return portalAuthenticatedFetch('student', `${base(classId)}/war-room/debate/switch-hat`, {
+    method: 'POST',
+    body: JSON.stringify({ hat }),
+  }) as Promise<{ workspace: BusinessModelWorkspacePayload }>;
 }
 
 export async function saveWarRoomCanvasCell(

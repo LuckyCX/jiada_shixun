@@ -4,6 +4,14 @@
 import { generateDemoAi } from './demoApi';
 import { DEMO_STUDENT_ID, DEMO_STUDENT_NAME, demoId, nowIso, parseLooseJson, readFlow, writeFlow } from './demoFlow';
 import {
+  afterHatStudentAnswer,
+  coerceHatSession,
+  defaultHatSession,
+  markAwaitingAnswer,
+  switchHatPerspective,
+  type HatSessionState,
+} from '../../../../lib/sixHatsSession';
+import {
   WAR_ROOM_MODULE_DEFS,
   parseMentionedHat,
   type BmcPayload,
@@ -16,6 +24,7 @@ import {
   type WarRoomDebateMessage,
   type WarRoomHat,
 } from '../../../../lib/studentBusinessModelApi';
+import type { TeacherBmcReviewItem } from '../../../../lib/teacherBmcReviewApi';
 
 export type {
   BmcPayload,
@@ -71,12 +80,34 @@ function emptyWorkspace(): BusinessModelWorkspacePayload {
     isTeamLeader: true,
     teamMembers: [{ id: DEMO_STUDENT_ID, name: DEMO_STUDENT_NAME }],
     bmc: emptyBmc(),
-    warRoom: { canvas: {}, transcript: { messages: [], roundCount: 0 }, filledCount: 0 },
+    warRoom: {
+      canvas: {},
+      transcript: { messages: [], roundCount: 0 },
+      filledCount: 0,
+      hatSession: defaultHatSession(),
+    },
     warRoomTeamRecords: [],
   };
 }
 
 type SavedWar = { canvas: WarRoomCanvas; savedAt: string; filledCount: number };
+
+type DemoWarTranscript = {
+  messages: WarRoomDebateMessage[];
+  roundCount: number;
+  hatSession?: HatSessionState;
+};
+
+function ensureWarRoom(ws: BusinessModelWorkspacePayload) {
+  const room = ws.warRoom || emptyWorkspace().warRoom!;
+  const transcript = (room.transcript || { messages: [], roundCount: 0 }) as DemoWarTranscript;
+  const hatSession = coerceHatSession(transcript.hatSession || room.hatSession);
+  transcript.hatSession = hatSession;
+  room.transcript = transcript;
+  room.hatSession = hatSession;
+  ws.warRoom = room;
+  return room;
+}
 
 function read(classId: string) {
   const ws = readFlow(classId, 'business', emptyWorkspace());
@@ -84,15 +115,15 @@ function read(classId: string) {
   ws.marketing = ws.marketing || emptyWorkspace().marketing;
   ws.finance = ws.finance || { costs: [], revenues: [] };
   ws.bmc = { ...emptyBmc(), ...ws.bmc };
-  ws.warRoom = ws.warRoom || emptyWorkspace().warRoom;
+  ensureWarRoom(ws);
   ws.teamMembers = [{ id: DEMO_STUDENT_ID, name: DEMO_STUDENT_NAME }];
   ws.isTeamLeader = true;
   return ws;
 }
 
 function write(classId: string, ws: BusinessModelWorkspacePayload) {
-  const filled = Object.values(ws.warRoom?.canvas || {}).filter((cell) => String(cell?.content || '').trim()).length;
-  if (ws.warRoom) ws.warRoom.filledCount = filled;
+  const room = ensureWarRoom(ws);
+  room.filledCount = Object.values(room.canvas || {}).filter((cell) => String(cell?.content || '').trim()).length;
   return writeFlow(classId, 'business', ws);
 }
 
@@ -166,10 +197,113 @@ export async function generateBusinessModelBmcAi(classId: string) {
 }
 
 export async function saveBusinessModelBmc(classId: string, bmc: BmcPayload) {
+  const reviews = readFlow<unknown[]>(classId, 'businessBmcReviews', []);
+  if (!Array.isArray(reviews) || reviews.length < 1) {
+    throw new Error('请先完成至少 1 次 AI 审查后再上传画布');
+  }
   const ws = read(classId);
   ws.bmc = bmc;
   ws.bmcCanvasSavedAt = nowIso();
+  (ws as { bmcReviewStatus?: string }).bmcReviewStatus = 'pending';
+  (ws as { bmcReviewComment?: string }).bmcReviewComment = '';
+  (ws as { bmcReviewedAt?: string }).bmcReviewedAt = '';
   return write(classId, ws);
+}
+
+/** 演示端：教师审核商业画布列表（读 session 中演示团队上传结果） */
+export async function fetchTeacherBmcReviews(
+  classId: string,
+  status: 'all' | 'pending' | 'approved' | 'rejected' = 'all'
+) {
+  const ws = read(classId) as BusinessModelWorkspacePayload & {
+    bmcReviewStatus?: string;
+    bmcReviewComment?: string;
+    bmcReviewedAt?: string;
+    bmcCanvasSavedAt?: string;
+  };
+  const reviewStatus = String(ws.bmcReviewStatus || 'draft');
+  if (!ws.bmcCanvasSavedAt || reviewStatus === 'draft') return [] as TeacherBmcReviewItem[];
+  const item: TeacherBmcReviewItem = {
+    teamId: 'demo-team',
+    teamName: '演示团队',
+    bmc: ws.bmc || emptyBmc(),
+    savedAt: String(ws.bmcCanvasSavedAt || ''),
+    submitterName: DEMO_STUDENT_NAME,
+    status: reviewStatus,
+    reviewComment: String(ws.bmcReviewComment || ''),
+    reviewedAt: String(ws.bmcReviewedAt || ''),
+    reviewerName: reviewStatus === 'pending' ? '' : '演示教师',
+  };
+  if (status !== 'all' && item.status !== status) return [];
+  return [item];
+}
+
+export async function reviewTeacherBmc(
+  classId: string,
+  _teamId: string,
+  body: { decision: 'approve' | 'reject'; comment: string }
+) {
+  const ws = read(classId) as BusinessModelWorkspacePayload & {
+    bmcReviewStatus?: string;
+    bmcReviewComment?: string;
+    bmcReviewedAt?: string;
+  };
+  const status = body.decision === 'approve' ? 'approved' : 'rejected';
+  ws.bmcReviewStatus = status;
+  ws.bmcReviewComment = String(body.comment || '').trim();
+  ws.bmcReviewedAt = nowIso();
+  write(classId, ws);
+  return { teamId: 'demo-team', status, reviewComment: ws.bmcReviewComment };
+}
+
+export async function submitBmcAiReview(classId: string, body: { selfNote: string; bmc: BmcPayload }) {
+  const ws = await saveBusinessModelWorkspacePartial(classId, {});
+  const review = {
+    id: `demo-rev-${Date.now()}`,
+    selfNote: body.selfNote || '',
+    aiResult: {
+      summary: '演示审查：九格结构基本完整，建议补充可验证的客户规模与成本假设。',
+      score: 72,
+      suggestions: ['补齐客户分层依据', '明确关键业务中的验证动作'],
+    },
+    aiScore: 72,
+    createdAt: nowIso(),
+    submittedBy: 'demo',
+    submitterName: '演示学生',
+    teamName: '演示团队',
+  };
+  const bag = read(classId);
+  bag.bmc = body.bmc;
+  write(classId, bag);
+  const prev = readFlow<typeof review[]>(classId, 'businessBmcReviews', []);
+  writeFlow(classId, 'businessBmcReviews', [review, ...(Array.isArray(prev) ? prev : [])]);
+  return { review, workspace: { ...ws, bmc: body.bmc } };
+}
+
+export async function fetchBmcAiReviews(classId: string) {
+  const reviews = readFlow<unknown[]>(classId, 'businessBmcReviews', []);
+  return { reviews: Array.isArray(reviews) ? reviews : [] };
+}
+
+export async function acquireBmcCellLock(_classId: string, cellKey: string) {
+  return { lock: { cellKey, lockedById: 'demo', lockedByName: '我' } };
+}
+
+export async function releaseBmcCellLock() {
+  return;
+}
+
+export async function warRoomSwitchHat(classId: string, hat: string) {
+  const ws = read(classId);
+  const room = ensureWarRoom(ws);
+  const transcript = room.transcript as DemoWarTranscript;
+  const switched = switchHatPerspective(transcript.hatSession, hat);
+  if (!('error' in switched)) {
+    transcript.hatSession = switched.session;
+    room.hatSession = switched.session;
+  }
+  write(classId, ws);
+  return { workspace: ws };
 }
 
 function stripMdLite(text: string) {
@@ -254,30 +388,15 @@ function hatMessage(
   };
 }
 
-/** 与学生端一致的六帽人设（演示侧拼进 user 上下文，后端 scene 再用同一套 system） */
+/** 与学生端一致的六帽人设（演示侧拼进 user 上下文） */
 const WAR_ROOM_HAT_ROLES: Record<Exclude<WarRoomHat, 'user'>, string> = {
-  white: '白帽（数据分析师）：只基于客观事实和数据发言。补充市场规模、目标用户、竞品、成本利润等可验证事实，不主观评价。',
-  red: '红帽（用户代表）：以目标用户身份谈第一感受：会不会想用、哪里别扭、最在意什么体验。少讲大道理。',
-  black: '黑帽（风险预警员）：指出关键约束与风险，并给出可写入画布的调整建议；禁止只做否定。',
-  yellow: '黄帽（乐观倡导者）：挖掘优势、痛点机会、盈利亮点，并推动某一格可落地的表述。',
-  green: '绿帽（创意设计师）：提出差异化创意：产品优化、新玩法/渠道/盈利模式，尽量对应具体画布格。',
-  blue: '蓝帽（项目经理）：控场与总结。引导讨论、追问关键信息，建议下一步并推动九格补全。',
+  white: '白帽（客观事实｜补信息）：聚焦事实与可验证数据，不做主观评判。提出最多 3 个苏格拉底式追问。',
+  red: '红帽（用户共情｜贴需求）：站在用户感受与情绪提问，最多 3 个苏格拉底式追问。',
+  black: '黑帽（风险批判｜查风险）：审慎识别隐患与障碍，最多 3 个苏格拉底式追问。',
+  yellow: '黄帽（正向价值｜判价值）：挖掘价值与优势，最多 3 个苏格拉底式追问。',
+  green: '绿帽（发散创新｜找创新）：鼓励发散与差异化，最多 3 个苏格拉底式追问。',
+  blue: '蓝帽（全局系统｜做统筹）：整合各维结论、规划下一步，最多 3 个苏格拉底式追问。',
 };
-
-const MIDDLE_HATS: Exclude<WarRoomHat, 'user' | 'white' | 'blue'>[] = ['red', 'black', 'yellow', 'green'];
-
-function shuffleMiddleHats() {
-  const arr = [...MIDDLE_HATS];
-  for (let i = arr.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [arr[i], arr[j]] = [arr[j], arr[i]];
-  }
-  return arr;
-}
-
-function buildWarRoomHatOrder(): Exclude<WarRoomHat, 'user'>[] {
-  return ['white', ...shuffleMiddleHats(), 'blue'];
-}
 
 function formatWarRoomHistory(messages: WarRoomDebateMessage[]) {
   return (
@@ -297,122 +416,195 @@ function parseAiHatMessage(
   fallbackModule: string,
   roundIndex: number
 ) {
-  const content =
-    stripMdLite(String(raw?.content || '')) ||
-    `${WAR_ROOM_HAT_ROLES[fallbackHat].split('：')[0]}：请围绕「${fallbackModule}」补充可写入画布的要点。`;
+  let content = stripMdLite(String(raw?.content || ''));
+  const questions = Array.isArray(raw?.questions)
+    ? raw!.questions!.map((q) => String(q || '').trim()).filter(Boolean).slice(0, 3)
+    : [];
+  if (!content && questions.length) {
+    content = questions.map((q, i) => `${i + 1}. ${q}`).join('\n');
+  }
+  if (!content) {
+    content = `${WAR_ROOM_HAT_ROLES[fallbackHat].split('：')[0]}：请围绕「${fallbackModule}」补充可验证要点。`;
+  }
   const fills = collectFills(raw, content, fallbackModule);
   const hatRaw = String(raw?.hat || '').trim();
   const hat = (
     ['white', 'red', 'black', 'yellow', 'green', 'blue'].includes(hatRaw) ? hatRaw : fallbackHat
   ) as Exclude<WarRoomHat, 'user'>;
-  return hatMessage(hat, content, roundIndex, {
-    targetModule: fills[0]?.targetModule || fallbackModule,
-    moduleContent: fills[0]?.moduleContent || content,
+  const msg = hatMessage(hat, content, roundIndex, {
+    targetModule: fills[0]?.targetModule || null,
+    moduleContent: fills[0]?.moduleContent || '',
     fills,
   });
+  return msg;
 }
 
-/** @ 某一顶帽子：单帽针对性回复 */
-async function pushSingleHatReply(
+/** 生成单帽苏格拉底追问（最多 3 问） */
+async function generateDemoWarRoomAsk(
+  classId: string,
+  studentDisplayName: string,
+  hat: Exclude<WarRoomHat, 'user'>,
+  history: WarRoomDebateMessage[],
+  roundIndex: number
+) {
+  const prompt = [
+    `【辩论历史】\n${formatWarRoomHistory(history)}`,
+    '',
+    `【你的角色】${WAR_ROOM_HAT_ROLES[hat]}`,
+    `面向 ${studentDisplayName}，以该帽视角提出最多 3 个苏格拉底式追问（提问不代改，不代填画布）。`,
+    '只返回 JSON：{"hat":"' + hat + '","content":"提问正文","questions":["追问1","追问2","追问3"]}',
+  ].join('\n');
+  const text = await generateDemoAi(classId, 'war-room-ask', prompt);
+  const parsed = parseLooseJson<Record<string, unknown> | null>(text, null);
+  const msg = parseAiHatMessage(parsed, hat, 'valueProposition', roundIndex);
+  msg.hat = hat;
+  msg.status = 'ask';
+  return msg;
+}
+
+/** 单帽承接回复（可继续追问） */
+async function generateDemoWarRoomReply(
+  classId: string,
+  studentDisplayName: string,
+  hat: Exclude<WarRoomHat, 'user'>,
+  userMessage: string,
+  history: WarRoomDebateMessage[],
+  roundIndex: number
+) {
+  const prompt = [
+    `【辩论历史】\n${formatWarRoomHistory(history)}`,
+    '',
+    `【学生发言】${studentDisplayName}：${userMessage.trim()}`,
+    `【你的角色】${WAR_ROOM_HAT_ROLES[hat]}`,
+    '承接学生回答并继续提问引导（提问不代改）。只返回 JSON：{"hat":"' + hat + '","content":"回复正文"}',
+  ].join('\n');
+  const text = await generateDemoAi(classId, 'war-room-reply', prompt);
+  const parsed = parseLooseJson<Record<string, unknown> | null>(text, null);
+  const msg = parseAiHatMessage(parsed, hat, inferModuleKey(userMessage, roundIndex), roundIndex);
+  msg.hat = hat;
+  return msg;
+}
+
+/** 开场：蓝帽引导 + 白帽第一轮苏格拉底三问（禁止一次抛出六帽） */
+export async function warRoomDebateStart(classId: string, studentDisplayName: string) {
+  const ws = read(classId);
+  const room = ensureWarRoom(ws);
+  const transcript = room.transcript as DemoWarTranscript;
+  if (transcript.messages.length > 0) {
+    return { roundMessages: transcript.messages, workspace: ws };
+  }
+  const name = studentDisplayName || DEMO_STUDENT_NAME;
+  const guide = hatMessage(
+    'blue',
+    `${name}，欢迎进入虚拟董事会。将按「白→绿→黄→黑→红→蓝」顺序，每顶帽子提出最多 3 个苏格拉底式追问，并可进行最多 3 轮对话后再进入下一帽（提问不代改）。也可随时 @某帽 专项深挖。请先简要说明你的创业设想。`,
+    0
+  );
+  guide.status = 'guide';
+  const ask = await generateDemoWarRoomAsk(classId, name, 'white', [guide], 0);
+  transcript.messages = [guide, ask];
+  transcript.roundCount = 1;
+  transcript.hatSession = markAwaitingAnswer(defaultHatSession(), 'white');
+  room.hatSession = transcript.hatSession;
+  write(classId, ws);
+  return { roundMessages: transcript.messages, workspace: ws };
+}
+
+export async function warRoomDebateRound(
+  classId: string,
+  studentDisplayName: string,
+  userMessage?: string,
+  hat?: WarRoomHat
+) {
+  return warRoomDebateReply(classId, studentDisplayName, userMessage || '', hat);
+}
+
+export async function warRoomDebateReply(
   classId: string,
   studentDisplayName: string,
   userMessage: string,
-  hat: Exclude<WarRoomHat, 'user'>
+  hat?: WarRoomHat
 ) {
   const ws = read(classId);
-  const room = ws.warRoom || { canvas: {}, transcript: { messages: [], roundCount: 0 }, filledCount: 0 };
-  const roundIndex = room.transcript.roundCount || 0;
-  const messages: WarRoomDebateMessage[] = [];
-  if (userMessage.trim()) messages.push(hatMessage('user', userMessage.trim(), roundIndex));
-  const fallbackModule = inferModuleKey(userMessage || '价值主张', roundIndex + 1);
-  const prompt = [
-    '【学生发言】',
-    `${studentDisplayName}：${userMessage.trim() || '（请围绕当前画布继续讨论）'}`,
-    '',
-    `【你的角色】${WAR_ROOM_HAT_ROLES[hat]}`,
-    '必须严格以该角色身份回复，禁止串成其他帽子或通用助教。',
-    '',
-    '【辩论历史】',
-    formatWarRoomHistory(room.transcript.messages),
-    '',
-    '只返回 JSON：',
-    '{"hat":"' + hat + '","content":"发言正文","targetModule":"九格键名或 null","moduleContent":"可写入该格全文","fills":[{"targetModule":"九格键名","moduleContent":"全文"}]}',
-    `targetModule 只能是：${WAR_ROOM_MODULE_KEYS.join(', ')} 或 null。`,
-    `优先可写入格子：${fallbackModule}。fills 至少 1 条。`,
-  ].join('\n');
+  const room = ensureWarRoom(ws);
+  const transcript = room.transcript as DemoWarTranscript;
+  const session = coerceHatSession(transcript.hatSession);
+  const text = String(userMessage || '').trim();
+  if (!text) throw new Error('请输入发言内容');
+  if (!transcript.messages.length) throw new Error('请先等待白帽开场');
 
-  const text = await generateDemoAi(classId, 'war-room-reply', prompt);
-  const parsed = parseLooseJson<Record<string, unknown> | null>(text, null);
-  messages.push(parseAiHatMessage(parsed, hat, fallbackModule, roundIndex));
+  const mentioned = parseMentionedHat(text) as Exclude<WarRoomHat, 'user'> | null;
+  const roundIndex = transcript.roundCount || 0;
+  const out: WarRoomDebateMessage[] = [hatMessage('user', text, roundIndex)];
+  const history = [...transcript.messages, ...out];
 
-  room.transcript.messages = [...room.transcript.messages, ...messages];
-  ws.warRoom = room;
+  // @某帽：仅该帽单次回复，不推进顺序
+  if (mentioned) {
+    const switched = switchHatPerspective(session, mentioned);
+    const nextSession = 'error' in switched ? session : switched.session;
+    const reply = await generateDemoWarRoomReply(classId, studentDisplayName, mentioned, text, history, roundIndex);
+    out.push(reply);
+    transcript.messages = [...transcript.messages, ...out];
+    transcript.hatSession = { ...nextSession, activeHat: mentioned, awaitingAnswer: false };
+    room.hatSession = transcript.hatSession;
+    write(classId, ws);
+    return { roundMessages: out, message: reply, workspace: ws };
+  }
+
+  const activeHat = (
+    (hat && hat !== 'user' ? hat : null) ||
+    session.activeHat ||
+    'white'
+  ) as Exclude<WarRoomHat, 'user'>;
+
+  // 顺序轮询且等待作答：累计本帽轮次，满 3 轮再切下一帽
+  if (session.mode === 'sequential' && !session.sequentialDone && session.awaitingAnswer) {
+    const answeredHat = (session.activeHat || activeHat) as Exclude<WarRoomHat, 'user'>;
+    const progressed = afterHatStudentAnswer(session, answeredHat);
+    const reply = await generateDemoWarRoomReply(classId, studentDisplayName, answeredHat, text, history, roundIndex);
+    reply.status = progressed.stayOnHat ? 'ask' : undefined;
+    out.push(reply);
+
+    if (progressed.stayOnHat) {
+      transcript.messages = [...transcript.messages, ...out];
+      transcript.hatSession = markAwaitingAnswer(progressed.session, answeredHat);
+      room.hatSession = transcript.hatSession;
+      write(classId, ws);
+      return { roundMessages: out, message: reply, workspace: ws };
+    }
+
+    if (!progressed.session.sequentialDone) {
+      const nextHat = progressed.session.activeHat as Exclude<WarRoomHat, 'user'>;
+      const ask = await generateDemoWarRoomAsk(
+        classId,
+        studentDisplayName,
+        nextHat,
+        [...history, reply],
+        roundIndex + 1
+      );
+      out.push(ask);
+      transcript.messages = [...transcript.messages, ...out];
+      transcript.roundCount = roundIndex + 1;
+      transcript.hatSession = markAwaitingAnswer(progressed.session, nextHat);
+      room.hatSession = transcript.hatSession;
+      write(classId, ws);
+      return { roundMessages: out, message: ask, workspace: ws };
+    }
+
+    transcript.messages = [...transcript.messages, ...out];
+    transcript.hatSession = { ...progressed.session, awaitingAnswer: false };
+    room.hatSession = transcript.hatSession;
+    write(classId, ws);
+    return { roundMessages: out, message: reply, workspace: ws };
+  }
+
+  // 自由模式 / 非等待态：单帽回复
+  const reply = await generateDemoWarRoomReply(classId, studentDisplayName, activeHat, text, history, roundIndex);
+  out.push(reply);
+  transcript.messages = [...transcript.messages, ...out];
+  transcript.hatSession = { ...session, activeHat, awaitingAnswer: false };
+  room.hatSession = transcript.hatSession;
   write(classId, ws);
-  return { roundMessages: messages, workspace: ws, message: messages[messages.length - 1] };
-}
-
-/** 开始辩论 / 不 @：整轮六帽，每人设各一条 */
-async function pushFullHatRound(classId: string, studentDisplayName: string, userMessage: string) {
-  const ws = read(classId);
-  const room = ws.warRoom || { canvas: {}, transcript: { messages: [], roundCount: 0 }, filledCount: 0 };
-  const roundIndex = room.transcript.roundCount || 0;
-  const out: WarRoomDebateMessage[] = [];
-  if (userMessage.trim()) out.push(hatMessage('user', userMessage.trim(), roundIndex));
-
-  const hatOrder = buildWarRoomHatOrder();
-  const orderDesc = hatOrder.map((h, i) => `${i + 1}. ${h}（${WAR_ROOM_HAT_ROLES[h].split('：')[0]}）`).join('\n');
-  const prompt = [
-    `学生显示名：${studentDisplayName}`,
-    userMessage.trim() ? `【学生本轮发言】${userMessage.trim()}` : '【开场】请六帽围绕画布九格做第一轮引导讨论。',
-    '',
-    '【辩论历史】',
-    formatWarRoomHistory(room.transcript.messages),
-    '',
-    '【本轮要求】',
-    '- 输出恰好 6 条 messages，顺序必须如下：',
-    orderDesc,
-    '- 每条必须符合对应帽子人设，禁止串戏',
-    '- 至少 3 条带 targetModule + moduleContent（可采纳写入画布）',
-    '- 蓝帽末条请 @' + studentDisplayName,
-    '',
-    '只返回 JSON：{"messages":[{"hat":"...","content":"...","targetModule":null,"moduleContent":""}]}',
-    `targetModule 只能是：${WAR_ROOM_MODULE_KEYS.join(', ')} 或 null。`,
-  ].join('\n');
-
-  const text = await generateDemoAi(classId, 'war-room-round', prompt);
-  const parsed = parseLooseJson<{ messages?: unknown[] } | null>(text, null);
-  const rawList = Array.isArray(parsed?.messages) ? parsed!.messages! : [];
-
-  hatOrder.forEach((h, index) => {
-    const row = (rawList[index] && typeof rawList[index] === 'object' ? rawList[index] : null) as Record<
-      string,
-      unknown
-    > | null;
-    const fallbackModule = WAR_ROOM_MODULE_KEYS[index % WAR_ROOM_MODULE_KEYS.length];
-    const msg = parseAiHatMessage(row, h, fallbackModule, roundIndex);
-    msg.hat = h;
-    out.push(msg);
-  });
-
-  room.transcript.messages = [...room.transcript.messages, ...out];
-  room.transcript.roundCount = roundIndex + 1;
-  ws.warRoom = room;
-  write(classId, ws);
-  return { roundMessages: out, workspace: ws, message: out[out.length - 1] };
-}
-
-export async function warRoomDebateStart(classId: string, studentDisplayName: string) {
-  return pushFullHatRound(classId, studentDisplayName, '');
-}
-
-export async function warRoomDebateRound(classId: string, studentDisplayName: string, userMessage?: string) {
-  return pushFullHatRound(classId, studentDisplayName, userMessage || '');
-}
-
-export async function warRoomDebateReply(classId: string, studentDisplayName: string, userMessage: string, hat?: WarRoomHat) {
-  const replyHat = (hat && hat !== 'user' ? hat : 'blue') as Exclude<WarRoomHat, 'user'>;
-  const result = await pushSingleHatReply(classId, studentDisplayName, userMessage, replyHat);
-  return { message: result.message, workspace: result.workspace };
+  return { roundMessages: out, message: reply, workspace: ws };
 }
 
 export async function saveWarRoomCanvasCell(classId: string, moduleKey: string, content: string) {

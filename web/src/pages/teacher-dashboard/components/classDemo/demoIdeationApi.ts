@@ -3,6 +3,13 @@
  */
 import { generateDemoAi } from './demoApi';
 import { DEMO_STUDENT_ID, DEMO_STUDENT_NAME, demoId, demoTeamName, nowIso, parseLooseJson, patchFlow, readFlow } from './demoFlow';
+import {
+  afterHatStudentAnswer,
+  coerceHatSession,
+  defaultHatSession,
+  markAwaitingAnswer,
+  switchHatPerspective,
+} from '../../../../lib/sixHatsSession';
 import type {
   HatStudioDebateMessage,
   HatStudioHat,
@@ -17,6 +24,7 @@ import type {
 } from '../../../../lib/studentIdeationApi';
 
 export type {
+  HatSessionState,
   HatStudioDebateMessage,
   HatStudioDraft,
   HatStudioHat,
@@ -36,6 +44,7 @@ export type {
 } from '../../../../lib/studentIdeationApi';
 
 export { parseHatStudioMentionedHat } from '../../../../lib/studentIdeationApi';
+import { parseHatStudioMentionedHat as parseMentionedHat } from '../../../../lib/studentIdeationApi';
 
 const HAT_DEFS = [
   { key: 'ideaTitle', label: '创意标题' },
@@ -151,25 +160,15 @@ function workspaceOf(classId: string, bag: IdeationBag): StudentIdeationWorkspac
 }
 
 const HAT_STUDIO_ROLES: Record<Exclude<HatStudioHat, 'user'>, string> = {
-  white: '白帽（数据分析师）：只基于客观事实和数据发言。补充目标场景规模、用户行为线索、同类方案公开信息等可验证事实，不主观评价。',
-  red: '红帽（用户代表）：以目标用户身份谈第一感受：会不会想用、哪里别扭、最在意什么体验。少讲大道理。',
-  black: '黑帽（风险预警员）：指出关键约束与风险，并给出可写入工作区的调整建议；禁止只做否定。',
-  yellow: '黄帽（乐观倡导者）：挖掘优势、痛点机会、差异亮点，并推动某一工作区字段的可落地表述。',
-  green: '绿帽（创意设计师）：提出差异化创意：功能玩法、触达路径、与竞品不同点，尽量对应具体工作区字段。',
-  blue: '蓝帽（项目经理）：控场与总结。引导讨论、追问关键信息，建议下一步并推动工作区补全。',
+  white: '白帽（客观事实｜补信息）：聚焦事实与可验证数据，提出最多 3 个苏格拉底式追问，不做主观评判。',
+  red: '红帽（用户共情｜贴需求）：站在用户感受提问，最多 3 个苏格拉底式追问。',
+  black: '黑帽（风险批判｜查风险）：审慎识别隐患，最多 3 个苏格拉底式追问。',
+  yellow: '黄帽（正向价值｜判价值）：挖掘价值与优势，最多 3 个苏格拉底式追问。',
+  green: '绿帽（发散创新｜找创新）：鼓励发散与差异化，最多 3 个苏格拉底式追问。',
+  blue: '蓝帽（全局系统｜做统筹）：整合结论、规划下一步，最多 3 个苏格拉底式追问。',
 };
 
 const HAT_STUDIO_DRAFT_KEYS = ['ideaTitle', 'problemInsight', 'userValue', 'solutionPoints', 'riskDiff'] as const;
-const HAT_STUDIO_MIDDLE: Exclude<HatStudioHat, 'user' | 'white' | 'blue'>[] = ['red', 'black', 'yellow', 'green'];
-
-function shuffleHatMiddle() {
-  const arr = [...HAT_STUDIO_MIDDLE];
-  for (let i = arr.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [arr[i], arr[j]] = [arr[j], arr[i]];
-  }
-  return arr;
-}
 
 function hatMessage(
   hat: HatStudioDebateMessage['hat'],
@@ -366,15 +365,25 @@ export async function analyzeStudentIdeationIdea(
   });
 }
 
+const DEMO_MIDWIFERY_WELCOME =
+  '你好！我是启思智能体。很高兴能陪你一起打磨创业想法。\n\n在开始深入探讨之前，我想先听听你目前的构想。请用自己的话简单描述一下：你想解决什么具体问题？或者你的创业想法雏形是什么？';
+
 export async function midwiferyTurn(
   classId: string,
   body: { messages: { role: 'user' | 'assistant'; content: string }[]; roundIndex: number }
 ) {
-  const context = `当前轮次：${body.roundIndex}\n对话历史：\n${JSON.stringify(
-    body.messages.length ? body.messages : [{ role: 'system', content: '（新会话，请发起第 1 轮提问）' }],
-    null,
-    2
-  )}`;
+  // 开场欢迎：固定文案，不调演示 AI
+  const hasUser = body.messages.some((m) => m.role === 'user' && String(m.content || '').trim());
+  if (!hasUser) {
+    return {
+      assistantText: DEMO_MIDWIFERY_WELCOME,
+      roundIndex: 0,
+      canGenerate: false,
+      doneHint: '',
+    };
+  }
+
+  const context = `当前轮次：${body.roundIndex}\n对话历史：\n${JSON.stringify(body.messages, null, 2)}`;
   const raw = await generateDemoAi(classId, 'ideation-midwifery-turn', context);
   const parsed = parseJsonObject(raw);
   const parsedRound = Number(parsed?.roundIndex);
@@ -472,103 +481,76 @@ export async function fetchHatStudio(classId: string): Promise<HatStudioPayload>
   return read(classId).hat;
 }
 
+function syncHatStudioSession(studio: HatStudioPayload, session: ReturnType<typeof coerceHatSession>) {
+  const typed = session as HatStudioPayload['hatSession'];
+  studio.hatSession = typed;
+  studio.transcript.hatSession = typed;
+}
+
 /** 开始/重置：只插引导语，不立刻调模型（与学生对齐） */
 function insertHatGuide(classId: string, studentDisplayName: string) {
   const bag = read(classId);
   const name = studentDisplayName || DEMO_STUDENT_NAME;
   const guide = hatMessage(
     'blue',
-    `${name}，欢迎进入六帽创想室。请先在下方用几句话描述你的创业创意：想解决什么问题、给谁用、大致怎么做。点击「发送发言」后，六顶思考帽会基于你的内容展开引导式讨论；之后也可 @白帽/@红帽/@黑帽/@黄帽/@绿帽/@蓝帽 追问某一角色。`,
+    `${name}，欢迎进入六帽创想室。请先描述你的创业创意（想解决什么问题、给谁用、大致怎么做）。发送后将按「白→绿→黄→黑→红→蓝」顺序，每顶帽子提出最多 3 个苏格拉底式追问，并可进行最多 3 轮对话后再进入下一帽；也可随时 @某帽 专项深挖。核心原则：提问不代改。`,
     0
   );
-  bag.hat.transcript = { messages: [guide], roundCount: 0 };
+  guide.status = 'guide';
+  const session = defaultHatSession();
+  bag.hat.transcript = { messages: [guide], roundCount: 0, hatSession: session as HatStudioPayload['hatSession'] };
+  syncHatStudioSession(bag.hat, session);
   write(classId, bag);
   return { roundMessages: [guide], studio: bag.hat, message: guide };
 }
 
-/** @ 某一顶帽子：按该帽人设单条回复 */
-async function pushHatSingleReply(
+async function generateDemoHatAsk(
   classId: string,
   studentDisplayName: string,
-  userMessage: string,
-  hat: Exclude<HatStudioHat, 'user'>
+  hat: Exclude<HatStudioHat, 'user'>,
+  history: HatStudioDebateMessage[],
+  roundIndex: number
 ) {
-  const bag = read(classId);
-  const roundIndex = bag.hat.transcript.roundCount || 0;
-  const messages: HatStudioDebateMessage[] = [];
-  if (userMessage.trim()) messages.push(hatMessage('user', userMessage.trim(), roundIndex));
-  const fallbackKey = HAT_STUDIO_DRAFT_KEYS[Math.min(roundIndex, HAT_STUDIO_DRAFT_KEYS.length - 1)];
   const prompt = [
-    '【学生发言】',
-    `${studentDisplayName}：${userMessage.trim()}`,
+    `【辩论历史】\n${formatHatHistory(history)}`,
     '',
     `【你的角色】${HAT_STUDIO_ROLES[hat]}`,
-    '必须严格以该角色身份回复，禁止串成其他帽子或通用助教。',
-    '',
-    '【辩论历史】',
-    formatHatHistory(bag.hat.transcript.messages),
-    '',
-    '只返回 JSON：',
-    `{"hat":"${hat}","content":"发言正文","targetModule":"工作区键名或 null","moduleContent":"可写入全文","fills":[{"targetModule":"工作区键名","moduleContent":"全文"}]}`,
-    `targetModule 只能是：${HAT_STUDIO_DRAFT_KEYS.join(', ')} 或 null。`,
-    `优先字段：${fallbackKey}。fills 至少 1 条。`,
+    `面向 ${studentDisplayName}，以该帽视角提出最多 3 个苏格拉底式追问（提问不代改）。`,
+    `只返回 JSON：{"hat":"${hat}","content":"提问正文","questions":["追问1","追问2","追问3"]}`,
   ].join('\n');
-
-  const text = await generateDemoAi(classId, 'hat-studio-reply', prompt);
+  const text = await generateDemoAi(classId, 'hat-studio-ask', prompt);
   const parsed = parseLooseJson<Record<string, unknown> | null>(text, null);
-  messages.push(parseHatAiMessage(parsed, hat, fallbackKey, roundIndex));
-
-  bag.hat.transcript.messages = [...bag.hat.transcript.messages, ...messages];
-  write(classId, bag);
-  return { roundMessages: messages, studio: bag.hat, message: messages[messages.length - 1] };
+  let content = stripHatMd(String(parsed?.content || ''));
+  const questions = Array.isArray(parsed?.questions)
+    ? parsed!.questions!.map((q) => String(q || '').trim()).filter(Boolean).slice(0, 3)
+    : [];
+  if (!content && questions.length) content = questions.map((q, i) => `${i + 1}. ${q}`).join('\n');
+  if (!content) content = `${HAT_STUDIO_ROLES[hat].split('：')[0]}：请补充可验证的信息。`;
+  const msg = hatMessage(hat, content, roundIndex);
+  msg.status = 'ask';
+  return msg;
 }
 
-/** 不 @：整轮六帽，每人设各一条 */
-async function pushHatFullRound(classId: string, studentDisplayName: string, userMessage: string) {
-  const bag = read(classId);
-  const roundIndex = bag.hat.transcript.roundCount || 0;
-  const out: HatStudioDebateMessage[] = [];
-  if (userMessage.trim()) out.push(hatMessage('user', userMessage.trim(), roundIndex));
-
-  const hatOrder: Exclude<HatStudioHat, 'user'>[] = ['white', ...shuffleHatMiddle(), 'blue'];
-  const orderDesc = hatOrder.map((h, i) => `${i + 1}. ${h}（${HAT_STUDIO_ROLES[h].split('：')[0]}）`).join('\n');
+async function generateDemoHatReply(
+  classId: string,
+  studentDisplayName: string,
+  hat: Exclude<HatStudioHat, 'user'>,
+  userMessage: string,
+  history: HatStudioDebateMessage[],
+  roundIndex: number
+) {
+  const fallbackKey = HAT_STUDIO_DRAFT_KEYS[Math.min(roundIndex, HAT_STUDIO_DRAFT_KEYS.length - 1)];
   const prompt = [
-    `学生显示名：${studentDisplayName}`,
-    `【学生本轮创意/发言】${userMessage.trim() || '（学生尚未描述创意）'}`,
+    `【辩论历史】\n${formatHatHistory(history)}`,
     '',
-    '【辩论历史】',
-    formatHatHistory(bag.hat.transcript.messages),
-    '',
-    '【本轮要求】',
-    '- 输出恰好 6 条 messages，顺序必须如下：',
-    orderDesc,
-    '- 每条必须符合对应帽子人设，禁止串戏；紧扣学生创意',
-    '- 至少 4 条带 targetModule + moduleContent',
-    `- 蓝帽末条请 @${studentDisplayName}`,
-    '',
-    '只返回 JSON：{"messages":[{"hat":"...","content":"...","targetModule":null,"moduleContent":""}]}',
-    `targetModule 只能是：${HAT_STUDIO_DRAFT_KEYS.join(', ')} 或 null。`,
+    `【学生发言】${studentDisplayName}：${userMessage.trim()}`,
+    `【你的角色】${HAT_STUDIO_ROLES[hat]}`,
+    '承接学生回答并继续提问引导（提问不代改）。',
+    `只返回 JSON：{"hat":"${hat}","content":"回复正文","targetModule":"${fallbackKey}","moduleContent":"可写入要点"}`,
   ].join('\n');
-
-  const text = await generateDemoAi(classId, 'hat-studio-round', prompt);
-  const parsed = parseLooseJson<{ messages?: unknown[] } | null>(text, null);
-  const rawList = Array.isArray(parsed?.messages) ? parsed!.messages! : [];
-
-  hatOrder.forEach((h, index) => {
-    const row = (rawList[index] && typeof rawList[index] === 'object' ? rawList[index] : null) as Record<
-      string,
-      unknown
-    > | null;
-    const fallbackKey = HAT_STUDIO_DRAFT_KEYS[index % HAT_STUDIO_DRAFT_KEYS.length];
-    const msg = parseHatAiMessage(row, h, fallbackKey, roundIndex);
-    msg.hat = h;
-    out.push(msg);
-  });
-
-  bag.hat.transcript.messages = [...bag.hat.transcript.messages, ...out];
-  bag.hat.transcript.roundCount = roundIndex + 1;
-  write(classId, bag);
-  return { roundMessages: out, studio: bag.hat, message: out[out.length - 1] };
+  const text = await generateDemoAi(classId, 'hat-studio-reply', prompt);
+  const parsed = parseLooseJson<Record<string, unknown> | null>(text, null);
+  return parseHatAiMessage(parsed, hat, fallbackKey, roundIndex);
 }
 
 export async function hatStudioDebateStart(classId: string, studentDisplayName: string) {
@@ -578,21 +560,118 @@ export async function hatStudioDebateStart(classId: string, studentDisplayName: 
 export async function hatStudioReset(classId: string, studentDisplayName: string, opts?: { clearDraft?: boolean }) {
   const bag = read(classId);
   bag.hat.transcript = { messages: [], roundCount: 0 };
+  bag.hat.hatSession = undefined;
   if (opts?.clearDraft) bag.hat.draft = {};
   write(classId, bag);
   return insertHatGuide(classId, studentDisplayName);
 }
 
-export async function hatStudioDebateRound(classId: string, studentDisplayName: string, userMessage: string) {
-  return pushHatFullRound(classId, studentDisplayName, userMessage);
+export async function hatStudioDebateRound(
+  classId: string,
+  studentDisplayName: string,
+  userMessage: string,
+  activeHat?: string
+) {
+  return hatStudioDebateReply(classId, studentDisplayName, userMessage, activeHat);
 }
 
-export async function hatStudioDebateReply(classId: string, studentDisplayName: string, userMessage: string, hat?: string) {
+export async function hatStudioDebateReply(
+  classId: string,
+  studentDisplayName: string,
+  userMessage: string,
+  activeHat?: string
+) {
+  const bag = read(classId);
+  const text = String(userMessage || '').trim();
+  if (!text) throw new Error('请输入发言内容');
+  if (!bag.hat.transcript.messages.length) throw new Error('请先开始讨论');
+
+  const session = coerceHatSession(bag.hat.transcript.hatSession || bag.hat.hatSession);
+  const roundIndex = bag.hat.transcript.roundCount || 0;
+  const out: HatStudioDebateMessage[] = [hatMessage('user', text, roundIndex)];
+  const history = [...bag.hat.transcript.messages, ...out];
+  const mentioned = parseMentionedHat(text);
+
+  // @某帽：单帽回复，不推进顺序
+  if (mentioned) {
+    const switched = switchHatPerspective(session, mentioned);
+    const nextSession = 'error' in switched ? session : switched.session;
+    const reply = await generateDemoHatReply(classId, studentDisplayName, mentioned, text, history, roundIndex);
+    out.push(reply);
+    bag.hat.transcript.messages = [...bag.hat.transcript.messages, ...out];
+    syncHatStudioSession(bag.hat, { ...nextSession, activeHat: mentioned, awaitingAnswer: false });
+    write(classId, bag);
+    return { message: reply, roundMessages: out, studio: bag.hat };
+  }
+
+  const onlyGuide = bag.hat.transcript.messages.every((m) => m.hat === 'user' || m.status === 'guide');
+  const hasAsk = bag.hat.transcript.messages.some((m) => m.status === 'ask');
+
+  // 首次描述创意：仅白帽发起苏格拉底三问
+  if (onlyGuide || (!session.awaitingAnswer && !session.completedHats.length && !hasAsk)) {
+    const ask = await generateDemoHatAsk(classId, studentDisplayName, 'white', history, roundIndex);
+    out.push(ask);
+    bag.hat.transcript.messages = [...bag.hat.transcript.messages, ...out];
+    bag.hat.transcript.roundCount = roundIndex + 1;
+    syncHatStudioSession(bag.hat, markAwaitingAnswer(defaultHatSession(), 'white'));
+    write(classId, bag);
+    return { message: ask, roundMessages: out, studio: bag.hat };
+  }
+
+  // 顺序轮询：未满 3 轮续问本帽，满 3 轮切下一帽
+  if (session.mode === 'sequential' && !session.sequentialDone && session.awaitingAnswer) {
+    const answeredHat = (session.activeHat || 'white') as Exclude<HatStudioHat, 'user'>;
+    const progressed = afterHatStudentAnswer(session, answeredHat);
+    const reply = await generateDemoHatReply(classId, studentDisplayName, answeredHat, text, history, roundIndex);
+    if (progressed.stayOnHat) reply.status = 'ask';
+    out.push(reply);
+
+    if (progressed.stayOnHat) {
+      bag.hat.transcript.messages = [...bag.hat.transcript.messages, ...out];
+      syncHatStudioSession(bag.hat, markAwaitingAnswer(progressed.session, answeredHat));
+      write(classId, bag);
+      return { message: reply, roundMessages: out, studio: bag.hat };
+    }
+
+    if (!progressed.session.sequentialDone) {
+      const nextHat = progressed.session.activeHat as Exclude<HatStudioHat, 'user'>;
+      const ask = await generateDemoHatAsk(classId, studentDisplayName, nextHat, [...history, reply], roundIndex + 1);
+      out.push(ask);
+      bag.hat.transcript.messages = [...bag.hat.transcript.messages, ...out];
+      bag.hat.transcript.roundCount = roundIndex + 1;
+      syncHatStudioSession(bag.hat, markAwaitingAnswer(progressed.session, nextHat));
+      write(classId, bag);
+      return { message: ask, roundMessages: out, studio: bag.hat };
+    }
+
+    bag.hat.transcript.messages = [...bag.hat.transcript.messages, ...out];
+    syncHatStudioSession(bag.hat, { ...progressed.session, awaitingAnswer: false });
+    write(classId, bag);
+    return { message: reply, roundMessages: out, studio: bag.hat };
+  }
+
   const replyHat = (
-    hat && ['white', 'red', 'black', 'yellow', 'green', 'blue'].includes(hat) ? hat : 'blue'
+    activeHat && ['white', 'red', 'black', 'yellow', 'green', 'blue'].includes(activeHat)
+      ? activeHat
+      : session.activeHat || 'white'
   ) as Exclude<HatStudioHat, 'user'>;
-  const result = await pushHatSingleReply(classId, studentDisplayName, userMessage, replyHat);
-  return { message: result.message, studio: result.studio };
+  const reply = await generateDemoHatReply(classId, studentDisplayName, replyHat, text, history, roundIndex);
+  out.push(reply);
+  bag.hat.transcript.messages = [...bag.hat.transcript.messages, ...out];
+  syncHatStudioSession(bag.hat, { ...session, activeHat: replyHat, awaitingAnswer: false });
+  write(classId, bag);
+  return { message: reply, roundMessages: out, studio: bag.hat };
+}
+
+export async function hatStudioSwitchHat(classId: string, hat: string) {
+  const bag = read(classId);
+  const session = coerceHatSession(bag.hat.transcript.hatSession || bag.hat.hatSession);
+  const switched = switchHatPerspective(session, hat);
+  if (!('error' in switched)) {
+    syncHatStudioSession(bag.hat, switched.session);
+  }
+  write(classId, bag);
+  return { studio: bag.hat };
 }
 
 export async function saveHatStudioDraftCell(classId: string, moduleKey: string, content: string): Promise<HatStudioPayload> {

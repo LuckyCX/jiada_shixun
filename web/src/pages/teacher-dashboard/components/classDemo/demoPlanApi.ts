@@ -5,6 +5,7 @@ import { BUSINESS_PLAN_SECTION_DEFS, defaultCover } from '../../../../lib/busine
 import type { BusinessPlanSection, BusinessPlanSectionLock, BusinessPlanWorkspace } from '../../../../lib/studentBusinessPlanApi';
 import { uploadDemoFile } from './demoApi';
 import { generateDemoAi } from './demoApi';
+import { ensurePlanEditorHtml } from '../../../../lib/planEditorHtml';
 import { DEMO_STUDENT_ID, DEMO_STUDENT_NAME, demoId, demoTeamName, htmlParagraphs, nowIso, readFlow, writeFlow } from './demoFlow';
 import type { BusinessPlan, ReviewFormData } from './planReview/types';
 
@@ -187,18 +188,125 @@ export async function fillBusinessPlanSection(
   classId: string,
   body: { sectionKey: string; mode: 'overwrite' | 'expand'; sections: BusinessPlanSection[]; revision: number }
 ) {
-  const text = await generateDemoAi(classId, 'plan-comment', `请撰写章节 ${body.sectionKey} 的课堂正文。已有内容：${body.sections.find((item) => item.key === body.sectionKey)?.content || '空'}`);
+  const text = await generateDemoAi(classId, 'plan-generate-section', `请撰写章节 ${body.sectionKey} 的课堂正文。已有内容：${body.sections.find((item) => item.key === body.sectionKey)?.content || '空'}`);
   const bag = read(classId);
   const sections = body.sections.length ? body.sections : bag.workspace.sections;
   bag.workspace.sections = sections.map((item) => {
     if (item.key !== body.sectionKey) return item;
-    const html = htmlParagraphs(text);
+    const html = ensurePlanEditorHtml(text || htmlParagraphs(`（演示）${item.title}`));
     const content = body.mode === 'expand' && item.content ? `${item.content}${html}` : html;
     return { ...item, content };
   });
   bag.workspace.revision = Math.max(bag.workspace.revision, body.revision) + 1;
   write(classId, bag);
   return bag.workspace;
+}
+
+function stripHtmlDemo(s: string) {
+  return String(s || '')
+    .replace(/<[^>]+>/g, '')
+    .trim();
+}
+
+/** 从演示各环节 session 拼前期上下文（含市场分析/画像） */
+function buildDemoPlanContextBundle(classId: string) {
+  const ideation = readFlow<{ topic?: Record<string, unknown> | null }>(classId, 'ideation', {});
+  const market = readFlow<{
+    analysis?: { result?: unknown; generatedAt?: string };
+    personas?: unknown[];
+    plan?: { goal?: string };
+  }>(classId, 'market', {});
+  const product = readFlow<{ contextText?: string; suggestions?: unknown }>(classId, 'product', {});
+  const business = readFlow<Record<string, unknown>>(classId, 'business', {});
+  const simulation = readFlow<unknown[]>(classId, 'simulation', []);
+  const parts = [
+    '【前期实训汇编 · 课堂演示】',
+    ideation.topic ? `【选题】\n${JSON.stringify(ideation.topic).slice(0, 2000)}` : '【选题】（暂无）',
+    market.plan?.goal ? `【调研计划目标】\n${String(market.plan.goal).slice(0, 800)}` : '',
+    market.analysis?.result
+      ? `【市场调研 · AI智能分析报告】\n${JSON.stringify(market.analysis.result).slice(0, 5000)}`
+      : '【市场调研 · AI智能分析报告】\n（暂无）',
+    Array.isArray(market.personas) && market.personas.length
+      ? `【市场调研 · 用户画像】\n${JSON.stringify(market.personas.slice(0, 6)).slice(0, 4000)}`
+      : '【市场调研 · 用户画像】\n（暂无）',
+    product.contextText ? `【产品设计背景】\n${String(product.contextText).slice(0, 1500)}` : '',
+    product.suggestions ? `【产品 AI 建议】\n${JSON.stringify(product.suggestions).slice(0, 2000)}` : '',
+    `【商业模式】\n${JSON.stringify({
+      swot: business.swot,
+      marketing: business.marketing,
+      finance: business.finance,
+      bmc: business.bmc,
+    }).slice(0, 4000)}`,
+    Array.isArray(simulation) && simulation.length
+      ? `【仿真摘要】\n${JSON.stringify(simulation.slice(0, 2)).slice(0, 1500)}`
+      : '',
+  ];
+  return parts.filter(Boolean).join('\n\n').slice(0, 18000);
+}
+
+/** 演示端一键填写：非流式，一次生成整本 JSON 后落库（对齐学生端） */
+export async function generateBusinessPlan(
+  classId: string,
+  body: { mode: 'full' | 'incremental'; sections: BusinessPlanSection[] }
+): Promise<BusinessPlanWorkspace & { savedCount?: number }> {
+  const bag = read(classId);
+  let sections = (body.sections?.length ? body.sections : bag.workspace.sections).map((s) => ({ ...s }));
+  const mode = body.mode === 'full' ? 'full' : 'incremental';
+  const targets = sections.filter((s) => (mode === 'full' ? true : stripHtmlDemo(s.content).length === 0));
+  if (!targets.length) {
+    return { ...bag.workspace, savedCount: 0 };
+  }
+  if (mode === 'full') {
+    sections = sections.map((s) => ({ ...s, content: '' }));
+  }
+  const contextBundle = buildDemoPlanContextBundle(classId);
+  const list = targets.map((s) => ({ key: s.key, title: s.title, guide: s.guide || undefined }));
+  const raw = await generateDemoAi(
+    classId,
+    'plan-generate-full',
+    [
+      contextBundle,
+      '',
+      `【输入章节列表（必须全部生成，共 ${list.length} 章）】`,
+      JSON.stringify(list, null, 2),
+      '请输出完整 JSON：{"sections":[{"key","title","content"},...]}',
+    ].join('\n')
+  );
+  let parsed: { sections?: { key?: string; title?: string; content?: string }[] } | null = null;
+  try {
+    parsed = JSON.parse(raw) as typeof parsed;
+  } catch {
+    const m = raw.match(/\{[\s\S]*\}/);
+    if (m) {
+      try {
+        parsed = JSON.parse(m[0]) as typeof parsed;
+      } catch {
+        parsed = null;
+      }
+    }
+  }
+  const genByKey = new Map(
+    (Array.isArray(parsed?.sections) ? parsed!.sections! : [])
+      .map((s) => [String(s?.key || '').trim(), s] as const)
+      .filter(([k]) => k)
+  );
+  const missing = targets.filter((t) => !String(genByKey.get(t.key)?.content || '').trim());
+  if (missing.length) {
+    throw new Error(`AI 未完整返回全部章节（缺少：${missing.map((t) => t.title || t.key).join('、')}），请重试`);
+  }
+  let savedCount = 0;
+  for (const sec of targets) {
+    const hit = genByKey.get(sec.key);
+    const html = ensurePlanEditorHtml(String(hit?.content || '').trim());
+    sections = sections.map((s) => (s.key === sec.key ? { ...s, content: html } : s));
+    savedCount += 1;
+  }
+  bag.workspace.sections = sections;
+  bag.workspace.revision += 1;
+  bag.workspace.updatedAt = nowIso();
+  bag.workspace.updatedByName = DEMO_STUDENT_NAME;
+  write(classId, bag);
+  return { ...bag.workspace, savedCount };
 }
 
 export async function submitBusinessPlan(classId: string, files: File[] = [], versionId?: string) {

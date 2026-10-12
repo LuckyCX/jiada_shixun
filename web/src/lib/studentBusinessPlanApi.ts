@@ -214,19 +214,19 @@ export async function previewBusinessPlanVersion(
   );
 }
 
-export async function generateBusinessPlan(classId: string): Promise<BusinessPlanWorkspace> {
+/** 一键填写计划书：非流式，后端生成并落库后返回工作区 */
+export async function generateBusinessPlan(
+  classId: string,
+  body: { mode: 'full' | 'incremental'; sections: BusinessPlanSection[] } = {
+    mode: 'full',
+    sections: [],
+  }
+): Promise<BusinessPlanWorkspace & { savedCount?: number }> {
   return studentFetch(`/api/student/personal-classes/${classId}/business-plan/generate`, {
     method: 'POST',
-    body: JSON.stringify({}),
+    body: JSON.stringify(body),
   });
 }
-
-export type BusinessPlanGenerateStreamEvent =
-  | { event: 'log'; data: { text: string } }
-  | { event: 'thinking'; data: { text: string } }
-  | { event: 'section'; data: { key: string; title?: string; content: string; done?: boolean } }
-  | { event: 'done'; data: { savedCount?: number } }
-  | { event: 'error'; data: { message: string } };
 
 async function readSsePost(
   path: string,
@@ -298,24 +298,6 @@ async function readSsePost(
       }
     }
   }
-}
-
-export async function generateBusinessPlanStream(
-  classId: string,
-  body: { mode: 'full' | 'incremental'; sections: BusinessPlanSection[] },
-  handlers: {
-    onLog?: (text: string) => void;
-    onThinking?: (text: string) => void;
-    onSection?: (payload: { key: string; title?: string; content: string; done?: boolean }) => void;
-    onDone?: (payload: { savedCount?: number }) => void;
-    onError?: (message: string) => void;
-  }
-) {
-  await readSsePost(
-    `/api/student/personal-classes/${encodeURIComponent(classId)}/business-plan/generate/stream`,
-    body,
-    handlers
-  );
 }
 
 export async function fillBusinessPlanSection(

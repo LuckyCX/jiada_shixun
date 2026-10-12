@@ -3,6 +3,7 @@
  */
 import { generateDemoAi, uploadDemoFile } from './demoApi';
 import { DEMO_STUDENT_ID, DEMO_STUDENT_NAME, demoId, nowIso, patchFlow, readFlow } from './demoFlow';
+import { fetchCourseSettings, normalizeMarketFeatures } from '../../../../lib/courseSettingsApi';
 import {
   MARKET_UPLOAD_METHODS,
   buildPublicSurveyUrl,
@@ -10,6 +11,7 @@ import {
   type ChallengeFinalReport,
   type ChallengeSessionRecord,
   type MarketAnalysisResult,
+  type MarketCourseFeatures,
   type MarketPersona,
   type MarketPlanResponse,
   type MarketResearchPlan,
@@ -412,12 +414,24 @@ function write(classId: string, bag: MarketBag) {
   return patchFlow(classId, 'market', emptyBag(), () => bag);
 }
 
-function planResponse(bag: MarketBag): MarketPlanResponse {
+async function loadDemoMarketFeatures(classId: string): Promise<MarketCourseFeatures> {
+  try {
+    const data = await fetchCourseSettings(classId);
+    const market = data.settings?.find((s) => s.moduleKey === 'market');
+    return normalizeMarketFeatures(market?.features);
+  } catch {
+    return normalizeMarketFeatures({});
+  }
+}
+
+async function planResponse(bag: MarketBag, classId: string): Promise<MarketPlanResponse> {
+  const features = await loadDemoMarketFeatures(classId);
   return {
     plan: bag.plan,
     isTeamLeader: true,
     teamMembers: [{ id: DEMO_STUDENT_ID, name: DEMO_STUDENT_NAME }],
     stagePeriod: demoStagePeriod(bag.plan),
+    features,
   };
 }
 
@@ -426,14 +440,18 @@ function withIds(questions: Omit<MarketSurveyQuestion, 'id'>[]): MarketSurveyQue
 }
 
 export async function fetchMarketResearchPlan(classId: string) {
-  return planResponse(read(classId));
+  return planResponse(read(classId), classId);
 }
 
 export async function saveMarketResearchPlan(classId: string, plan: MarketResearchPlan) {
   const bag = read(classId);
+  const features = await loadDemoMarketFeatures(classId);
+  if (features.uploadEnabled && !(plan.methods || []).length) {
+    throw new Error('请至少选择一种调研方法');
+  }
   bag.plan = { ...plan, savedAt: nowIso() };
   write(classId, bag);
-  return planResponse(bag);
+  return planResponse(bag, classId);
 }
 
 export async function listMarketSurveys(classId: string) {
@@ -535,6 +553,10 @@ export async function listMarketMethodUploads(classId: string, method: string) {
 }
 
 export async function uploadMarketMethodFile(classId: string, method: string, file: File) {
+  const features = await loadDemoMarketFeatures(classId);
+  if (!features.uploadEnabled) {
+    throw new Error('教师已关闭调研数据上传，无法上传文件');
+  }
   const saved = await uploadDemoFile(classId, file);
   const item: StoredUpload = {
     id: demoId(),

@@ -25,25 +25,31 @@ import {
 } from '../lib/businessModelPrompts.js';
 import {
   WAR_ROOM_MODULE_KEYS,
-  WAR_ROOM_ROUND_SYSTEM_PROMPT,
+  WAR_ROOM_ASK_SYSTEM_PROMPT,
   WAR_ROOM_SINGLE_REPLY_SYSTEM_PROMPT,
-  buildRoundHatOrder,
-  buildWarRoomRoundUserPrompt,
+  buildWarRoomAskUserPrompt,
   buildWarRoomSingleReplyUserPrompt,
   parseMentionedHatFromText,
-  parseWarRoomRoundFromLlmText,
+  parseWarRoomAskFromLlmText,
   parseWarRoomSingleReplyFromLlmText,
 } from '../lib/businessModelWarRoomPrompts.js';
+import {
+  afterHatStudentAnswer,
+  coerceHatSession,
+  defaultHatSession,
+  markAwaitingAnswer,
+  switchHatPerspective,
+} from '../lib/sixHatsSession.js';
 
 const router = Router();
 
 const HAT_UPDATED_BY = {
-  white: '白帽 - 数据分析师',
-  red: '红帽 - 用户代表',
-  black: '黑帽 - 风险预警员',
-  yellow: '黄帽 - 乐观倡导者',
-  green: '绿帽 - 创意设计师',
-  blue: '蓝帽 - 项目经理',
+  white: '白帽 - 客观事实｜补信息',
+  green: '绿帽 - 发散创新｜找创新',
+  yellow: '黄帽 - 正向价值｜判价值',
+  black: '黑帽 - 风险批判｜查风险',
+  red: '红帽 - 用户共情｜贴需求',
+  blue: '蓝帽 - 全局系统｜做统筹',
 };
 
 function defaultWarRoomCanvas() {
@@ -80,7 +86,7 @@ function coerceWarRoomFills(arr) {
 
 function coerceWarRoomTranscript(j) {
   if (!j || typeof j !== 'object' || Array.isArray(j)) {
-    return { messages: [], roundCount: 0 };
+    return { messages: [], roundCount: 0, hatSession: defaultHatSession() };
   }
   const messages = Array.isArray(j.messages) ? j.messages : [];
   return {
@@ -99,6 +105,7 @@ function coerceWarRoomTranscript(j) {
       createdAt: m.createdAt ? String(m.createdAt) : new Date().toISOString(),
     })),
     roundCount: Number(j.roundCount) || 0,
+    hatSession: coerceHatSession(j.hatSession),
   };
 }
 
@@ -135,7 +142,7 @@ function coerceBmc(j) {
   return base;
 }
 
-async function assertBusinessCanvasSubmitReady(pool, teamId, members) {
+async function assertBusinessCanvasSubmitReady(pool, teamId) {
   const row = await loadWorkspaceRow(pool, teamId);
   if (!row?.swot_saved_at) {
     return { ok: false, status: 400, code: 40028, message: '请先保存 SWOT 分析' };
@@ -146,36 +153,15 @@ async function assertBusinessCanvasSubmitReady(pool, teamId, members) {
   if (!row?.finance_saved_at) {
     return { ok: false, status: 400, code: 40030, message: '请先保存成本与财务分析' };
   }
-  const missing = await getWarRoomTeamMissingMembers(pool, teamId, members);
-  if (missing.length > 0) {
-    return {
-      ok: false,
-      status: 400,
-      code: 40027,
-      message: '组员尚未完成虚拟董事会演练',
-      data: { missingMembers: missing },
-    };
-  }
-  return { ok: true };
-}
-
-async function getWarRoomTeamMissingMembers(pool, teamId, members) {
-  const { rows } = await pool.query(
-    `SELECT student_id, canvas_json
-     FROM teacher_personal_class_team_war_room_saved_record
-     WHERE team_id = $1`,
+  // 至少完成 1 次 AI 审查后才允许上传画布给教师
+  const { rows: reviewRows } = await pool.query(
+    `SELECT COUNT(*)::int AS cnt FROM teacher_personal_class_team_bmc_ai_reviews WHERE team_id = $1`,
     [teamId]
   );
-  const byId = new Map(rows.map((r) => [String(r.student_id), r]));
-  const missing = [];
-  for (const m of members) {
-    const row = byId.get(String(m.id));
-    const filled = row ? warRoomFilledCount(coerceWarRoomCanvas(row.canvas_json)) : 0;
-    if (filled < WAR_ROOM_MODULE_KEYS.length) {
-      missing.push({ studentId: String(m.id), studentName: m.name });
-    }
+  if (Number(reviewRows[0]?.cnt || 0) < 1) {
+    return { ok: false, status: 400, code: 40031, message: '请先完成至少 1 次 AI 审查后再上传画布' };
   }
-  return missing;
+  return { ok: true };
 }
 
 async function loadWarRoomSavedRecordsWithCanvas(pool, teamId) {
@@ -386,12 +372,26 @@ function coerceFinance(j) {
 
 function rowToApi(r, warRoomMember) {
   const canvas = warRoomMember?.canvas ?? defaultWarRoomCanvas();
-  const transcript = warRoomMember?.transcript ?? { messages: [], roundCount: 0 };
+  const transcript = warRoomMember?.transcript ?? {
+    messages: [],
+    roundCount: 0,
+    hatSession: defaultHatSession(),
+  };
+  const hatSession = coerceHatSession(transcript.hatSession);
   const teamRecords = warRoomMember?.teamRecords ?? [];
   const bmcBase = {
     bmc: defaultBmc(),
     bmcCanvasSavedAt: '',
     bmcCanvasGeneratedAt: '',
+    bmcReviewStatus: 'draft',
+    bmcReviewComment: '',
+    bmcReviewedAt: '',
+  };
+  const warRoomPayload = {
+    canvas,
+    transcript: { ...transcript, hatSession },
+    hatSession,
+    filledCount: warRoomFilledCount(canvas),
   };
   if (!r) {
     return {
@@ -401,11 +401,7 @@ function rowToApi(r, warRoomMember) {
       swotSavedAt: '',
       marketingSavedAt: '',
       financeSavedAt: '',
-      warRoom: {
-        canvas,
-        transcript,
-        filledCount: warRoomFilledCount(canvas),
-      },
+      warRoom: warRoomPayload,
       warRoomTeamRecords: teamRecords,
       ...bmcBase,
     };
@@ -417,24 +413,24 @@ function rowToApi(r, warRoomMember) {
     swotSavedAt: r.swot_saved_at ? new Date(r.swot_saved_at).toISOString() : '',
     marketingSavedAt: r.marketing_saved_at ? new Date(r.marketing_saved_at).toISOString() : '',
     financeSavedAt: r.finance_saved_at ? new Date(r.finance_saved_at).toISOString() : '',
-    warRoom: {
-      canvas,
-      transcript,
-      filledCount: warRoomFilledCount(canvas),
-    },
+    warRoom: warRoomPayload,
     warRoomTeamRecords: teamRecords,
     bmc: coerceBmc(r.bmc_canvas_json),
     bmcCanvasSavedAt: r.bmc_canvas_saved_at ? new Date(r.bmc_canvas_saved_at).toISOString() : '',
     bmcCanvasGeneratedAt: r.bmc_canvas_generated_at
       ? new Date(r.bmc_canvas_generated_at).toISOString()
       : '',
+    bmcReviewStatus: String(r.bmc_review_status || 'draft'),
+    bmcReviewComment: String(r.bmc_review_comment || ''),
+    bmcReviewedAt: r.bmc_reviewed_at ? new Date(r.bmc_reviewed_at).toISOString() : '',
   };
 }
 
 const WORKSPACE_SELECT = `SELECT swot_json, marketing_json, finance_json,
             swot_saved_at, marketing_saved_at, finance_saved_at,
             war_room_canvas_json, war_room_transcript_json, war_room_updated_at,
-            bmc_canvas_json, bmc_canvas_generated_at, bmc_canvas_saved_at, bmc_canvas_saved_by
+            bmc_canvas_json, bmc_canvas_generated_at, bmc_canvas_saved_at, bmc_canvas_saved_by,
+            bmc_review_status, bmc_review_comment, bmc_reviewed_at, bmc_reviewed_by
      FROM teacher_personal_class_team_business_model_workspace`;
 
 async function loadWorkspaceRow(pool, teamId) {
@@ -514,7 +510,7 @@ async function loadWarRoomWorkspaceContext(pool, teamId, studentId) {
     canvas: memberRow ? coerceWarRoomCanvas(memberRow.canvas_json) : defaultWarRoomCanvas(),
     transcript: memberRow
       ? coerceWarRoomTranscript(memberRow.transcript_json)
-      : { messages: [], roundCount: 0 },
+      : { messages: [], roundCount: 0, hatSession: defaultHatSession() },
   };
 }
 
@@ -773,19 +769,32 @@ async function persistBmcFields(pool, teamId, studentId, bmc, opts) {
   const bmcGeneratedAt = opts.setGenerated ? new Date() : row?.bmc_canvas_generated_at || null;
   const bmcSavedAt = opts.setSaved ? new Date() : row?.bmc_canvas_saved_at || null;
   const bmcSavedBy = opts.setSaved ? studentId : row?.bmc_canvas_saved_by || null;
+  // 上传画布 → 进入教师待审；仅草稿保存不改审核态
+  const reviewStatus = opts.setSaved
+    ? 'pending'
+    : opts.reviewStatus || row?.bmc_review_status || 'draft';
+  const reviewComment = opts.setSaved ? '' : row?.bmc_review_comment || '';
+  const reviewedAt = opts.setSaved ? null : row?.bmc_reviewed_at || null;
+  const reviewedBy = opts.setSaved ? null : row?.bmc_reviewed_by || null;
 
   await pool.query(
     `INSERT INTO teacher_personal_class_team_business_model_workspace
        (team_id, swot_json, marketing_json, finance_json,
         swot_saved_at, marketing_saved_at, finance_saved_at,
         bmc_canvas_json, bmc_canvas_generated_at, bmc_canvas_saved_at, bmc_canvas_saved_by,
+        bmc_review_status, bmc_review_comment, bmc_reviewed_at, bmc_reviewed_by,
         updated_by, updated_at)
-     VALUES ($1, $2::jsonb, $3::jsonb, $4::jsonb, $5, $6, $7, $8::jsonb, $9, $10, $11, $12, now())
+     VALUES ($1, $2::jsonb, $3::jsonb, $4::jsonb, $5, $6, $7, $8::jsonb, $9, $10, $11,
+             $12, $13, $14, $15, $16, now())
      ON CONFLICT (team_id) DO UPDATE SET
        bmc_canvas_json = EXCLUDED.bmc_canvas_json,
        bmc_canvas_generated_at = EXCLUDED.bmc_canvas_generated_at,
        bmc_canvas_saved_at = EXCLUDED.bmc_canvas_saved_at,
        bmc_canvas_saved_by = EXCLUDED.bmc_canvas_saved_by,
+       bmc_review_status = EXCLUDED.bmc_review_status,
+       bmc_review_comment = EXCLUDED.bmc_review_comment,
+       bmc_reviewed_at = EXCLUDED.bmc_reviewed_at,
+       bmc_reviewed_by = EXCLUDED.bmc_reviewed_by,
        updated_by = EXCLUDED.updated_by,
        updated_at = now()`,
     [
@@ -800,6 +809,10 @@ async function persistBmcFields(pool, teamId, studentId, bmc, opts) {
       bmcGeneratedAt,
       bmcSavedAt,
       bmcSavedBy,
+      reviewStatus,
+      reviewComment,
+      reviewedAt,
+      reviewedBy,
       studentId,
     ]
   );
@@ -915,10 +928,7 @@ router.post(
       if (!ctx.isTeamLeader) {
         return bad(req, res, 403, 40303, '仅队长可生成商业画布');
       }
-      const missing = await getWarRoomTeamMissingMembers(ctx.pool, ctx.team.id, ctx.members);
-      if (missing.length > 0) {
-        return badWithData(req, res, 400, 40027, '组员尚未完成虚拟董事会画布', { missingMembers: missing });
-      }
+      // 虚拟董事会画布已下线，不再作为生成/上传门槛；有历史保存记录仍可作提示词补充
       const provider = await getEnabledProvider('multimodal');
       if (!provider) return bad(req, res, 400, 40011, '未配置已启用的多模态模型');
 
@@ -956,20 +966,15 @@ router.put(
     try {
       const ctx = await requireTeamContext(req, res);
       if (!ctx) return;
-      if (!ctx.isTeamLeader) {
-        return bad(req, res, 403, 40303, '仅队长可保存商业画布');
-      }
+      // 全员可上传；上传后进入教师待审，通过后才算阶段完成
       const body = req.body && typeof req.body === 'object' ? req.body : {};
       const bmc = coerceBmc(body.bmc);
       const emptyKeys = BMC_MODULE_KEYS.filter((k) => !String(bmc[k] || '').trim());
       if (emptyKeys.length) {
         return bad(req, res, 400, 40004, '请先完善商业模式画布九格内容');
       }
-      const ready = await assertBusinessCanvasSubmitReady(ctx.pool, ctx.team.id, ctx.members);
+      const ready = await assertBusinessCanvasSubmitReady(ctx.pool, ctx.team.id);
       if (!ready.ok) {
-        if (ready.data) {
-          return badWithData(req, res, ready.status, ready.code, ready.message, ready.data);
-        }
         return bad(req, res, ready.status, ready.code, ready.message);
       }
       await persistBmcFields(ctx.pool, ctx.team.id, ctx.sid, bmc, {
@@ -977,7 +982,6 @@ router.put(
         setSaved: true,
       });
       try {
-        const { scheduleScoreTeamStage } = await import('../lib/teamCockpitScoring.js');
         const { insertTeamAiInteractionLog } = await import('../lib/teamAiInteractionLog.js');
         await insertTeamAiInteractionLog({
           classId: ctx.classId,
@@ -986,9 +990,9 @@ router.put(
           moduleKey: 'business',
           scene: 'bmc_save',
           role: 'event',
-          content: '队长保存商业模式画布九格',
+          content: '提交商业模式画布，等待教师审核',
         });
-        scheduleScoreTeamStage(ctx.classId, ctx.team.id, 'business');
+        // 未审核通过前不触发阶段完成评分；教师通过后再 schedule
       } catch (hookErr) {
         logError('bmc save cockpit hook', hookErr);
       }
@@ -1000,6 +1004,262 @@ router.put(
   }
 );
 
+const BMC_CELL_LOCK_TTL_MS = 90_000;
+
+router.post(
+  '/student/personal-classes/:classId/business-model/bmc/cell-locks',
+  requireAuth(),
+  requireStudent(),
+  async (req, res) => {
+    try {
+      const ctx = await requireTeamContext(req, res);
+      if (!ctx) return;
+      const cellKey = String(req.body?.cellKey || '').trim();
+      if (!BMC_MODULE_KEYS.includes(cellKey)) {
+        return bad(req, res, 400, 40004, '无效画布格');
+      }
+      // 释放本人其他格锁
+      await ctx.pool.query(
+        `DELETE FROM teacher_personal_class_team_bmc_cell_locks
+         WHERE team_id = $1 AND locked_by = $2 AND cell_key <> $3`,
+        [ctx.team.id, ctx.sid, cellKey]
+      );
+      const { rows: existing } = await ctx.pool.query(
+        `SELECT l.cell_key, l.locked_by, l.locked_at, l.heartbeat_at,
+                COALESCE(u.real_name, u.username) AS locked_by_name
+         FROM teacher_personal_class_team_bmc_cell_locks l
+         LEFT JOIN users u ON u.id = l.locked_by
+         WHERE l.team_id = $1 AND l.cell_key = $2`,
+        [ctx.team.id, cellKey]
+      );
+      if (existing.length) {
+        const row = existing[0];
+        const hb = row.heartbeat_at ? new Date(row.heartbeat_at).getTime() : 0;
+        const expired = Date.now() - hb > BMC_CELL_LOCK_TTL_MS;
+        if (!expired && String(row.locked_by) !== String(ctx.sid)) {
+          return badWithData(req, res, 409, 40901, `格子已被 ${row.locked_by_name || '同学'} 编辑中`, {
+            lock: {
+              cellKey,
+              lockedById: String(row.locked_by),
+              lockedByName: String(row.locked_by_name || '同学'),
+            },
+          });
+        }
+      }
+      await ctx.pool.query(
+        `INSERT INTO teacher_personal_class_team_bmc_cell_locks
+           (team_id, cell_key, locked_by, locked_at, heartbeat_at)
+         VALUES ($1, $2, $3, now(), now())
+         ON CONFLICT (team_id, cell_key) DO UPDATE SET
+           locked_by = EXCLUDED.locked_by,
+           locked_at = CASE
+             WHEN teacher_personal_class_team_bmc_cell_locks.locked_by = EXCLUDED.locked_by
+               THEN teacher_personal_class_team_bmc_cell_locks.locked_at
+             ELSE now() END,
+           heartbeat_at = now()`,
+        [ctx.team.id, cellKey, ctx.sid]
+      );
+      return ok(req, res, {
+        lock: { cellKey, lockedById: String(ctx.sid), lockedByName: '我' },
+        workspace: await buildWorkspaceApi(ctx.pool, ctx.team.id, ctx.sid),
+      });
+    } catch (e) {
+      logError(`POST bmc cell-locks traceId=${req.traceId}`, e);
+      return bad(req, res, 500, 50000, e.message);
+    }
+  }
+);
+
+router.delete(
+  '/student/personal-classes/:classId/business-model/bmc/cell-locks/:cellKey',
+  requireAuth(),
+  requireStudent(),
+  async (req, res) => {
+    try {
+      const ctx = await requireTeamContext(req, res);
+      if (!ctx) return;
+      const cellKey = String(req.params.cellKey || '').trim();
+      await ctx.pool.query(
+        `DELETE FROM teacher_personal_class_team_bmc_cell_locks
+         WHERE team_id = $1 AND cell_key = $2 AND locked_by = $3`,
+        [ctx.team.id, cellKey, ctx.sid]
+      );
+      return ok(req, res, { released: true });
+    } catch (e) {
+      logError(`DELETE bmc cell-locks traceId=${req.traceId}`, e);
+      return bad(req, res, 500, 50000, e.message);
+    }
+  }
+);
+
+const BMC_AI_REVIEW_SYSTEM = `你是创业实训商业模式画布审查助教。
+根据学生九格内容与本轮自述，从九维点评合理性、优缺点，并给出核心建议与 0～100 分。
+输出 JSON：
+{
+  "summary": "总评",
+  "score": 0-100,
+  "dimensions": [{ "key": "customerSegments", "label": "客户细分", "comment": "点评", "pros": [], "cons": [] }],
+  "suggestions": ["建议1", "建议2"]
+}
+禁止改写学生原文代填；只审查。`;
+
+router.post(
+  '/student/personal-classes/:classId/business-model/bmc/ai-review',
+  requireAuth(),
+  requireStudent(),
+  async (req, res) => {
+    try {
+      const ctx = await requireTeamContext(req, res);
+      if (!ctx) return;
+      const selfNote = String(req.body?.selfNote || '').trim();
+      const bmc = coerceBmc(req.body?.bmc || (await loadWorkspaceRow(ctx.pool, ctx.team.id))?.bmc_canvas_json);
+      const provider = await getEnabledProvider('multimodal');
+      if (!provider) return bad(req, res, 400, 40011, '未配置已启用的多模态模型');
+      const bundle = await assembleBusinessModelAiBundle(ctx.pool, ctx.team.id, UPLOAD_ROOT);
+      // 空格统一备注「未填写」，便于模型识别未完成维度
+      const canvasLines = BMC_MODULE_KEYS.map((k) => {
+        const title = WAR_ROOM_MODULE_TITLES[k] || k;
+        const text = String(bmc[k] || '').trim();
+        return `- ${title}：${text || '未填写'}`;
+      }).join('\n');
+      const user = `【前置实训文本】\n${bundle}\n\n【本轮自述】\n${selfNote || '（未填写）'}\n\n【九格内容】\n${canvasLines}\n\n请审查并输出 JSON。对标注「未填写」的格子在点评中明确指出尚缺内容。`;
+      const raw = await runJsonLlm(provider, BMC_AI_REVIEW_SYSTEM, user);
+      let parsed = null;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        parsed = { summary: String(raw || '').slice(0, 2000), score: 60, dimensions: [], suggestions: [] };
+      }
+      const score = Number(parsed.score);
+      const aiScore = Number.isFinite(score) ? Math.max(0, Math.min(100, score)) : null;
+      const { rows } = await ctx.pool.query(
+        `INSERT INTO teacher_personal_class_team_bmc_ai_reviews
+           (team_id, teacher_personal_class_id, submitted_by, self_note, canvas_snapshot, ai_result, ai_score)
+         VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7)
+         RETURNING id, created_at, self_note, ai_result, ai_score, submitted_by`,
+        [
+          ctx.team.id,
+          ctx.classId,
+          ctx.sid,
+          selfNote,
+          JSON.stringify(bmc),
+          JSON.stringify(parsed),
+          aiScore,
+        ]
+      );
+      const row = rows[0];
+      // 同步落盘当前九格（不改审核状态）
+      await persistBmcFields(ctx.pool, ctx.team.id, ctx.sid, bmc, { setGenerated: false, setSaved: false });
+      try {
+        const { insertTeamAiInteractionLog } = await import('../lib/teamAiInteractionLog.js');
+        await insertTeamAiInteractionLog({
+          classId: ctx.classId,
+          teamId: ctx.team.id,
+          studentId: ctx.sid,
+          moduleKey: 'business',
+          scene: 'bmc_ai_review',
+          role: 'event',
+          content: `画布 AI 审查${aiScore != null ? ` · 评分 ${aiScore}` : ''}：${String(parsed?.summary || selfNote || '').slice(0, 200)}`,
+          meta: { reviewId: row.id, aiScore },
+        });
+      } catch (logErr) {
+        logError('bmc ai-review cockpit hook', logErr);
+      }
+      return ok(req, res, {
+        review: {
+          id: String(row.id),
+          selfNote: row.self_note,
+          aiResult: row.ai_result,
+          aiScore: row.ai_score != null ? Number(row.ai_score) : null,
+          createdAt: new Date(row.created_at).toISOString(),
+          submittedBy: String(row.submitted_by),
+        },
+        workspace: await buildWorkspaceApi(ctx.pool, ctx.team.id, ctx.sid),
+      });
+    } catch (e) {
+      logError(`POST bmc ai-review traceId=${req.traceId}`, e);
+      return bad(req, res, 500, 50000, friendlyLlmErrorMessage(e));
+    }
+  }
+);
+
+router.get(
+  '/student/personal-classes/:classId/business-model/bmc/ai-reviews',
+  requireAuth(),
+  requireStudent(),
+  async (req, res) => {
+    try {
+      const ctx = await requireTeamContext(req, res);
+      if (!ctx) return;
+      const { rows } = await ctx.pool.query(
+        `SELECT r.id, r.self_note, r.ai_result, r.ai_score, r.created_at, r.submitted_by,
+                COALESCE(u.real_name, u.username) AS submitter_name,
+                t.name AS team_name
+         FROM teacher_personal_class_team_bmc_ai_reviews r
+         JOIN users u ON u.id = r.submitted_by
+         JOIN teacher_personal_class_teams t ON t.id = r.team_id
+         WHERE r.team_id = $1
+         ORDER BY r.created_at DESC
+         LIMIT 50`,
+        [ctx.team.id]
+      );
+      return ok(req, res, {
+        reviews: rows.map((r) => ({
+          id: String(r.id),
+          selfNote: r.self_note,
+          aiResult: r.ai_result,
+          aiScore: r.ai_score != null ? Number(r.ai_score) : null,
+          createdAt: new Date(r.created_at).toISOString(),
+          submittedBy: String(r.submitted_by),
+          submitterName: String(r.submitter_name || '').trim() || '同学',
+          teamName: String(r.team_name || ''),
+        })),
+      });
+    } catch (e) {
+      logError(`GET bmc ai-reviews traceId=${req.traceId}`, e);
+      return bad(req, res, 500, 50000, e.message);
+    }
+  }
+);
+
+async function generateWarRoomAsk(provider, ctx, ws, transcript, activeHat, studentDisplayName) {
+  const bundle = await assembleBusinessModelAiBundle(ctx.pool, ctx.team.id, UPLOAD_ROOT);
+  const user = buildWarRoomAskUserPrompt({
+    bundleText: bundle,
+    swot: ws.swot,
+    marketing: ws.marketing,
+    finance: ws.finance,
+    transcriptMessages: transcript.messages,
+    activeHat,
+    studentDisplayName,
+  });
+  const raw = await runJsonLlm(provider, WAR_ROOM_ASK_SYSTEM_PROMPT, user, {
+    extraBody: buildNoThinkingExtraBody(provider),
+  });
+  const norm = parseWarRoomAskFromLlmText(raw, activeHat);
+  if (norm.error) return { error: norm.error };
+  const msg = {
+    id: randomUUID(),
+    hat: norm.message.hat,
+    content: norm.message.content,
+    targetModule: null,
+    moduleContent: '',
+    adoptedModules: [],
+    status: 'ask',
+    roundIndex: transcript.roundCount,
+    createdAt: new Date().toISOString(),
+  };
+  return {
+    transcript: {
+      ...transcript,
+      messages: [...transcript.messages, msg],
+      roundCount: transcript.roundCount + 1,
+      hatSession: markAwaitingAnswer(transcript.hatSession, activeHat),
+    },
+    message: msg,
+  };
+}
+
 router.post(
   '/student/personal-classes/:classId/business-model/war-room/debate/start',
   requireAuth(),
@@ -1010,42 +1270,310 @@ router.post(
       if (!ctx) return;
       const ws = await loadWarRoomWorkspaceContext(ctx.pool, ctx.team.id, ctx.sid);
       if (ws.transcript.messages.length > 0) {
-        return bad(req, res, 400, 40021, '辩论已开始，请在下方继续发言或发起下一轮');
+        return bad(req, res, 400, 40021, '辩论已开始，请在下方继续发言或切换帽子视角');
       }
       const provider = await getEnabledProvider('multimodal');
       if (!provider) return bad(req, res, 400, 40011, '未配置已启用的多模态模型');
 
-      const bundle = await assembleBusinessModelAiBundle(ctx.pool, ctx.team.id, UPLOAD_ROOT);
       const studentDisplayName = String(req.body?.studentDisplayName || '同学').trim() || '同学';
-      const hatOrder = buildRoundHatOrder(true);
-      const user = buildWarRoomRoundUserPrompt({
-        bundleText: bundle,
-        swot: ws.swot,
-        marketing: ws.marketing,
-        finance: ws.finance,
-        transcriptMessages: [],
+      const guide = {
+        id: randomUUID(),
+        hat: 'blue',
+        content: `${studentDisplayName}，欢迎进入虚拟董事会。将按「白→绿→黄→黑→红→蓝」顺序，每顶帽子提出最多 3 个苏格拉底式追问，并可进行最多 3 轮对话后再进入下一帽，从六维验证你的点子（提问不代改）。也可随时 @某帽 专项深挖。请先简要说明你的创业设想。`,
+        targetModule: null,
+        moduleContent: '',
+        adoptedModules: [],
+        status: 'guide',
         roundIndex: 0,
-        hatOrder,
-        studentDisplayName,
-        canvasSnapshot: ws.canvas,
-      });
-      const raw = await runJsonLlm(provider, WAR_ROOM_ROUND_SYSTEM_PROMPT, user, {
-        extraBody: buildNoThinkingExtraBody(provider),
-      });
-      const norm = parseWarRoomRoundFromLlmText(raw, hatOrder);
-      if (norm.error) return bad(req, res, 400, 40016, norm.error);
-
-      const transcript = appendRoundMessages(ws.transcript, norm.messages, 0);
+        createdAt: new Date().toISOString(),
+      };
+      let transcript = {
+        messages: [guide],
+        roundCount: 0,
+        hatSession: defaultHatSession(),
+      };
+      // 开场后立刻由白帽抛出第一轮追问
+      const ask = await generateWarRoomAsk(provider, ctx, ws, transcript, 'white', studentDisplayName);
+      if (ask.error) return bad(req, res, 400, 40016, ask.error);
+      transcript = ask.transcript;
       await upsertWarRoomFields(ctx.pool, ctx.team.id, ctx.sid, ws.canvas, transcript);
-
-      const roundMessages = transcript.messages.slice(-6).map(mapMessageToApi);
       const workspace = await buildWorkspaceApi(ctx.pool, ctx.team.id, ctx.sid);
       return ok(req, res, {
-        roundMessages,
+        roundMessages: transcript.messages.map(mapMessageToApi),
         workspace,
       });
     } catch (e) {
       logError(`POST war-room debate/start traceId=${req.traceId}`, e);
+      return bad(req, res, 500, 50000, friendlyLlmErrorMessage(e));
+    }
+  }
+);
+
+router.post(
+  '/student/personal-classes/:classId/business-model/war-room/debate/switch-hat',
+  requireAuth(),
+  requireStudent(),
+  async (req, res) => {
+    try {
+      const ctx = await requireTeamContext(req, res);
+      if (!ctx) return;
+      const hat = normalizeHatRoute(req.body?.hat);
+      if (!hat) return bad(req, res, 400, 40004, '请选择有效的帽子视角');
+      const ws = await loadWarRoomWorkspaceContext(ctx.pool, ctx.team.id, ctx.sid);
+      if (!ws.transcript.messages.length) {
+        return bad(req, res, 400, 40023, '请先等待白帽开场');
+      }
+      const switched = switchHatPerspective(ws.transcript.hatSession, hat);
+      if (switched.error) return bad(req, res, 400, 40004, switched.error);
+      const transcript = { ...ws.transcript, hatSession: switched.session };
+      await upsertWarRoomFields(ctx.pool, ctx.team.id, ctx.sid, ws.canvas, transcript);
+      return ok(req, res, { workspace: await buildWorkspaceApi(ctx.pool, ctx.team.id, ctx.sid) });
+    } catch (e) {
+      logError(`POST war-room switch-hat traceId=${req.traceId}`, e);
+      return bad(req, res, 500, 50000, e.message);
+    }
+  }
+);
+
+/** 虚拟董事会对话写入驾驶舱 AI 交互日志 */
+async function logWarRoomTurn(ctx, userMessage, transcript, transcriptStartLen, activeHat) {
+  try {
+    const { insertChatTurnLogs } = await import('../lib/teamAiInteractionLog.js');
+    const assistantContent = (transcript.messages || [])
+      .slice(transcriptStartLen)
+      .filter((m) => m && m.hat !== 'user')
+      .map((m) => String(m.content || '').trim())
+      .filter(Boolean)
+      .join('\n')
+      .slice(0, 2000);
+    await insertChatTurnLogs({
+      classId: ctx.classId,
+      teamId: ctx.team.id,
+      studentId: ctx.sid,
+      moduleKey: 'business',
+      scene: 'war_room_turn',
+      threadId: `war-room-${ctx.team.id}-${ctx.sid}`,
+      roundIndex: Math.max(0, Number(transcript.roundCount) || 0),
+      userContent: userMessage,
+      assistantContent,
+      meta: { activeHat: activeHat || transcript.hatSession?.activeHat || null },
+    });
+  } catch (logErr) {
+    logError('war-room turn interaction log', logErr);
+  }
+}
+
+async function handleWarRoomReply(req, res) {
+  const ctx = await requireTeamContext(req, res);
+  if (!ctx) return;
+  const userMessage = String(req.body?.userMessage ?? '').trim();
+  if (!userMessage) return bad(req, res, 400, 40004, '请输入发言内容');
+
+  // @某帽 优先：显式点名只让该帽回复，不自动拉下一顶顺序帽
+  const mentionedFromText = parseMentionedHatFromText(userMessage);
+  let activeHat =
+    mentionedFromText ||
+    normalizeHatRoute(req.body?.activeHat) ||
+    normalizeHatRoute(req.body?.hat);
+
+  const ws = await loadWarRoomWorkspaceContext(ctx.pool, ctx.team.id, ctx.sid);
+  if (!ws.transcript.messages.length) {
+    return bad(req, res, 400, 40023, '请先等待白帽开场');
+  }
+
+  let transcript = {
+    ...ws.transcript,
+    messages: [...ws.transcript.messages],
+    hatSession: coerceHatSession(ws.transcript.hatSession),
+  };
+  if (!activeHat) activeHat = transcript.hatSession.activeHat || 'white';
+  const explicitMention = Boolean(mentionedFromText);
+
+  const transcriptStartLen = transcript.messages.length;
+  transcript.messages.push({
+    id: randomUUID(),
+    hat: 'user',
+    content: userMessage,
+    targetModule: null,
+    moduleContent: '',
+    roundIndex: transcript.roundCount,
+    createdAt: new Date().toISOString(),
+  });
+
+  const provider = await getEnabledProvider('multimodal');
+  if (!provider) return bad(req, res, 400, 40011, '未配置已启用的多模态模型');
+  const studentDisplayName = String(req.body?.studentDisplayName || '同学').trim() || '同学';
+  let session = transcript.hatSession;
+  const bundle = await assembleBusinessModelAiBundle(ctx.pool, ctx.team.id, UPLOAD_ROOT);
+
+  // 学生 @指定帽子：仅该帽单次回复，不推进顺序、不追加下一帽追问
+  if (explicitMention) {
+    const switched = switchHatPerspective(session, activeHat);
+    if (!switched.error) {
+      session = switched.session;
+      transcript.hatSession = session;
+    }
+    const user = buildWarRoomSingleReplyUserPrompt({
+      bundleText: bundle,
+      swot: ws.swot,
+      marketing: ws.marketing,
+      finance: ws.finance,
+      transcriptMessages: transcript.messages,
+      mentionedHat: activeHat,
+      userMessage,
+      studentDisplayName,
+    });
+    const raw = await runJsonLlm(provider, WAR_ROOM_SINGLE_REPLY_SYSTEM_PROMPT, user);
+    const norm = parseWarRoomSingleReplyFromLlmText(raw, activeHat);
+    if (norm.error) return bad(req, res, 400, 40016, norm.error);
+    transcript.messages.push({
+      id: randomUUID(),
+      hat: norm.message.hat,
+      content: norm.message.content,
+      targetModule: null,
+      moduleContent: '',
+      adoptedModules: [],
+      roundIndex: transcript.roundCount,
+      createdAt: new Date().toISOString(),
+    });
+    transcript.hatSession = { ...session, activeHat, awaitingAnswer: false };
+    await upsertWarRoomFields(ctx.pool, ctx.team.id, ctx.sid, ws.canvas, transcript);
+    await logWarRoomTurn(ctx, userMessage, transcript, transcriptStartLen, activeHat);
+    return ok(req, res, {
+      roundMessages: transcript.messages.slice(transcriptStartLen).map(mapMessageToApi),
+      message: mapMessageToApi(transcript.messages[transcript.messages.length - 1]),
+      workspace: await buildWorkspaceApi(ctx.pool, ctx.team.id, ctx.sid),
+    });
+  }
+
+  if (session.mode === 'sequential' && !session.sequentialDone && session.awaitingAnswer) {
+    const answeredHat = session.activeHat;
+    const progressed = afterHatStudentAnswer(session, answeredHat);
+    transcript.hatSession = progressed.session;
+
+    // 同帽未满 3 轮：承接作答并继续苏格拉底追问（留在本帽）
+    if (progressed.stayOnHat) {
+      const user = buildWarRoomSingleReplyUserPrompt({
+        bundleText: bundle,
+        swot: ws.swot,
+        marketing: ws.marketing,
+        finance: ws.finance,
+        transcriptMessages: transcript.messages,
+        mentionedHat: answeredHat,
+        userMessage,
+        studentDisplayName,
+      });
+      const raw = await runJsonLlm(provider, WAR_ROOM_SINGLE_REPLY_SYSTEM_PROMPT, user);
+      const norm = parseWarRoomSingleReplyFromLlmText(raw, answeredHat);
+      if (norm.error) return bad(req, res, 400, 40016, norm.error);
+      transcript.messages.push({
+        id: randomUUID(),
+        hat: norm.message.hat,
+        content: norm.message.content,
+        targetModule: null,
+        moduleContent: '',
+        adoptedModules: [],
+        status: 'ask',
+        roundIndex: transcript.roundCount,
+        createdAt: new Date().toISOString(),
+      });
+      transcript.hatSession = markAwaitingAnswer(progressed.session, answeredHat);
+      await upsertWarRoomFields(ctx.pool, ctx.team.id, ctx.sid, ws.canvas, transcript);
+      await logWarRoomTurn(ctx, userMessage, transcript, transcriptStartLen, answeredHat);
+      return ok(req, res, {
+        roundMessages: transcript.messages.slice(transcriptStartLen).map(mapMessageToApi),
+        workspace: await buildWorkspaceApi(ctx.pool, ctx.team.id, ctx.sid),
+      });
+    }
+
+    // 本帽 3 轮已满：简短承接后切下一帽追问
+    const user = buildWarRoomSingleReplyUserPrompt({
+      bundleText: bundle,
+      swot: ws.swot,
+      marketing: ws.marketing,
+      finance: ws.finance,
+      transcriptMessages: transcript.messages,
+      mentionedHat: answeredHat,
+      userMessage,
+      studentDisplayName,
+    });
+    const raw = await runJsonLlm(provider, WAR_ROOM_SINGLE_REPLY_SYSTEM_PROMPT, user);
+    const norm = parseWarRoomSingleReplyFromLlmText(raw, answeredHat);
+    if (!norm.error) {
+      transcript.messages.push({
+        id: randomUUID(),
+        hat: norm.message.hat,
+        content: norm.message.content,
+        targetModule: null,
+        moduleContent: '',
+        adoptedModules: [],
+        roundIndex: transcript.roundCount,
+        createdAt: new Date().toISOString(),
+      });
+    }
+
+    if (!progressed.session.sequentialDone) {
+      const nextHat = progressed.session.activeHat;
+      const ask = await generateWarRoomAsk(provider, ctx, ws, transcript, nextHat, studentDisplayName);
+      if (ask.error) return bad(req, res, 400, 40016, ask.error);
+      transcript = ask.transcript;
+    } else {
+      transcript.hatSession = { ...progressed.session, awaitingAnswer: false };
+    }
+
+    await upsertWarRoomFields(ctx.pool, ctx.team.id, ctx.sid, ws.canvas, transcript);
+    await logWarRoomTurn(ctx, userMessage, transcript, transcriptStartLen, answeredHat);
+    return ok(req, res, {
+      roundMessages: transcript.messages.slice(transcriptStartLen).map(mapMessageToApi),
+      workspace: await buildWorkspaceApi(ctx.pool, ctx.team.id, ctx.sid),
+    });
+  }
+
+  const user = buildWarRoomSingleReplyUserPrompt({
+    bundleText: bundle,
+    swot: ws.swot,
+    marketing: ws.marketing,
+    finance: ws.finance,
+    transcriptMessages: transcript.messages,
+    mentionedHat: activeHat,
+    userMessage,
+    studentDisplayName,
+  });
+  const raw = await runJsonLlm(provider, WAR_ROOM_SINGLE_REPLY_SYSTEM_PROMPT, user);
+  const norm = parseWarRoomSingleReplyFromLlmText(raw, activeHat);
+  if (norm.error) return bad(req, res, 400, 40016, norm.error);
+  transcript.messages.push({
+    id: randomUUID(),
+    hat: norm.message.hat,
+    content: norm.message.content,
+    targetModule: null,
+    moduleContent: '',
+    adoptedModules: [],
+    roundIndex: transcript.roundCount,
+    createdAt: new Date().toISOString(),
+  });
+
+  // 非 @ 的自由回复：不因 resumeHat 自动拉下一顶顺序帽发言
+  transcript.hatSession = { ...session, activeHat, awaitingAnswer: false };
+
+  await upsertWarRoomFields(ctx.pool, ctx.team.id, ctx.sid, ws.canvas, transcript);
+  await logWarRoomTurn(ctx, userMessage, transcript, transcriptStartLen, activeHat);
+  return ok(req, res, {
+    roundMessages: transcript.messages.slice(transcriptStartLen).map(mapMessageToApi),
+    message: mapMessageToApi(transcript.messages[transcript.messages.length - 1]),
+    workspace: await buildWorkspaceApi(ctx.pool, ctx.team.id, ctx.sid),
+  });
+}
+
+router.post(
+  '/student/personal-classes/:classId/business-model/war-room/debate/reply',
+  requireAuth(),
+  requireStudent(),
+  async (req, res) => {
+    try {
+      await handleWarRoomReply(req, res);
+    } catch (e) {
+      logError(`POST war-room debate/reply traceId=${req.traceId}`, e);
       return bad(req, res, 500, 50000, friendlyLlmErrorMessage(e));
     }
   }
@@ -1057,136 +1585,10 @@ router.post(
   requireStudent(),
   async (req, res) => {
     try {
-      const ctx = await requireTeamContext(req, res);
-      if (!ctx) return;
-      const userMessage = String(req.body?.userMessage ?? '').trim();
-      const mentioned = parseMentionedHatFromText(userMessage);
-      if (mentioned) {
-        return bad(req, res, 400, 40022, '已 @ 某顶帽子，请使用单帽回复接口');
-      }
-
-      const ws = await loadWarRoomWorkspaceContext(ctx.pool, ctx.team.id, ctx.sid);
-      if (!ws.transcript.messages.length) {
-        return bad(req, res, 400, 40023, '请先点击开始辩论');
-      }
-
-      let transcript = { ...ws.transcript, messages: [...ws.transcript.messages] };
-      const transcriptStartLen = transcript.messages.length;
-      if (userMessage) {
-        transcript.messages.push({
-          id: randomUUID(),
-          hat: 'user',
-          content: userMessage,
-          targetModule: null,
-          moduleContent: '',
-          roundIndex: transcript.roundCount,
-          createdAt: new Date().toISOString(),
-        });
-      }
-
-      const provider = await getEnabledProvider('multimodal');
-      if (!provider) return bad(req, res, 400, 40011, '未配置已启用的多模态模型');
-
-      const bundle = await assembleBusinessModelAiBundle(ctx.pool, ctx.team.id, UPLOAD_ROOT);
-      const studentDisplayName = String(req.body?.studentDisplayName || '同学').trim() || '同学';
-      const roundIndex = transcript.roundCount;
-      const hatOrder = buildRoundHatOrder(false);
-      const user = buildWarRoomRoundUserPrompt({
-        bundleText: bundle,
-        swot: ws.swot,
-        marketing: ws.marketing,
-        finance: ws.finance,
-        transcriptMessages: transcript.messages,
-        roundIndex,
-        hatOrder,
-        studentDisplayName,
-        canvasSnapshot: ws.canvas,
-      });
-      const raw = await runJsonLlm(provider, WAR_ROOM_ROUND_SYSTEM_PROMPT, user);
-      const norm = parseWarRoomRoundFromLlmText(raw, hatOrder);
-      if (norm.error) return bad(req, res, 400, 40016, norm.error);
-
-      transcript = appendRoundMessages(transcript, norm.messages, roundIndex);
-      await upsertWarRoomFields(ctx.pool, ctx.team.id, ctx.sid, ws.canvas, transcript);
-
-      const roundMessages = transcript.messages.slice(transcriptStartLen).map(mapMessageToApi);
-      const workspace = await buildWorkspaceApi(ctx.pool, ctx.team.id, ctx.sid);
-      return ok(req, res, { roundMessages, workspace });
+      req.body = { ...(req.body || {}), activeHat: req.body?.activeHat || req.body?.hat };
+      await handleWarRoomReply(req, res);
     } catch (e) {
       logError(`POST war-room debate/round traceId=${req.traceId}`, e);
-      return bad(req, res, 500, 50000, friendlyLlmErrorMessage(e));
-    }
-  }
-);
-
-router.post(
-  '/student/personal-classes/:classId/business-model/war-room/debate/reply',
-  requireAuth(),
-  requireStudent(),
-  async (req, res) => {
-    try {
-      const ctx = await requireTeamContext(req, res);
-      if (!ctx) return;
-      const userMessage = String(req.body?.userMessage ?? '').trim();
-      if (!userMessage) return bad(req, res, 400, 40004, '请输入发言内容');
-      let mentionedHat = normalizeHatRoute(req.body?.hat);
-      if (!mentionedHat) mentionedHat = parseMentionedHatFromText(userMessage);
-      if (!mentionedHat) return bad(req, res, 400, 40024, '请 @ 某一顶帽子后再发言');
-
-      const ws = await loadWarRoomWorkspaceContext(ctx.pool, ctx.team.id, ctx.sid);
-      if (!ws.transcript.messages.length) {
-        return bad(req, res, 400, 40023, '请先点击开始辩论');
-      }
-
-      let transcript = { ...ws.transcript, messages: [...ws.transcript.messages] };
-      transcript.messages.push({
-        id: randomUUID(),
-        hat: 'user',
-        content: userMessage,
-        targetModule: null,
-        moduleContent: '',
-        roundIndex: transcript.roundCount,
-        createdAt: new Date().toISOString(),
-      });
-
-      const provider = await getEnabledProvider('multimodal');
-      if (!provider) return bad(req, res, 400, 40011, '未配置已启用的多模态模型');
-
-      const bundle = await assembleBusinessModelAiBundle(ctx.pool, ctx.team.id, UPLOAD_ROOT);
-      const studentDisplayName = String(req.body?.studentDisplayName || '同学').trim() || '同学';
-      const user = buildWarRoomSingleReplyUserPrompt({
-        bundleText: bundle,
-        swot: ws.swot,
-        marketing: ws.marketing,
-        finance: ws.finance,
-        transcriptMessages: transcript.messages,
-        mentionedHat,
-        userMessage,
-        studentDisplayName,
-        canvasSnapshot: ws.canvas,
-      });
-      const raw = await runJsonLlm(provider, WAR_ROOM_SINGLE_REPLY_SYSTEM_PROMPT, user);
-      const norm = parseWarRoomSingleReplyFromLlmText(raw, mentionedHat);
-      if (norm.error) return bad(req, res, 400, 40016, norm.error);
-
-      const reply = {
-        id: randomUUID(),
-        hat: norm.message.hat,
-        content: norm.message.content,
-        targetModule: norm.message.targetModule,
-        moduleContent: norm.message.moduleContent,
-        fills: norm.message.fills,
-        adoptedModules: [],
-        roundIndex: transcript.roundCount,
-        createdAt: new Date().toISOString(),
-      };
-      transcript.messages.push(reply);
-      await upsertWarRoomFields(ctx.pool, ctx.team.id, ctx.sid, ws.canvas, transcript);
-
-      const workspace = await buildWorkspaceApi(ctx.pool, ctx.team.id, ctx.sid);
-      return ok(req, res, { message: mapMessageToApi(reply), workspace });
-    } catch (e) {
-      logError(`POST war-room debate/reply traceId=${req.traceId}`, e);
       return bad(req, res, 500, 50000, friendlyLlmErrorMessage(e));
     }
   }

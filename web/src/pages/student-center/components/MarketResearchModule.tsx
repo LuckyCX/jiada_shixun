@@ -692,6 +692,8 @@ export default function MarketResearchModule({
   const [challengeRecords, setChallengeRecords] = useState<Awaited<ReturnType<typeof listChallengeSessions>>>([]);
   const [challengeRecordsLoading, setChallengeRecordsLoading] = useState(false);
   const [hasMethodUpload, setHasMethodUpload] = useState(false);
+  /** 课程设置：调研数据上传是否开启（默认开） */
+  const [uploadEnabled, setUploadEnabled] = useState(true);
   const [teamReportUploaded, setTeamReportUploaded] = useState(false);
   const [reportUploadModalOpen, setReportUploadModalOpen] = useState(false);
   const [reportUploading, setReportUploading] = useState(false);
@@ -747,6 +749,7 @@ export default function MarketResearchModule({
       setApiTeamMembers(res.teamMembers || []);
       setApiStagePeriod(res.stagePeriod);
       setApiIsTeamLeader(res.isTeamLeader);
+      setUploadEnabled(res.features?.uploadEnabled !== false);
       if (res.plan) {
         setPlan({
           goal: res.plan.goal || '',
@@ -949,6 +952,10 @@ export default function MarketResearchModule({
   );
 
   useEffect(() => {
+    if (!uploadEnabled) {
+      setHasMethodUpload(false);
+      return;
+    }
     if (!classId || !planUploadMethods.length) {
       setHasMethodUpload(false);
       return;
@@ -956,21 +963,28 @@ export default function MarketResearchModule({
     void Promise.all(planUploadMethods.map((m) => listMarketMethodUploads(classId, m)))
       .then((lists) => setHasMethodUpload(lists.some((l) => l.length > 0)))
       .catch(() => setHasMethodUpload(false));
-  }, [classId, planUploadMethods, activeTab]);
+  }, [classId, planUploadMethods, activeTab, uploadEnabled]);
+
+  // 关闭上传后若停留在 methods Tab，回到计划
+  useEffect(() => {
+    if (!uploadEnabled && activeTab === 'methods') setActiveTab('plan');
+  }, [uploadEnabled, activeTab]);
 
   useEffect(() => {
     if (!onMarketTabProgress) return;
+    const total = uploadEnabled ? 6 : 5;
     let done = 0;
     if (plan.savedAt) done += 1;
-    if (hasMethodUpload) done += 1;
+    if (uploadEnabled && hasMethodUpload) done += 1;
     if (surveys.length > 0) done += 1;
     if (teamReportUploaded) done += 1;
     if (personas.length > 0) done += 1;
     if (studentMarketChallengeDone) done += 1;
-    onMarketTabProgress(done, 6);
+    onMarketTabProgress(done, total);
   }, [
     plan.savedAt,
     hasMethodUpload,
+    uploadEnabled,
     surveys.length,
     teamReportUploaded,
     personas.length,
@@ -989,7 +1003,7 @@ export default function MarketResearchModule({
       message.warning('请填写调研目标');
       return;
     }
-    if (!plan.methods.length) {
+    if (uploadEnabled && !plan.methods.length) {
       message.warning('请至少选择一种调研方法');
       return;
     }
@@ -1218,7 +1232,9 @@ export default function MarketResearchModule({
 
   const tabs = [
     { key: 'plan' as const, label: '调研计划', icon: 'ri-file-list-3-line' },
-    { key: 'methods' as const, label: '调研数据上传', icon: 'ri-upload-cloud-2-line' },
+    ...(uploadEnabled
+      ? [{ key: 'methods' as const, label: '调研数据上传', icon: 'ri-upload-cloud-2-line' }]
+      : []),
     { key: 'survey' as const, label: '线上问卷', icon: 'ri-questionnaire-line' },
     { key: 'persona' as const, label: '用户画像', icon: 'ri-user-heart-line' },
     { key: 'challenge' as const, label: '对抗优化分析', icon: 'ri-file-text-line' },
@@ -1517,21 +1533,23 @@ export default function MarketResearchModule({
                     />
                   </Form.Item>
 
-                  <Form.Item label="调研数据上传" required>
-                    <Checkbox.Group
-                      value={plan.methods}
-                      onChange={(vals) => setPlan({ ...plan, methods: vals as string[] })}
-                      className="w-full"
-                    >
-                      <div className="grid md:grid-cols-3 gap-3 w-full">
-                        {METHODS.map((method) => (
-                          <Checkbox key={method} value={method} className="!ml-0 border border-gray-200 rounded-lg px-4 py-3">
-                            {method}
-                          </Checkbox>
-                        ))}
-                      </div>
-                    </Checkbox.Group>
-                  </Form.Item>
+                  {uploadEnabled ? (
+                    <Form.Item label="调研数据上传" required>
+                      <Checkbox.Group
+                        value={plan.methods}
+                        onChange={(vals) => setPlan({ ...plan, methods: vals as string[] })}
+                        className="w-full"
+                      >
+                        <div className="grid md:grid-cols-3 gap-3 w-full">
+                          {METHODS.map((method) => (
+                            <Checkbox key={method} value={method} className="!ml-0 border border-gray-200 rounded-lg px-4 py-3">
+                              {method}
+                            </Checkbox>
+                          ))}
+                        </div>
+                      </Checkbox.Group>
+                    </Form.Item>
+                  ) : null}
 
                   <Form.Item
                     className="[&_.ant-form-item-label]:!max-w-full [&_.ant-form-item-label>label]:!w-full"
@@ -1603,8 +1621,8 @@ export default function MarketResearchModule({
             </Spin>
           )}
 
-          {/* ══ 调研数据上传 ══ */}
-          {activeTab === 'methods' && (
+          {/* ══ 调研数据上传（课程设置可关闭） ══ */}
+          {uploadEnabled && activeTab === 'methods' && (
             <div className="space-y-6">
               {!plan.savedAt ? (
                 <Alert type="warning" showIcon message="请队长先在「调研计划」中保存计划后再上传调研数据" />

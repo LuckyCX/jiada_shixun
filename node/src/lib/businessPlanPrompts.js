@@ -10,13 +10,19 @@ export const BUSINESS_PLAN_GENERATE_JSON_SCHEMA = `
 }
 要求：
 - sections 必须与「输入的章节列表」一一对应：key 必须使用输入提供的 key；title 使用输入标题（可原样返回）；不得丢章节、不得新增章节。
-- 各 content 为非空字符串（可含 \\n 与 • 列表）；内容须基于给定资料，勿编造与资料明显矛盾的数据；资料不足处可简要说明假设。`;
+- 各 content 为非空字符串；可用轻量 Markdown（## 小标题、**加粗**、列表），系统会转为富文本；禁止输出 HTML 标签。
+- 篇幅硬性要求：每一章 content 必须达到 500～800 汉字（按中文字符计，不含标点可略宽松，但正文信息量须达标）；禁止少于 500 字的短章，禁止三言两语概括。
+- 每章须含背景说明、分点论证与可落地细节；可用轻量 Markdown 小标题/列表展开，但不要注水重复。
+- 内容须基于给定资料，勿编造与资料明显矛盾的精确数据；资料不足处明确标注「假设/估算」。
+- 不要输出思考过程、推理链或解释性前言，只输出 JSON。`;
 
-export const BUSINESS_PLAN_GENERATE_SYSTEM_PROMPT = `你是创业实训课程的商业计划书助教。根据小组前期实训产出，按给定章节列表撰写商业计划书要点。
+export const BUSINESS_PLAN_GENERATE_SYSTEM_PROMPT = `你是创业实训课程的商业计划书助教。根据小组前期实训产出，一次性撰写完整商业计划书全部章节正文（结构化 JSON 输出）。
+
+写作标准：像面向投资人/评审的正式计划书，逻辑完整、论据具体；不要写成提纲或口号堆砌。禁止输出思考过程。必须一次返回输入列表中的全部章节，不得漏章。每一章正文 500～800 汉字，不得偷工减料。
 
 ${BUSINESS_PLAN_GENERATE_JSON_SCHEMA}`;
 
-export const BUSINESS_PLAN_FILL_SECTION_SYSTEM_PROMPT = `你是创业实训课程的商业计划书助教。你将只填充一个章节的内容。
+export const BUSINESS_PLAN_FILL_SECTION_SYSTEM_PROMPT = `你是创业实训课程的商业计划书助教。你将只填充一个章节的内容。禁止输出思考过程。
 
 最终必须输出且仅输出一个 JSON 对象（不要用 markdown 代码块包裹）。字段：
 {
@@ -24,7 +30,9 @@ export const BUSINESS_PLAN_FILL_SECTION_SYSTEM_PROMPT = `你是创业实训课�
   "content": "章节内容（非空字符串）"
 }
 要求：
-- content 可含 \\n 与列表；内容须基于给定资料，勿编造与资料明显矛盾的数据；资料不足处可简要说明合理假设。`;
+- content 可用轻量 Markdown（## 小标题、**加粗**、列表），禁止 HTML 标签。
+- 篇幅硬性要求：content 必须 500～800 汉字，含论证与可落地细节，禁止短章概括。
+- 内容须基于给定资料，勿编造与资料明显矛盾的数据；资料不足处可简要说明合理假设。`;
 
 /** 仅生成章节大纲（标题结构），不写正文 */
 export const BUSINESS_PLAN_OUTLINE_SYSTEM_PROMPT = `你是创业实训课程的商业计划书助教。根据小组前期实训产出，设计合适的商业计划书章节大纲。
@@ -77,11 +85,21 @@ export function normalizeOutlinePayload(raw) {
 }
 
 export function buildBusinessPlanGenerateUserPrompt(contextBundle, sections) {
-  const list = coerceSections(sections).map((s) => ({ key: s.key, title: s.title }));
-  return `请基于以下资料，为「输入章节列表」生成对应章节内容。严格按 system 中的 JSON schema 输出。
+  const list = coerceSections(sections).map((s) => ({
+    key: s.key,
+    title: s.title,
+    guide: String(s.guide || '').trim() || undefined,
+  }));
+  const n = list.length;
+  return `请基于以下资料，一次性生成完整商业计划书：为「输入章节列表」中的每一章撰写充实正文。严格按 system 中的 JSON schema 输出（一个 JSON，必须含全部 ${n} 章）。不要输出思考过程，不要漏章。
 
-【输入章节列表（必须逐项生成，key 不得变更）】
+【输入章节列表（必须全部生成，key 不得变更；共 ${n} 章）】
 ${JSON.stringify(list, null, 2)}
+
+【篇幅与写作硬性要求】
+- 每一章 content 必须 500～800 汉字；共 ${n} 章，全文正文合计约 ${n * 500}～${n * 800} 汉字，不得写成每章一两百字的提纲。
+- 按章节结构输出，每章 content 独立展开（背景 + 分点 + 可落地细节），不要把多章内容塞进某一章。
+- 章节之间可互相呼应，但不要重复粘贴同一段话。
 
 ${String(contextBundle || '').trim()}`;
 }
@@ -112,7 +130,7 @@ ${currentContent || '（空）'}
 【输出要求】
 - 最终必须输出且仅输出一个 JSON 对象（不要用 markdown 代码块包裹）
 - 格式：{ \"key\": \"${key}\", \"content\": \"...\" }
-- content 必须为非空字符串，可包含换行与列表；内容须基于给定资料，勿编造与资料明显矛盾的数据；资料不足处可简要说明合理假设。
+- content 必须 500～800 汉字，含分点与可落地细节；内容须基于给定资料，勿编造与资料明显矛盾的数据；资料不足处可简要说明合理假设。
 
 【前期实训参考资料】
 ${String(contextBundle || '').trim()}`;
@@ -230,10 +248,59 @@ export function normalizeBusinessPlanAnalyzePayload(raw) {
   return { score, overall, strengths, improvements, metrics, nextActions };
 }
 
+/** 从模型原文里抽出计划书 sections（兼容顶层数组 / {sections} / 代码块） */
+export function parseBusinessPlanGenerateJson(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return null;
+
+  const tryObj = (obj) => {
+    if (!obj || typeof obj !== 'object') return null;
+    if (Array.isArray(obj)) return obj;
+    if (Array.isArray(obj.sections)) return obj.sections;
+    if (Array.isArray(obj.data?.sections)) return obj.data.sections;
+    if (Array.isArray(obj.result?.sections)) return obj.result.sections;
+    return null;
+  };
+
+  try {
+    const direct = JSON.parse(raw);
+    const hit = tryObj(direct);
+    if (hit) return hit;
+  } catch {
+    /* ignore */
+  }
+
+  const viaExtract = tryObj(extractJsonFromLlmText(raw));
+  if (viaExtract) return viaExtract;
+
+  // 截断/夹杂正文时：找含 sections 的最大平衡对象
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenced) {
+    try {
+      const hit = tryObj(JSON.parse(fenced[1].trim()));
+      if (hit) return hit;
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const start = raw.indexOf('{');
+  const end = raw.lastIndexOf('}');
+  if (start >= 0 && end > start) {
+    try {
+      const hit = tryObj(JSON.parse(raw.slice(start, end + 1)));
+      if (hit) return hit;
+    } catch {
+      /* ignore */
+    }
+  }
+  return null;
+}
+
 export function normalizeGeneratePayload(text) {
-  const parsed = extractJsonFromLlmText(String(text || ''));
-  if (!parsed || !Array.isArray(parsed.sections)) {
+  const sections = parseBusinessPlanGenerateJson(text);
+  if (!sections?.length) {
     throw new Error('AI 返回格式无效，请稍后重试');
   }
-  return coerceSections(parsed.sections);
+  return coerceSections(sections);
 }

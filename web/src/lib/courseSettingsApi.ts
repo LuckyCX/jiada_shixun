@@ -12,6 +12,12 @@ export type CourseSettingStage = {
   courseModuleKey?: string;
 };
 
+/** 市场调研环节功能开关（线上问卷固定开启） */
+export type MarketCourseFeatures = {
+  surveyEnabled: boolean;
+  uploadEnabled: boolean;
+};
+
 export type CourseStageSetting = {
   moduleKey: CourseSettingStageKey;
   startDate: string;
@@ -20,9 +26,20 @@ export type CourseStageSetting = {
   reminderDays: number;
   reminderEnabled: boolean;
   skipped: boolean;
+  features?: MarketCourseFeatures | Record<string, unknown>;
   lastRemindedAt: string;
   lastRemindedDeadline: string;
 };
+
+export function normalizeMarketFeatures(
+  raw: Record<string, unknown> | MarketCourseFeatures | null | undefined
+): MarketCourseFeatures {
+  const o = raw && typeof raw === 'object' ? raw : {};
+  return {
+    surveyEnabled: true,
+    uploadEnabled: (o as { uploadEnabled?: unknown }).uploadEnabled !== false,
+  };
+}
 
 export type CourseWorkflowPayload = {
   activeOrder: CourseSettingStageKey[];
@@ -102,4 +119,20 @@ export async function saveCourseWorkflow(
     restoredModules: string[];
   };
   return data;
+}
+
+/** 保存市场调研功能开关（不 wipe、不影响解锁） */
+export async function saveCourseStageFeatures(
+  classId: string,
+  moduleKey: CourseSettingStageKey,
+  features: Partial<MarketCourseFeatures>
+): Promise<CourseStageSetting> {
+  const data = (await teacherFetch(
+    `/api/teacher/personal-classes/${classId}/course-settings/${moduleKey}/features`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({ features }),
+    }
+  )) as { setting: CourseStageSetting };
+  return data.setting;
 }

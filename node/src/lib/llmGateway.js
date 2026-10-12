@@ -113,35 +113,46 @@ function chatCompletionsUrl(baseUrl) {
 }
 
 /**
- * 默认关闭「思考模式」，加快首字/完整输出，并避免部分 Qwen 模型
- * 在 enable_thinking=true 时强制要求 stream 而导致非流式调用报错。
+ * 默认关闭「思考模式」，加快输出；Qwen3 系列默认开思考，必须显式 enable_thinking=false。
  * 文档：https://platform.qianwenai.com/docs/resources/faq-text-generation#思考模式
- * extraBody 可显式覆盖（例如 enable_thinking: true）。
+ * extraBody 可覆盖（仅当你明确要开思考时再传 enable_thinking: true）。
  */
 export function buildNoThinkingExtraBody(provider) {
-  const hay = `${String(provider?.vendor || '').toLowerCase()} ${String(provider?.baseUrl || '').toLowerCase()} ${String(provider?.modelId || '').toLowerCase()}`;
+  const modelId = String(provider?.modelId || '').trim();
+  const hay = `${String(provider?.vendor || '').toLowerCase()} ${String(provider?.baseUrl || '').toLowerCase()} ${modelId.toLowerCase()}`;
+  const out = {};
+  // 豆包
   if (/volc|volcano|ark|doubao|豆包|字节/.test(hay)) {
-    return { thinking: { type: 'disabled' } };
+    out.thinking = { type: 'disabled' };
   }
-  // 通义/百炼/千问（含 qwen3.8-flash 等混合思考模型）
-  if (/dashscope|aliyun|通义|qwen|bailian|百炼|qianwen/.test(hay)) {
-    return { enable_thinking: false };
+  // 通义/百炼/千问（含 qwen3.8-flash 等混合思考模型，默认会开思考）
+  if (/dashscope|aliyun|通义|qwen|bailian|百炼|qianwen/.test(hay) || /^qwen/i.test(modelId)) {
+    out.enable_thinking = false;
   }
+  // OpenAI 系 reasoning
   if (/openai|gpt|o1|o3|reasoning/.test(hay)) {
-    return { reasoning_effort: 'none' };
+    out.reasoning_effort = 'none';
   }
-  // 未识别厂商但模型 ID 像千问时也关掉，降低后台只填 modelId 的踩坑概率
-  if (/^qwen/i.test(String(provider?.modelId || '').trim())) {
-    return { enable_thinking: false };
+  // 兜底：未识别厂商也尽量关掉（多数网关会忽略未知字段；Qwen 兼容口必需）
+  if (out.enable_thinking == null && out.thinking == null) {
+    out.enable_thinking = false;
   }
-  return {};
+  return out;
 }
 
 function mergeChatExtraBody(provider, extraBody) {
-  return {
-    ...buildNoThinkingExtraBody(provider),
-    ...(extraBody && typeof extraBody === 'object' ? extraBody : {}),
-  };
+  const base = buildNoThinkingExtraBody(provider);
+  const extra = extraBody && typeof extraBody === 'object' ? { ...extraBody } : {};
+  // 除非调用方显式 enable_thinking:true / thinking.enabled，否则保持关闭
+  const forceThinkOn =
+    extra.enable_thinking === true ||
+    (extra.thinking && typeof extra.thinking === 'object' && extra.thinking.type === 'enabled');
+  const merged = { ...base, ...extra };
+  if (!forceThinkOn) {
+    if ('enable_thinking' in base) merged.enable_thinking = false;
+    if (base.thinking) merged.thinking = base.thinking;
+  }
+  return merged;
 }
 
 /**
@@ -190,8 +201,11 @@ export async function chatCompletion({ provider, system, user, jsonMode = false,
     }
     const text = j?.choices?.[0]?.message?.content;
     if (!text || typeof text !== 'string') throw new Error('LLM 返回内容为空');
+    const thinkingOff =
+      body.enable_thinking === false ||
+      (body.thinking && typeof body.thinking === 'object' && body.thinking.type === 'disabled');
     console.log(
-      `[llmGateway] chatCompletion ok model=${provider.modelId} jsonMode=${Boolean(jsonMode)} ${Date.now() - startedAt}ms`
+      `[llmGateway] chatCompletion ok model=${provider.modelId} jsonMode=${Boolean(jsonMode)} thinkingOff=${thinkingOff} max_tokens=${body.max_tokens ?? '-'} ${Date.now() - startedAt}ms`
     );
     return text.trim();
   } catch (e) {

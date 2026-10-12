@@ -149,7 +149,12 @@ type ThreadState = {
 /** 模块级缓存：父级 tab 卸载后仍可恢复对话（演示端尤其需要） */
 const THREAD_CACHE = new Map<string, Partial<Record<IdeationChatMethodKey, ThreadState>>>();
 
-const OPENERS: Record<'brainstorm' | 'ai', string> = {
+/** 启思开场欢迎：固定文案，不调 AI */
+const MIDWIFERY_WELCOME =
+  '你好！我是启思智能体。很高兴能陪你一起打磨创业想法。\n\n在开始深入探讨之前，我想先听听你目前的构想。请用自己的话简单描述一下：你想解决什么具体问题？或者你的创业想法雏形是什么？';
+
+const OPENERS: Record<'brainstorm' | 'ai' | 'midwifery', string> = {
+  midwifery: MIDWIFERY_WELCOME,
   brainstorm: `欢迎使用头脑风暴。请按下面问题依次回答（可分条写）：
 
 1. 你的**创意标题**是什么？
@@ -356,8 +361,6 @@ export default function IdeationMethodChat({
   const [joiningId, setJoiningId] = useState<string | null>(null);
   const [hatComposer, setHatComposer] = useState<HatStudioComposerBind | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  /** 开场世代号：应对 React Strict Mode 双重挂载，避免丢弃结果后永远 busy */
-  const bootGenRef = useRef(0);
   const threadsRef = useRef(threads);
   threadsRef.current = threads;
   const hatComposerRef = useRef<HatStudioComposerBind | null>(null);
@@ -384,10 +387,15 @@ export default function IdeationMethodChat({
     setHatComposer(composer);
   }, []);
 
-  const appendHatInput = useCallback((piece: string) => {
+  /** 切换帽子时：若输入框已 @ 某帽则替换为新帽子，否则不动（中文帽名后勿用 \b） */
+  const syncHatMentionInInput = useCallback((hatLabel: string) => {
     setInput((prev) => {
-      const t = prev.trim();
-      return t ? `${t} ${piece}` : piece;
+      const mentionRe = /@\s*(白帽|红帽|黑帽|黄帽|绿帽|蓝帽|white|red|black|yellow|green|blue)/gi;
+      if (!/@\s*(白帽|红帽|黑帽|黄帽|绿帽|蓝帽|white|red|black|yellow|green|blue)/i.test(prev)) {
+        return prev;
+      }
+      const base = prev.replace(mentionRe, '').replace(/\s+/g, ' ').trim();
+      return base ? `${hatLabel} ${base}` : hatLabel;
     });
   }, []);
 
@@ -434,83 +442,27 @@ export default function IdeationMethodChat({
     });
   }, [method, thread.messages, thread.canGenerate]);
 
-  // 开场：助产自动 turn；头脑风暴/AI 写入引导语（切换方法不重跑已开场线程）
+  // 开场：启思/头脑风暴/AI 均用本地固定引导语（启思欢迎不调 AI）；切换方法不重跑已开场线程
   useEffect(() => {
     if (disabled || method === 'six_hats') return;
     if (threadsRef.current[method]?.bootstrapped) return;
+    if (method !== 'midwifery' && method !== 'brainstorm' && method !== 'ai') return;
 
-    const gen = ++bootGenRef.current;
-
-    (async () => {
-      if (method === 'midwifery') {
-        setMethodBusy('midwifery', true);
-        try {
-          const res = await api.midwiferyTurn(classId, {
-            messages: [],
-            roundIndex: 0,
-            threadId: ensureThreadId('midwifery'),
-          });
-          // 过期请求（Strict Mode 第一次 effect）直接丢弃
-          if (gen !== bootGenRef.current) return;
-          const text = String(res?.assistantText || '').trim();
-          if (!text) throw new Error('启思智能体开场未返回内容');
-          const round = Math.max(0, Number(res.roundIndex) || 0);
-          const canGen = Boolean(res.canGenerate) || textSuggestsCanGenerate(text);
-          patchThread('midwifery', () => ({
-            messages: [
-              {
-                kind: 'text',
-                id: `a-${Date.now()}`,
-                role: 'assistant',
-                content: sanitizeMidwiferyText(text, canGen),
-                showGenerate: canGen,
-              },
-            ],
-            roundIndex: round,
-            canGenerate: canGen,
-            bootstrapped: true,
-          }));
-        } catch (e) {
-          if (gen !== bootGenRef.current) return;
-          message.error(e instanceof Error ? e.message : '启思智能体开场失败');
-          // 失败也落一条可重试的提示，避免一直「正在准备引导」
-          patchThread('midwifery', () => ({
-            messages: [
-              {
-                kind: 'text',
-                id: `err-${Date.now()}`,
-                role: 'assistant',
-                content: '开场引导暂时失败，请切换到其他方法再切回，或刷新页面重试。',
-              },
-            ],
-            roundIndex: 0,
-            canGenerate: false,
-            bootstrapped: true,
-          }));
-        } finally {
-          // 切换方法会 bump bootGen，仍须清除本方法 busy，避免永远卡在加载态
-          setMethodBusy('midwifery', false);
-        }
-        return;
-      }
-
-      if (method === 'brainstorm' || method === 'ai') {
-        if (gen !== bootGenRef.current) return;
-        patchThread(method, () => ({
-          messages: [
-            {
-              kind: 'text',
-              id: `opener-${method}`,
-              role: 'assistant',
-              content: OPENERS[method],
-            },
-          ],
-          roundIndex: 0,
-          canGenerate: false,
-          bootstrapped: true,
-        }));
-      }
-    })();
+    // 确保启思有 threadId（后续真实对话落库用）
+    if (method === 'midwifery') ensureThreadId('midwifery');
+    patchThread(method, () => ({
+      messages: [
+        {
+          kind: 'text',
+          id: `opener-${method}`,
+          role: 'assistant',
+          content: OPENERS[method],
+        },
+      ],
+      roundIndex: 0,
+      canGenerate: false,
+      bootstrapped: true,
+    }));
     // 仅在 classId/method/disabled 变化时引导开场
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [classId, method, disabled]);
@@ -794,7 +746,7 @@ export default function IdeationMethodChat({
           }>,
           {
             onBindComposer: bindHatComposer,
-            onRequestAppendInput: appendHatInput,
+            onRequestAppendInput: syncHatMentionInInput,
             active: isSixHats,
             composerFooter: isSixHats ? composerBar : null,
           }
@@ -802,7 +754,7 @@ export default function IdeationMethodChat({
       : hatStudioSlot;
 
   return (
-    <div className="ideation-method-chat w-full bg-white rounded-2xl shadow-sm border border-gray-100 flex flex-col min-h-0 h-[calc(100dvh-9rem)] min-h-[360px] select-text">
+    <div className="ideation-method-chat w-full bg-white rounded-2xl shadow-sm border border-gray-100 flex flex-col min-h-0 h-[calc(100dvh-9rem)] min-h-[360px] select-text ">
       {/* 六帽：整卡高度给双栏，输入收进左侧；其它方法：消息区 + 底栏 */}
       {hatSlot ? (
         <div className={`flex-1 min-h-0 overflow-hidden px-3 py-2 ${isSixHats ? 'flex flex-col' : 'hidden'}`}>

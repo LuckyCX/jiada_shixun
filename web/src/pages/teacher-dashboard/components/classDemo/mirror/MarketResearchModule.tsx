@@ -692,6 +692,8 @@ export default function MarketResearchModule({
   const [challengeRecords, setChallengeRecords] = useState<Awaited<ReturnType<typeof listChallengeSessions>>>([]);
   const [challengeRecordsLoading, setChallengeRecordsLoading] = useState(false);
   const [hasMethodUpload, setHasMethodUpload] = useState(false);
+  /** 课程设置：调研数据上传是否开启（默认开） */
+  const [uploadEnabled, setUploadEnabled] = useState(true);
   const [teamReportUploaded, setTeamReportUploaded] = useState(false);
   const [reportUploadModalOpen, setReportUploadModalOpen] = useState(false);
   const [reportUploading, setReportUploading] = useState(false);
@@ -747,6 +749,7 @@ export default function MarketResearchModule({
       setApiTeamMembers(res.teamMembers || []);
       setApiStagePeriod(res.stagePeriod);
       setApiIsTeamLeader(res.isTeamLeader);
+      setUploadEnabled(res.features?.uploadEnabled !== false);
       if (res.plan) {
         setPlan({
           goal: res.plan.goal || '',
@@ -949,6 +952,10 @@ export default function MarketResearchModule({
   );
 
   useEffect(() => {
+    if (!uploadEnabled) {
+      setHasMethodUpload(false);
+      return;
+    }
     if (!classId || !planUploadMethods.length) {
       setHasMethodUpload(false);
       return;
@@ -956,21 +963,27 @@ export default function MarketResearchModule({
     void Promise.all(planUploadMethods.map((m) => listMarketMethodUploads(classId, m)))
       .then((lists) => setHasMethodUpload(lists.some((l) => l.length > 0)))
       .catch(() => setHasMethodUpload(false));
-  }, [classId, planUploadMethods, activeTab]);
+  }, [classId, planUploadMethods, activeTab, uploadEnabled]);
+
+  useEffect(() => {
+    if (!uploadEnabled && activeTab === 'methods') setActiveTab('plan');
+  }, [uploadEnabled, activeTab]);
 
   useEffect(() => {
     if (!onMarketTabProgress) return;
+    const total = uploadEnabled ? 6 : 5;
     let done = 0;
     if (plan.savedAt) done += 1;
-    if (hasMethodUpload) done += 1;
+    if (uploadEnabled && hasMethodUpload) done += 1;
     if (surveys.length > 0) done += 1;
     if (teamReportUploaded) done += 1;
     if (personas.length > 0) done += 1;
     if (studentMarketChallengeDone) done += 1;
-    onMarketTabProgress(done, 6);
+    onMarketTabProgress(done, total);
   }, [
     plan.savedAt,
     hasMethodUpload,
+    uploadEnabled,
     surveys.length,
     teamReportUploaded,
     personas.length,
@@ -989,7 +1002,7 @@ export default function MarketResearchModule({
       message.warning('请填写调研目标');
       return;
     }
-    if (!plan.methods.length) {
+    if (uploadEnabled && !plan.methods.length) {
       message.warning('请至少选择一种调研方法');
       return;
     }
@@ -1222,7 +1235,9 @@ export default function MarketResearchModule({
 
   const tabs = [
     { key: 'plan' as const, label: '调研计划', icon: 'ri-file-list-3-line' },
-    { key: 'methods' as const, label: '调研数据上传', icon: 'ri-upload-cloud-2-line' },
+    ...(uploadEnabled
+      ? [{ key: 'methods' as const, label: '调研数据上传', icon: 'ri-upload-cloud-2-line' }]
+      : []),
     { key: 'survey' as const, label: '线上问卷', icon: 'ri-questionnaire-line' },
     { key: 'persona' as const, label: '用户画像', icon: 'ri-user-heart-line' },
     { key: 'challenge' as const, label: '对抗优化分析', icon: 'ri-file-text-line' },
@@ -1440,35 +1455,6 @@ export default function MarketResearchModule({
         </ul>
       </Modal>
 
-      {/* Module Header */}
-      <div className="bg-gradient-to-br from-green-500 to-green-600 rounded-2xl shadow-xl px-8 py-4 text-white">
-        <div className="flex items-start justify-between  ">
-          <div className="flex items-center gap-4">
-            <div className="w-16 h-16 bg-white/20 rounded-2xl flex items-center justify-center backdrop-blur-sm">
-              <i className="ri-bar-chart-line text-3xl"></i>
-            </div>
-            <div>
-              <h2 className="text-2xl font-bold mb-1">市场调研与用户画像</h2>
-              <p className="text-white/80 text-sm">通过真实调研验证用户需求，构建典型用户画像</p>
-            </div>
-          </div>
-        </div>
-        {/* <div className="grid grid-cols-3 gap-4">
-          <div className="bg-white/10 rounded-xl p-4 backdrop-blur-sm">
-            <div className="text-2xl font-bold mb-1">6/8</div>
-            <div className="text-sm text-white/70">知识点完成</div>
-          </div>
-          <div className="bg-white/10 rounded-xl p-4 backdrop-blur-sm">
-            <div className="text-2xl font-bold mb-1">4/5</div>
-            <div className="text-sm text-white/70">任务完成</div>
-          </div>
-          <div className="bg-white/10 rounded-xl p-4 backdrop-blur-sm">
-            <div className="text-2xl font-bold mb-1">75%</div>
-            <div className="text-sm text-white/70">整体进度</div>
-          </div>
-        </div> */}
-      </div>
-
       {/* Data flow hint */}
       {/* <div className="flex items-center gap-2 text-xs text-gray-500 bg-gray-50 border border-gray-200 rounded-xl px-4 py-3">
         <i className="ri-links-line text-green-400 text-base"></i>
@@ -1547,21 +1533,23 @@ export default function MarketResearchModule({
                     />
                   </Form.Item>
 
-                  <Form.Item label="调研数据上传" required>
-                    <Checkbox.Group
-                      value={plan.methods}
-                      onChange={(vals) => setPlan({ ...plan, methods: vals as string[] })}
-                      className="w-full"
-                    >
-                      <div className="grid md:grid-cols-3 gap-3 w-full">
-                        {METHODS.map((method) => (
-                          <Checkbox key={method} value={method} className="!ml-0 border border-gray-200 rounded-lg px-4 py-3">
-                            {method}
-                          </Checkbox>
-                        ))}
-                      </div>
-                    </Checkbox.Group>
-                  </Form.Item>
+                  {uploadEnabled ? (
+                    <Form.Item label="调研数据上传" required>
+                      <Checkbox.Group
+                        value={plan.methods}
+                        onChange={(vals) => setPlan({ ...plan, methods: vals as string[] })}
+                        className="w-full"
+                      >
+                        <div className="grid md:grid-cols-3 gap-3 w-full">
+                          {METHODS.map((method) => (
+                            <Checkbox key={method} value={method} className="!ml-0 border border-gray-200 rounded-lg px-4 py-3">
+                              {method}
+                            </Checkbox>
+                          ))}
+                        </div>
+                      </Checkbox.Group>
+                    </Form.Item>
+                  ) : null}
 
                   <Form.Item
                     className="[&_.ant-form-item-label]:!max-w-full [&_.ant-form-item-label>label]:!w-full"
@@ -1632,8 +1620,8 @@ export default function MarketResearchModule({
             </Spin>
           )}
 
-          {/* ══ 调研数据上传 ══ */}
-          {activeTab === 'methods' && (
+          {/* ══ 调研数据上传（课程设置可关闭） ══ */}
+          {uploadEnabled && activeTab === 'methods' && (
             <div className="space-y-6">
               {classId && (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

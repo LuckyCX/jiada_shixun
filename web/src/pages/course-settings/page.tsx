@@ -2,11 +2,13 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Modal, message } from 'antd';
 import DeadlineSettings from './components/DeadlineSettings';
+import MarketFeatureSwitches from './components/MarketFeatureSwitches';
 import CourseManagement from '../admin-dashboard/components/courseResource/CourseManagement';
 import {
   COURSE_SETTING_STAGES,
   SKIPPABLE_COURSE_STAGE_KEYS,
   fetchCourseSettings,
+  normalizeMarketFeatures,
   saveCourseStageSetting,
   saveCourseWorkflow,
   type CourseSettingStageKey,
@@ -14,7 +16,7 @@ import {
 } from '../../lib/courseSettingsApi';
 import type { TeacherPersonalClassRow } from '../teacher-dashboard/teacherPortalApi';
 
-type DetailTab = 'deadline' | 'scoring' | 'content';
+type DetailTab = 'deadline' | 'scoring' | 'content' | 'features';
 
 interface CourseSettingsPageProps {
   embedded?: boolean;
@@ -40,6 +42,7 @@ function emptySetting(moduleKey: CourseSettingStageKey): CourseStageSetting {
     reminderDays: 3,
     reminderEnabled: true,
     skipped: false,
+    features: moduleKey === 'market' ? normalizeMarketFeatures({}) : {},
     lastRemindedAt: '',
     lastRemindedDeadline: '',
   };
@@ -479,6 +482,9 @@ export default function CourseSettingsPage({ embedded = false, personalClass = n
             <div className="flex items-center gap-2 bg-gray-100 rounded-xl p-1">
               {[
                 { key: 'deadline' as DetailTab, label: '截止时间配置', icon: 'ri-calendar-schedule-line' },
+                ...(selectedStage.key === 'market'
+                  ? [{ key: 'features' as DetailTab, label: '功能开关', icon: 'ri-toggle-line' }]
+                  : []),
                 // { key: 'scoring' as DetailTab, label: '评分标准设置', icon: 'ri-scales-3-line' },
                 ...(selectedStage.courseModuleKey
                   ? [{ key: 'content' as DetailTab, label: '课程资源', icon: 'ri-folder-settings-line' }]
@@ -519,6 +525,21 @@ export default function CourseSettingsPage({ embedded = false, personalClass = n
             onSave={(input) => updateSetting(selectedStage.key, input)}
           />
         )}
+        {activeTab === 'features' && selectedStage.key === 'market' && selectedSetting ? (
+          <MarketFeatureSwitches
+            classId={classId}
+            setting={selectedSetting}
+            onSaved={(next) => {
+              setSettings((prev) => {
+                const idx = prev.findIndex((s) => s.moduleKey === 'market');
+                if (idx < 0) return [...prev, next];
+                const copy = [...prev];
+                copy[idx] = { ...copy[idx], ...next };
+                return copy;
+              });
+            }}
+          />
+        ) : null}
         {activeTab === 'scoring' && renderScoringPlaceholder()}
         {activeTab === 'content' && renderContentMaintenance()}
       </div>

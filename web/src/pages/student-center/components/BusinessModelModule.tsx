@@ -5,18 +5,20 @@ import VersionControl, { Version } from '../../../components/feature/VersionCont
 import AppModalPortal from '../../../components/AppModalPortal';
 import WarRoom from '../../business-model/components/WarRoom';
 import {
+  acquireBmcCellLock,
+  fetchBmcAiReviews,
   fetchBusinessModelWorkspace,
-  generateBusinessModelBmcAi,
   generateBusinessModelFinanceItemsAi,
   generateBusinessModelMarketingAi,
   generateBusinessModelSwotAi,
+  releaseBmcCellLock,
   saveBusinessModelBmc,
   saveBusinessModelWorkspacePartial,
+  submitBmcAiReview,
+  type BmcAiReviewItem,
   type BmcPayload,
   type BusinessModelTeamMember,
   type BusinessModelWorkspacePayload,
-  type GenerateBusinessModelBmcAiError,
-  type SaveBusinessModelBmcError,
   type WarRoomTeamRecordSummary,
 } from '../../../lib/studentBusinessModelApi';
 
@@ -31,6 +33,27 @@ interface BMCData {
   costStructure: string;
   revenueStreams: string;
 }
+
+const BMC_CELL_GUIDE: Record<keyof BMCData, string> = {
+  customerSegments:
+    '写清楚你的目标客户是谁，不要笼统写「所有人」。至少写：客户人群特征、所处场景、客户痛点，可做客户分层；描述清楚谁是你的首要客户。',
+  valueProposition:
+    '写你的产品/方案帮客户解决了什么具体问题、提供什么价值。推荐用「因为…所以…」句式：客户的痛点 → 你的解决方案 → 可衡量的效果，避免堆砌形容词空话。',
+  channels:
+    '写你如何触达客户、客户怎么找到并购买你的产品。拆成 3 部分：获客渠道（线上/线下）、谁来执行、承接哪些环节（获客/成交/交付）。',
+  customerRelationships:
+    '写你如何获取客户、维持客户、让客户持续满意。可以分层描述：靠什么方式维护客户（自助/销售/社群）、客户维护动作、是否存在付费升级转化路径。',
+  revenueStreams:
+    '写客户为什么愿意付费、付多少钱、多久付一次。写明定价方式（订阅/单次/抽成）、客户价格区间、付费主体。',
+  keyActivities:
+    '写为了让商业模式成立，你必须持续做的核心事情。只写必须亲自做、外包出去就会失败的业务；要包含验证、试错迭代类业务。',
+  keyResources:
+    '写你自身拥有或可控的稀缺资源。区分自有、租赁、合作获取的资源；检验标准：如果换成竞争对手，这项资源还能不能成立。',
+  keyPartnerships:
+    '写你需要和谁合作、为什么不自己完成这件事。每条写：合作方、对方提供什么、为什么必须合作；就算没有外部合作，也要说明如何独立搭建业务。',
+  costStructure:
+    '写钱花在哪里。区分固定成本（规模变大也基本不变）和变动成本（规模越大花费越高），可以补充启动资金、回本/现金流预测。',
+};
 
 function emptyBmcData(): BMCData {
   return {
@@ -63,18 +86,27 @@ function allTeamMembersWarRoomComplete(
   return members.every((m) => (byId.get(String(m.id)) || 0) >= WAR_ROOM_CANVAS_CELL_COUNT);
 }
 
-function warRoomMissingMemberNames(
-  members: BusinessModelTeamMember[],
-  records: WarRoomTeamRecordSummary[]
-) {
-  const byId = new Map(records.map((r) => [r.studentId, r.filledCount || 0]));
-  return members
-    .filter((m) => (byId.get(String(m.id)) || 0) < WAR_ROOM_CANVAS_CELL_COUNT)
-    .map((m) => m.name || '同学');
-}
-
 function hasBmcContent(data: BMCData) {
   return Object.values(data).some((v) => String(v || '').trim());
+}
+
+const BMC_FIELD_LABELS: Record<keyof BMCData, string> = {
+  keyPartnerships: '合作伙伴',
+  keyActivities: '关键业务',
+  valueProposition: '价值主张',
+  customerRelationships: '客户关系',
+  customerSegments: '客户细分',
+  keyResources: '核心资源',
+  channels: '渠道通路',
+  costStructure: '成本结构',
+  revenueStreams: '收入来源',
+};
+
+/** 未填写的九格中文名（提交审查时备注） */
+function emptyBmcLabels(data: BMCData) {
+  return (Object.keys(BMC_FIELD_LABELS) as (keyof BMCData)[])
+    .filter((k) => !String(data[k] || '').trim())
+    .map((k) => BMC_FIELD_LABELS[k]);
 }
 
 interface CostItem {
@@ -154,10 +186,19 @@ export default function BusinessModelModule({
   const [toast, setToast] = useState('');
 
   const [canvasData, setCanvasData] = useState<BMCData>(emptyBmcData);
-  const [isGenerating, setIsGenerating] = useState(false);
   const [isUploadingCanvas, setIsUploadingCanvas] = useState(false);
-  const [aiGenerated, setAiGenerated] = useState(false);
   const [workspaceIsTeamLeader, setWorkspaceIsTeamLeader] = useState(false);
+  const [bmcReviewStatus, setBmcReviewStatus] = useState('draft');
+  const [bmcReviewComment, setBmcReviewComment] = useState('');
+  const [selfNote, setSelfNote] = useState('');
+  const [isReviewing, setIsReviewing] = useState(false);
+  const [latestReview, setLatestReview] = useState<BmcAiReviewItem | null>(null);
+  const [reviewHistoryOpen, setReviewHistoryOpen] = useState(false);
+  const [reviewHistory, setReviewHistory] = useState<BmcAiReviewItem[]>([]);
+  /** 团队已完成的 AI 审查次数；≥1 才允许上传画布 */
+  const [aiReviewCount, setAiReviewCount] = useState(0);
+  const [guideOpen, setGuideOpen] = useState<Partial<Record<keyof BMCData, boolean>>>({});
+  const [lockedCell, setLockedCell] = useState<string | null>(null);
 
   const [showShareModal, setShowShareModal] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
@@ -239,7 +280,19 @@ export default function BusinessModelModule({
         setCanvasData(bmcFromPayload(d.bmc));
         setCanvasTabUploaded(Boolean(d.bmcCanvasSavedAt));
         setWorkspaceIsTeamLeader(Boolean(d.isTeamLeader));
-        setAiGenerated(Boolean(d.bmcCanvasGeneratedAt) || hasBmcContent(bmcFromPayload(d.bmc)));
+        setBmcReviewStatus(String(d.bmcReviewStatus || 'draft'));
+        setBmcReviewComment(String(d.bmcReviewComment || ''));
+        // 同步加载审查次数，控制「上传画布」是否可用
+        try {
+          const rev = await fetchBmcAiReviews(classId.trim());
+          if (!cancelled) {
+            const list = rev.reviews || [];
+            setAiReviewCount(list.length);
+            if (list[0]) setLatestReview(list[0]);
+          }
+        } catch {
+          if (!cancelled) setAiReviewCount(0);
+        }
       } catch (e) {
         if (!cancelled) message.error(e instanceof Error ? e.message : '加载失败');
       } finally {
@@ -275,36 +328,52 @@ export default function BusinessModelModule({
     setCanvasData(bmcFromPayload(d.bmc));
     setCanvasTabUploaded(Boolean(d.bmcCanvasSavedAt));
     setWorkspaceIsTeamLeader(Boolean(d.isTeamLeader));
-    setAiGenerated(Boolean(d.bmcCanvasGeneratedAt) || hasBmcContent(bmcFromPayload(d.bmc)));
+    setBmcReviewStatus(String(d.bmcReviewStatus || 'draft'));
+    setBmcReviewComment(String(d.bmcReviewComment || ''));
   };
 
-  const handleAIGenerate = async () => {
+  const handleSubmitAiReview = async () => {
     if (!classId?.trim()) {
       message.warning('缺少班级信息');
       return;
     }
-    if (!canCaptain) {
-      message.info('仅队长可生成');
+    // 至少一格有内容才允许审查
+    if (!hasBmcContent(canvasData)) {
+      message.warning('请至少填写一个画布格子后再提交审查');
       return;
     }
-    setIsGenerating(true);
+    const emptyLabels = emptyBmcLabels(canvasData);
+    // 未填格子在自述中备注「未填写」，便于 AI 与审查记录识别
+    const noteForSubmit = emptyLabels.length
+      ? `${String(selfNote || '').trim()}${selfNote.trim() ? '\n\n' : ''}未填写格子：${emptyLabels.join('、')}（备注：未填写）`
+      : selfNote;
+    setIsReviewing(true);
     try {
-      const d = await generateBusinessModelBmcAi(classId.trim());
-      applyWorkspaceBmc(d);
-      showToast('已生成团队商业画布');
+      const res = await submitBmcAiReview(classId.trim(), {
+        selfNote: noteForSubmit,
+        bmc: canvasData as BmcPayload,
+      });
+      setLatestReview(res.review);
+      setAiReviewCount((n) => Math.max(1, n + 1));
+      applyWorkspaceBmc(res.workspace);
+      showToast('本轮审查已完成');
     } catch (e) {
-      const err = e as GenerateBusinessModelBmcAiError;
-      if (err.missingMembers?.length) {
-        const names = err.missingMembers.map((m) => m.studentName).join('、');
-        Modal.warning({
-          title: '暂无法生成',
-          content: `${names} 还没参与虚拟董事会讨论，快去通知他完成画布填充吧`,
-        });
-      } else {
-        message.error(err instanceof Error ? err.message : '生成失败');
-      }
+      message.error(e instanceof Error ? e.message : '审查失败');
     } finally {
-      setIsGenerating(false);
+      setIsReviewing(false);
+    }
+  };
+
+  const openReviewHistory = async () => {
+    if (!classId?.trim()) return;
+    try {
+      const res = await fetchBmcAiReviews(classId.trim());
+      const list = res.reviews || [];
+      setReviewHistory(list);
+      setAiReviewCount(list.length);
+      setReviewHistoryOpen(true);
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '加载审查记录失败');
     }
   };
 
@@ -313,12 +382,12 @@ export default function BusinessModelModule({
       message.warning('缺少班级信息');
       return;
     }
-    if (!canCaptain) {
-      message.info('仅队长可上传');
+    if (aiReviewCount < 1) {
+      message.warning('请先完成至少 1 次 AI 审查后再上传画布');
       return;
     }
     if (!hasBmcContent(canvasData)) {
-      message.warning('请先生成或填写画布内容');
+      message.warning('请先填写画布内容');
       return;
     }
     if (!swotSaveTime) {
@@ -333,14 +402,7 @@ export default function BusinessModelModule({
       message.warning('请先保存成本与财务分析');
       return;
     }
-    const missingNames = warRoomMissingMemberNames(teamMembers, warRoomTeamRecords);
-    if (missingNames.length > 0) {
-      Modal.warning({
-        title: '暂无法提交',
-        content: `${missingNames.join('、')} 尚未完成虚拟董事会演练`,
-      });
-      return;
-    }
+    // 上传门槛：SWOT / 营销 / 财务 / ≥1 次 AI 审查（不再要求虚拟董事会）
     setIsUploadingCanvas(true);
     try {
       const d = await saveBusinessModelBmc(classId.trim(), canvasData);
@@ -349,16 +411,7 @@ export default function BusinessModelModule({
       onBmcCanvasUploaded?.();
       message.success('商业画布已提交');
     } catch (e) {
-      const err = e as SaveBusinessModelBmcError;
-      if (err.missingMembers?.length) {
-        const names = err.missingMembers.map((m) => m.studentName).join('、');
-        Modal.warning({
-          title: '暂无法提交',
-          content: `${names} 尚未完成虚拟董事会演练`,
-        });
-      } else {
-        message.error(err instanceof Error ? err.message : '提交失败');
-      }
+      message.error(e instanceof Error ? e.message : '提交失败');
     } finally {
       setIsUploadingCanvas(false);
     }
@@ -561,6 +614,9 @@ export default function BusinessModelModule({
 
   const deleteCost = (id: number) => setCosts(costs.filter(c => c.id !== id));
   const deleteRevenue = (id: number) => setRevenues(revenues.filter(r => r.id !== id));
+  const canSubmitAiReview = hasBmcContent(canvasData);
+  const emptyCanvasLabels = emptyBmcLabels(canvasData);
+  const canUploadCanvas = aiReviewCount >= 1 && !trainingEnded && bmcReviewStatus !== 'approved';
 
   const handleAddCost = () => {
     if (!newCostName.trim() || !newCostAmount) return;
@@ -596,24 +652,55 @@ export default function BusinessModelModule({
     cfg: typeof cardConfigs[0],
     extraClass: string,
     rows: number
-  ) => (
-    <div className={`bg-gradient-to-br ${cfg.gradient} border-2 ${cfg.border} rounded-2xl p-5 flex flex-col ${extraClass}`}>
-      <div className="flex items-center gap-2 mb-3">
-        <div className={`w-10 h-10 bg-gradient-to-br ${cfg.iconBg} rounded-xl flex items-center justify-center shrink-0`}>
-          <i className={`${cfg.icon} text-white text-lg`}></i>
+  ) => {
+    const guideExpanded = Boolean(guideOpen[cfg.key]);
+    return (
+    <div className={`bg-gradient-to-br ${cfg.gradient} border-2 ${cfg.border} rounded-xl xl:rounded-2xl p-2.5 xl:p-4 flex flex-col min-w-0 ${extraClass}`}>
+      {/* 标题区：笔记本窄列只保留图标+标题，避免「展开引导」挤成竖排 */}
+      <div className="flex items-center gap-1.5 xl:gap-2 mb-1.5 xl:mb-2 min-w-0">
+        <div className={`w-7 h-7 xl:w-10 xl:h-10 bg-gradient-to-br ${cfg.iconBg} rounded-lg xl:rounded-xl flex items-center justify-center shrink-0`}>
+          <i className={`${cfg.icon} text-white text-sm xl:text-lg`}></i>
         </div>
-        <h3 className="text-sm font-bold text-gray-900">{cfg.label}</h3>
+        <h3 className="text-xs xl:text-sm font-bold text-gray-900 truncate whitespace-nowrap">{cfg.label}</h3>
       </div>
       <textarea
         value={canvasData[cfg.key]}
+        onFocus={() => {
+          if (!classId?.trim() || trainingEnded) return;
+          void acquireBmcCellLock(classId.trim(), cfg.key)
+            .then(() => setLockedCell(cfg.key))
+            .catch((e) => message.warning(e instanceof Error ? e.message : '该格正在被他人编辑'));
+        }}
+        onBlur={() => {
+          if (lockedCell === cfg.key && classId?.trim()) {
+            void releaseBmcCellLock(classId.trim(), cfg.key).catch(() => {});
+            setLockedCell(null);
+          }
+        }}
         onChange={(e) => updateCanvasField(cfg.key, e.target.value)}
-        readOnly={!canCaptain}
+        readOnly={trainingEnded || bmcReviewStatus === 'pending' || bmcReviewStatus === 'approved'}
         rows={rows}
-        className={`flex-1 w-full px-3 py-2 text-xs border ${cfg.ringBorder} rounded-lg focus:outline-none focus:ring-2 ${cfg.ring} focus:border-transparent resize-none bg-white read-only:bg-gray-50 read-only:cursor-default`}
-        placeholder={canCaptain ? `请输入${cfg.label}` : '待队长生成'}
+        className={`flex-1 w-full min-h-0 px-2 xl:px-3 py-1.5 xl:py-2 text-xs border ${cfg.ringBorder} rounded-lg focus:outline-none focus:ring-2 ${cfg.ring} focus:border-transparent resize-none bg-white read-only:bg-gray-50 read-only:cursor-default`}
+        placeholder={`请输入${cfg.label}`}
       />
+      {/* 引导入口放输入框下方右下角，笔记本窄列不再与标题抢宽 */}
+      <div className="mt-1 flex justify-end">
+        <button
+          type="button"
+          className="text-[11px] xl:text-xs text-teal-600 cursor-pointer whitespace-nowrap"
+          onClick={() => setGuideOpen((prev) => ({ ...prev, [cfg.key]: !prev[cfg.key] }))}
+        >
+          {guideExpanded ? '收起引导' : '展开引导'}
+        </button>
+      </div>
+      {guideExpanded ? (
+        <div className="mt-1 text-[11px] leading-relaxed text-gray-600 bg-white/70 border border-dashed border-gray-200 rounded-lg px-2 py-1.5">
+          {BMC_CELL_GUIDE[cfg.key]}
+        </div>
+      ) : null}
     </div>
-  );
+    );
+  };
 
   return (
     <div className="space-y-3">
@@ -647,89 +734,147 @@ export default function BusinessModelModule({
           ))}
         </div>
 
-        <div className="p-8">
+        <div className="p-4 xl:p-8">
           {activeTab === 'canvas' && (
-            <div className="space-y-8">
-              {/* 顶部操作栏 */}
-              <div className="flex items-center justify-between gap-4">
-                <div className="bg-pink-50 border border-pink-200 rounded-xl p-4 flex-1">
-                  <h3 className="text-sm font-bold text-pink-900 mb-1">商业模式画布（BMC）</h3>
-                  <p className="text-xs text-pink-700">
-                    组员完成虚拟董事会并保存后，队长可综合生成团队最终画布
-                  </p>
+            <div className="space-y-6">
+              <div className="space-y-4">
+                <div className="bg-pink-50 border border-pink-200 rounded-xl px-4 py-3">
+                  <h3 className="text-sm font-bold text-pink-900 mb-0.5">商业模式画布（BMC）</h3>
+                  <p className="text-xs text-pink-700">至少完成 1 次 AI 审查后，再上传给教师审核</p>
                 </div>
-                {canCaptain ? (
-                <button
-                  type="button"
-                  onClick={handleAIGenerate}
-                  disabled={trainingEnded || isGenerating}
-                  className="px-6 py-3 bg-gradient-to-r from-teal-500 to-emerald-500 text-white text-sm font-bold rounded-xl hover:shadow-lg transition-all whitespace-nowrap cursor-pointer disabled:opacity-50 flex items-center gap-2"
-                >
-                  {isGenerating ? (
-                    <>
-                      <i className="ri-loader-4-line animate-spin"></i>
-                      AI生成中...
-                    </>
+
+                <div className="grid grid-cols-5 gap-2 xl:gap-4">
+                  {renderCanvasCard(cardConfigs[0], 'row-span-2', 10)}
+                  {renderCanvasCard(cardConfigs[1], '', 5)}
+                  {renderCanvasCard(cardConfigs[2], 'row-span-2 shadow-lg', 10)}
+                  {renderCanvasCard(cardConfigs[3], '', 5)}
+                  {renderCanvasCard(cardConfigs[4], 'row-span-2', 10)}
+                  {renderCanvasCard(cardConfigs[5], '', 5)}
+                  {renderCanvasCard(cardConfigs[6], '', 5)}
+                  {renderCanvasCard(cardConfigs[7], 'col-span-2', 4)}
+                  {renderCanvasCard(cardConfigs[8], 'col-span-3 shadow-lg', 4)}
+                </div>
+              </div>
+
+              {/* 本轮审查：自述+提交同框；记录旁审核状态；结果单独下一行 */}
+              <div className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h3 className="text-base font-bold text-gray-900">本轮审查与结果</h3>
+                  <div className="flex items-center gap-2 sm:gap-3 flex-wrap justify-end">
+                    <p className="text-[11px] text-gray-500">
+                      审核状态：
+                      {bmcReviewStatus === 'approved'
+                        ? '已通过'
+                        : bmcReviewStatus === 'pending'
+                          ? '待教师审核'
+                          : bmcReviewStatus === 'rejected'
+                            ? `已驳回${bmcReviewComment ? `：${bmcReviewComment}` : ''}`
+                            : '未上传'}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => void openReviewHistory()}
+                      className="px-3 py-1.5 text-xs font-medium text-teal-700 bg-teal-50 rounded-lg cursor-pointer hover:bg-teal-100 whitespace-nowrap"
+                    >
+                      审查记录
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleUploadCanvas()}
+                      disabled={!canUploadCanvas || isUploadingCanvas}
+                      title={aiReviewCount < 1 ? '请先完成至少 1 次 AI 审查' : undefined}
+                      className="px-3 py-1.5 text-xs font-medium bg-pink-500 text-white rounded-lg hover:bg-pink-600 cursor-pointer disabled:opacity-50 whitespace-nowrap"
+                    >
+                      <i className="ri-upload-line mr-1"></i>
+                      {isUploadingCanvas ? '上传中…' : '上传画布'}
+                    </button>
+                  </div>
+                </div>
+
+                {/* 自述输入框内嵌提交按钮（单独一行） */}
+                <div className="rounded-xl border border-gray-200 overflow-hidden focus-within:ring-2 focus-within:ring-pink-400 focus-within:border-pink-300">
+                  <textarea
+                    value={selfNote}
+                    onChange={(e) => setSelfNote(e.target.value)}
+                    rows={4}
+                    placeholder="本轮自述：这一轮你改了什么、为什么这么改？"
+                    className="w-full text-xs px-3 py-2 resize-none border-0 focus:outline-none focus:ring-0 bg-white"
+                  />
+                  <div className="flex items-center justify-between gap-2 px-3 py-2 border-t border-gray-100 bg-gray-50/90">
+                    <p className="text-[11px] text-gray-400 min-w-0">
+                      {canSubmitAiReview
+                        ? emptyCanvasLabels.length
+                          ? `未填写：${emptyCanvasLabels.join('、')}`
+                          : '九格已全部填写'
+                        : '请至少填写一个画布格子后再提交审查'}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => void handleSubmitAiReview()}
+                      disabled={trainingEnded || isReviewing || !canSubmitAiReview}
+                      className="px-4 py-1.5 bg-gradient-to-r from-teal-500 to-cyan-600 text-white text-sm font-medium rounded-lg cursor-pointer disabled:opacity-50 shrink-0 whitespace-nowrap"
+                    >
+                      {isReviewing ? '审查中…' : '提交本轮审查'}
+                    </button>
+                  </div>
+                </div>
+
+                {/* 审查结果：输入区下方单独一行 */}
+                <div className="min-w-0 rounded-xl border border-gray-100 bg-gray-50/50 px-4 py-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm font-semibold text-gray-800">审查结果</span>
+                    {latestReview?.aiScore != null ? (
+                      <span className="text-sm font-semibold text-teal-700">AI 评分 {latestReview.aiScore}</span>
+                    ) : null}
+                  </div>
+                  {latestReview ? (
+                    <div className="space-y-2 text-sm text-gray-700">
+                      <p>{latestReview.aiResult?.summary || '暂无总评'}</p>
+                      {Array.isArray(latestReview.aiResult?.suggestions) &&
+                      latestReview.aiResult.suggestions.length ? (
+                        <ul className="list-disc pl-5 text-xs text-gray-600 space-y-1">
+                          {latestReview.aiResult.suggestions.map((s) => (
+                            <li key={s}>{s}</li>
+                          ))}
+                        </ul>
+                      ) : null}
+                    </div>
                   ) : (
-                    <>
-                      <i className="ri-sparkling-line"></i>
-                      AI生成建议
-                    </>
+                    <p className="text-sm text-gray-400">提交本轮审查后，结果将显示在这里</p>
                   )}
-                </button>
-                ) : null}
+                </div>
               </div>
 
-              {/* 九宫格画布 — 无空白布局 */}
-              {/* 第一行：合作伙伴(row-span-2) | 关键业务 | 价值主张(row-span-2) | 客户关系 | 客户细分(row-span-2) */}
-              <div className="grid grid-cols-5 gap-4">
-                {/* 合作伙伴 row-span-2 */}
-                {renderCanvasCard(cardConfigs[0], 'row-span-2', 10)}
-
-                {/* 关键业务 */}
-                {renderCanvasCard(cardConfigs[1], '', 5)}
-
-                {/* 价值主张 row-span-2 */}
-                {renderCanvasCard(cardConfigs[2], 'row-span-2 shadow-lg', 10)}
-
-                {/* 客户关系 */}
-                {renderCanvasCard(cardConfigs[3], '', 5)}
-
-                {/* 客户细分 row-span-2 */}
-                {renderCanvasCard(cardConfigs[4], 'row-span-2', 10)}
-
-                {/* 核心资源 */}
-                {renderCanvasCard(cardConfigs[5], '', 5)}
-
-                {/* 渠道通路 */}
-                {renderCanvasCard(cardConfigs[6], '', 5)}
-
-                {/* 第三行：成本结构 col-span-2 | 收入来源 col-span-3 */}
-                {renderCanvasCard(cardConfigs[7], 'col-span-2', 4)}
-                {renderCanvasCard(cardConfigs[8], 'col-span-3 shadow-lg', 4)}
-              </div>
-
-              <div className="flex gap-4">
-                {canCaptain ? (
-                <button
-                  type="button"
-                  onClick={handleUploadCanvas}
-                  disabled={trainingEnded || isUploadingCanvas}
-                  className="flex-1 px-6 py-3 bg-pink-500 text-white text-sm font-medium rounded-xl hover:bg-pink-600 transition-colors whitespace-nowrap cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
-                >
-                  <i className="ri-upload-line"></i>
-                  {isUploadingCanvas ? '上传中…' : '上传画布'}
-                </button>
-                ) : null}
-                {/* <button
-                  onClick={() => showToast('画布已导出为图片 ✓')}
-                  className="px-6 py-3 bg-gray-100 text-gray-700 text-sm font-medium rounded-xl hover:bg-gray-200 transition-colors whitespace-nowrap cursor-pointer flex items-center gap-2"
-                >
-                  <i className="ri-image-line"></i>
-                  导出图片
-                </button> */}
-              </div>
-
+              <Modal
+                open={reviewHistoryOpen}
+                onCancel={() => setReviewHistoryOpen(false)}
+                footer={null}
+                title="审查记录"
+                width={640}
+              >
+                <div className="space-y-3 max-h-[60vh] overflow-y-auto">
+                  {reviewHistory.length === 0 ? (
+                    <p className="text-sm text-gray-400 text-center py-8">暂无审查记录</p>
+                  ) : (
+                    reviewHistory.map((item) => (
+                      <div key={item.id} className="border border-gray-100 rounded-xl p-3">
+                        <div className="flex items-center justify-between text-xs text-gray-500 mb-1">
+                          <span>
+                            {item.teamName ? `${item.teamName} · ` : ''}
+                            {item.submitterName || '同学'}
+                          </span>
+                          <span>{new Date(item.createdAt).toLocaleString('zh-CN')}</span>
+                        </div>
+                        <p className="text-xs text-gray-600 mb-1">自述：{item.selfNote || '（无）'}</p>
+                        <p className="text-sm text-gray-800">{item.aiResult?.summary || '—'}</p>
+                        {item.aiScore != null ? (
+                          <p className="text-xs text-teal-700 mt-1">评分 {item.aiScore}</p>
+                        ) : null}
+                      </div>
+                    ))
+                  )}
+                </div>
+              </Modal>
             </div>
           )}
 

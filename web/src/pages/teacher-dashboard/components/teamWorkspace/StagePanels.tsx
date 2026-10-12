@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Modal } from 'antd';
+import { ensurePlanEditorHtml } from '../../../../lib/planEditorHtml';
 import { sanitizeRichText } from '../../../../lib/richText';
-import MarketReportSubmissionPreview from '../MarketReportSubmissionPreview';
 import {
   downloadWithAuth,
   EmptyHint,
@@ -85,7 +85,7 @@ function PlanDocPreview({
   const filled = list
     .map((s: any, idx: number) => {
       const title = String(s.title || s.key || `章节${idx + 1}`);
-      const html = sanitizeRichText(String(s.content || ''));
+      const html = ensurePlanEditorHtml(String(s.content || ''));
       const plain = html.replace(/<[^>]+>/g, '').trim();
       if (!plain) return null;
       return { title, html, key: `${title}-${idx}` };
@@ -139,7 +139,7 @@ const SUB_TABS: Record<string, { key: string; label: string }[]> = {
     { key: 'survey', label: '线上问卷' },
     { key: 'persona', label: '用户画像' },
     { key: 'challenge', label: '对抗优化分析' },
-    { key: 'analysis', label: '调研报告' },
+    { key: 'analysis', label: '市场分析' },
   ],
   product: [
     { key: 'ai-suggestions', label: 'AI设计建议' },
@@ -167,12 +167,19 @@ type Props = {
   stage: any;
 };
 
-export default function StagePanels({ classId, teamId, moduleKey, stage }: Props) {
-  const tabs = SUB_TABS[moduleKey] || [];
+export default function StagePanels({ moduleKey, stage }: Props) {
+  const uploadEnabled = stage?.features?.uploadEnabled !== false;
+  const tabs = useMemo(() => {
+    const base = SUB_TABS[moduleKey] || [];
+    if (moduleKey === 'market' && !uploadEnabled) {
+      return base.filter((t) => t.key !== 'methods');
+    }
+    return base;
+  }, [moduleKey, uploadEnabled]);
   const [sub, setSub] = useState(tabs[0]?.key || '');
 
   useEffect(() => {
-    const nextTabs = SUB_TABS[moduleKey] || [];
+    const nextTabs = tabs;
     const first = nextTabs[0]?.key || '';
     // 仿真已无子 Tab；其它模块若当前 sub 不在列表中则回到第一项
     if (moduleKey === 'simulation') {
@@ -182,7 +189,7 @@ export default function StagePanels({ classId, teamId, moduleKey, stage }: Props
     if (!nextTabs.some((t) => t.key === sub)) {
       setSub(first);
     }
-  }, [moduleKey, sub]);
+  }, [moduleKey, sub, tabs]);
 
   if (!stage) return <EmptyHint text="加载中或暂无数据" />;
   const team = stage.team || {};
@@ -194,7 +201,7 @@ export default function StagePanels({ classId, teamId, moduleKey, stage }: Props
       <Pane>
         {moduleKey === 'team' ? renderTeam(sub, team, members) : null}
         {moduleKey === 'ideation' ? renderIdeation(sub, team, members) : null}
-        {moduleKey === 'market' ? renderMarket(sub, team, members, classId, teamId) : null}
+        {moduleKey === 'market' ? renderMarket(sub, team, members) : null}
         {moduleKey === 'product' ? renderProduct(sub, team, members) : null}
         {moduleKey === 'business' ? renderBusiness(sub, team, members) : null}
         {moduleKey === 'simulation' ? renderSimulation(team, members) : null}
@@ -613,7 +620,7 @@ function MarketSurveyPane({ surveys }: { surveys: any[] }) {
   );
 }
 
-function renderMarket(sub: string, team: any, members: any[], classId: string, teamId: number) {
+function renderMarket(sub: string, team: any, members: any[]) {
   const uploads = team.uploads || [];
   const surveys = team.surveys || [];
   const personas = team.personas || [];
@@ -801,7 +808,7 @@ function renderMarket(sub: string, team: any, members: any[], classId: string, t
     );
   }
 
-  // analysis / 调研报告
+  // analysis：仅保留 AI 市场分析（调研报告卡片已去掉）
   return (
     <div className="space-y-2 md:space-y-3">
       <SectionCard title="AI 市场分析" icon="ri-bar-chart-grouped-line" empty={!team.analysis ? '暂无' : false}>
@@ -811,14 +818,6 @@ function renderMarket(sub: string, team: any, members: any[], classId: string, t
               <div className="text-xs text-gray-400 mb-2">生成于 {team.analysis.createdAt}</div>
             ) : null}
             <MarketAnalysisView result={team.analysis.result} />
-          </>
-        ) : null}
-      </SectionCard>
-      <SectionCard title="调研报告" icon="ri-file-chart-line" empty={!team.report ? '尚未提交' : false}>
-        {team.report ? (
-          <>
-            <div className="text-xs text-gray-500 mb-2">上传于 {team.report.uploadedAt || '—'}</div>
-            <MarketReportSubmissionPreview classId={classId} teamId={teamId} />
           </>
         ) : null}
       </SectionCard>
@@ -940,16 +939,70 @@ function renderBusiness(sub: string, team: any, members: any[]) {
       </SectionCard>
     );
   }
-  // canvas
+  // canvas：画布 + AI 审查记录
+  const reviews = Array.isArray(team.bmcAiReviews) ? team.bmcAiReviews : [];
+  const reviewStatusLabel =
+    team.bmcReviewStatus === 'approved'
+      ? '已通过'
+      : team.bmcReviewStatus === 'pending'
+        ? '待教师审核'
+        : team.bmcReviewStatus === 'rejected'
+          ? `已驳回${team.bmcReviewComment ? `：${team.bmcReviewComment}` : ''}`
+          : '未上传';
   return (
-    <SectionCard
-      title="商业画布"
-      icon="ri-layout-masonry-line"
-      empty={!team.bmc ? '暂无' : false}
-      extra={<span className="text-xs text-gray-400">{team.bmcSavedAt || ''}</span>}
-    >
-      <BmcGridView canvas={team.bmc} />
-    </SectionCard>
+    <div className="space-y-2 md:space-y-3">
+      <SectionCard
+        title="商业画布"
+        icon="ri-layout-masonry-line"
+        empty={!team.bmc ? '暂无' : false}
+        extra={
+          <span className="text-xs text-gray-400">
+            {team.bmcSavedAt || ''}
+            {team.bmcReviewStatus ? ` · ${reviewStatusLabel}` : ''}
+          </span>
+        }
+      >
+        <BmcGridView canvas={team.bmc} />
+      </SectionCard>
+      <SectionCard
+        title="审查记录"
+        icon="ri-file-list-3-line"
+        empty={reviews.length === 0 ? '暂无 AI 审查记录' : false}
+      >
+        <div className="space-y-3">
+          {reviews.map((item: any) => (
+            <div key={item.id} className="border border-gray-100 rounded-xl p-3 bg-gray-50/60">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500 mb-1.5">
+                <span>{item.submitterName || '同学'}</span>
+                <span className="flex items-center gap-2">
+                  {item.aiScore != null ? (
+                    <span className="font-semibold text-teal-700">AI 评分 {item.aiScore}</span>
+                  ) : null}
+                  <span>{item.createdAt || '—'}</span>
+                </span>
+              </div>
+              {item.selfNote ? (
+                <p className="text-xs text-gray-600 mb-1.5 whitespace-pre-wrap break-words">
+                  自述：{item.selfNote}
+                </p>
+              ) : (
+                <p className="text-xs text-gray-400 mb-1.5">自述：（无）</p>
+              )}
+              <p className="text-sm text-gray-800 whitespace-pre-wrap break-words">
+                {item.aiResult?.summary || '—'}
+              </p>
+              {Array.isArray(item.aiResult?.suggestions) && item.aiResult.suggestions.length ? (
+                <ul className="mt-2 list-disc pl-5 text-xs text-gray-600 space-y-0.5">
+                  {item.aiResult.suggestions.map((s: string) => (
+                    <li key={s}>{s}</li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      </SectionCard>
+    </div>
   );
 }
 

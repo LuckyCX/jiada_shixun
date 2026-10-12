@@ -9,15 +9,19 @@ export type DemoAiScene =
   | 'market-analysis'
   | 'product'
   | 'business'
+  | 'war-room-ask'
   | 'war-room-round'
   | 'war-room-reply'
+  | 'hat-studio-ask'
   | 'hat-studio-round'
   | 'hat-studio-reply'
   | 'ideation-midwifery-turn'
   | 'ideation-midwifery-generate'
   | 'ideation-chat-generate'
   | 'simulation'
-  | 'plan-comment';
+  | 'plan-comment'
+  | 'plan-generate-section'
+  | 'plan-generate-full';
 
 /** 演示 AI：只取返回文本，由页面写入 sessionStorage。 */
 export async function generateDemoAi(classId: string, scene: DemoAiScene, context: string): Promise<string> {

@@ -424,10 +424,6 @@ export function DemoPracticeCourse({
 
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-2xl font-bold text-gray-900 mb-1">实践课程</h2>
-        <p className="text-sm text-gray-500">学习知识点、完成检测、获取能力点，构建完整能力体系</p>
-      </div>
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-2">
         <div className="flex space-x-2">
           {([

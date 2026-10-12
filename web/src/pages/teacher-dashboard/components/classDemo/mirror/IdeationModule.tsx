@@ -585,19 +585,6 @@ export default function IdeationModule({
         moduleName="创新思维与创意生成"
       />
 
-      {/* 模块头部 */}
-      <div className="bg-gradient-to-br from-teal-500 to-cyan-600 rounded-2xl p-6 text-white">
-        <div className="flex items-center gap-4">
-          <div className="w-14 h-14 bg-white/20 rounded-2xl flex items-center justify-center backdrop-blur-sm">
-            <i className="ri-lightbulb-flash-line text-2xl"></i>
-          </div>
-          <div>
-            <h2 className="text-xl font-bold mb-1">创新思维与创意生成</h2>
-            <p className="text-white/80 text-sm">运用结构化方法生成并筛选高质量创业点子</p>
-          </div>
-        </div>
-      </div>
-
       {/* Tab：创新方法工具 → 实例库 → 确定项目选题 */}
       <div className="flex items-center gap-3">
         <button

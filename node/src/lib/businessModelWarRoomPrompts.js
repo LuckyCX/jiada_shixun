@@ -1,4 +1,5 @@
 import { extractJsonFromLlmText, findAllBalancedJsonObjects } from './marketResearchSse.js';
+import { SIX_HATS_ORDER, normalizeSixHat } from './sixHatsSession.js';
 
 export const WAR_ROOM_MODULE_KEYS = [
   'customerSegments',
@@ -12,113 +13,72 @@ export const WAR_ROOM_MODULE_KEYS = [
   'costStructure',
 ];
 
-const MIDDLE_HATS = ['red', 'black', 'yellow', 'green'];
-
+/** @deprecated */
 export function shuffleMiddleHatOrder() {
-  const arr = [...MIDDLE_HATS];
-  for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [arr[i], arr[j]] = [arr[j], arr[i]];
-  }
-  return arr;
+  return ['green', 'yellow', 'black', 'red'];
 }
 
-/** 第一轮：白 → 中间四帽随机 → 蓝 */
-export function buildRoundHatOrder(isFirstRound) {
-  if (!isFirstRound) {
-    return ['white', ...shuffleMiddleHatOrder(), 'blue'];
-  }
-  return ['white', ...shuffleMiddleHatOrder(), 'blue'];
+/** 固定顺序：白→绿→黄→黑→红→蓝 */
+export function buildRoundHatOrder() {
+  return [...SIX_HATS_ORDER];
 }
 
 export const HAT_ROLE_TEXT = {
-  white: `白帽（数据分析师）：只基于客观事实和数据发言。补充市场规模、目标用户数量、竞品份额、成本利润测算、行业公开数据等。只说可验证事实，不主观评价。`,
-  red: `红帽（用户代表）：只凭直觉和情绪，以目标用户身份说第一感受：会不会想用、舒服/别扭、在意什么体验。不解释理由。`,
-  black: `黑帽（风险预警员）：指出关键约束与风险前提，并给出可写入画布的调整建议（分阶段收入、试点客户、保守条目等）；禁止只做否定、不下结论、不给可采纳写法。`,
-  yellow: `黄帽（乐观倡导者）：挖掘优势、用户痛点、机会点、盈利模式亮点、增长可能，并推动某一格可落地的表述。`,
-  green: `绿帽（创意设计师）：提出差异化创意：产品优化、新玩法/渠道/盈利模式、与竞品不同点，尽量对应具体画布格。`,
-  blue: `蓝帽（项目经理）：控场与总结。引导讨论、追问关键信息，总结已解决与待解决问题，建议下一步并推动九格补全。`,
+  white: `白帽（客观事实思维｜补信息）：聚焦事实、数据、已知信息，不做主观评判。引导学生区分猜想与可验证信息。提问句式：你有哪些可验证的数据？这个说法依据是什么？还缺少哪些信息？`,
+  green: `绿帽（发散创新思维｜找创新）：鼓励发散，挖掘差异化与替代路径，不否定原想法。提问句式：还有别的实现方式吗？可以增加什么新亮点？`,
+  yellow: `黄帽（正向价值思维｜判价值）：挖掘价值、优势、收益。提问句式：最大价值是什么？用户为什么选择你？长期收益是什么？`,
+  black: `黑帽（风险批判思维｜查风险）：审慎识别隐患与障碍，不是抬杠。提问句式：最大隐患是什么？哪一步最容易出问题？`,
+  red: `红帽（用户共情思维｜贴需求）：站在用户感受与情绪。提问句式：用户第一感受是什么？会担心什么？何时会抵触？`,
+  blue: `蓝帽（全局系统思维｜做统筹）：整合各维结论，规划下一步。提问句式：当前最需优先解决什么？整体框架如何调整？下一步验证什么？`,
 };
 
-export const WAR_ROOM_ROUND_JSON_SCHEMA = `{
-  "messages": [
-    {
-      "hat": "white|red|black|yellow|green|blue",
-      "content": "发言正文",
-      "targetModule": "九格键名或 null",
-      "moduleContent": "当 targetModule 非 null 时的替换全文，否则空字符串"
-    }
-  ]
+export const WAR_ROOM_ASK_SCHEMA = `{
+  "hat": "white|green|yellow|black|red|blue",
+  "content": "面向学生的提问正文（1～3 个追问）",
+  "questions": ["追问1", "追问2", "追问3"]
 }
-固定约束：messages 长度必须恰好为 6；hat 顺序必须与用户提示中的本轮发言顺序完全一致；禁止增删键。
-targetModule 只能是以下之一或 null：
-${WAR_ROOM_MODULE_KEYS.join(', ')}`;
+固定约束：提问不代改；不直接修改商业方案、不给标准答案、不代填画布；questions 1～3 条。`;
 
-export const WAR_ROOM_ROUND_SYSTEM_PROMPT = `你是创业实训「虚拟董事会」协作填画布助手。
+export const WAR_ROOM_ASK_SYSTEM_PROMPT = `你是创业实训「虚拟董事会」中的单一思考帽。
 
-#Context#
-根据项目资料与 SWOT/4P/财务信息，生成一轮六顶思考帽讨论，帮助学生形成可落地的商业模式画布九格。
+#原则#
+提问不代改：从六维验证创业点子，淘汰不靠谱想法、收敛可行方向；只提问引导学生自查。
 
 #Objective#
-输出恰好 6 条消息的 JSON，对应本轮固定帽子顺序。
+以指定帽子视角提出最多 3 个苏格拉底式追问。
 
 #Style#
-${HAT_ROLE_TEXT.white}
-${HAT_ROLE_TEXT.red}
-${HAT_ROLE_TEXT.black}
-${HAT_ROLE_TEXT.yellow}
-${HAT_ROLE_TEXT.green}
-${HAT_ROLE_TEXT.blue}
+${Object.values(HAT_ROLE_TEXT).join('\n')}
 
 #Schema#
-${WAR_ROOM_ROUND_JSON_SCHEMA}
+${WAR_ROOM_ASK_SCHEMA}
 
 #Response#
-1. 每条消息对应一个帽子，严格按用户提示中的本轮发言顺序。
-2. 白帽先摆事实；中间帽子推进某一格表述；蓝帽最后总结并 @学生姓名。
-3. 可写入画布时填 targetModule + moduleContent（全文可直接替换该格）。
-4. 黑帽须给出可落地修正方向，禁止只否定。
-5. 单条 content 约 150–280 字。
-6. 只能输出 messages 一个顶层键的 JSON，禁止 markdown。`;
+只能输出 JSON；禁止 markdown。`;
 
 export const WAR_ROOM_SINGLE_REPLY_SCHEMA = `{
-  "hat": "white|red|black|yellow|green|blue",
-  "content": "回复正文",
-  "targetModule": "九格键名或 null",
-  "moduleContent": "单格替换用要点或空字符串",
-  "fills": [
-    { "targetModule": "九格键名", "moduleContent": "可直接写入该格的全文" }
-  ]
+  "hat": "white|green|yellow|black|red|blue",
+  "content": "回复正文（承接后继续提问引导）"
 }
-固定约束：上述五键必须齐全；fills 可为 []，但学生要求填格时不得为空。
-targetModule 只能是：
-${WAR_ROOM_MODULE_KEYS.join(', ')}`;
+固定约束：禁止代填画布、禁止标准答案、禁止直接改写方案。`;
 
 export const WAR_ROOM_SINGLE_REPLY_SYSTEM_PROMPT = `你是虚拟董事会中的单一角色。
 
-#Context#
-根据对话历史与学生最新发言，以用户指定的那一顶思考帽身份回复，协作填充商业模式画布九格。
-
-#Objective#
-输出单条回复 JSON；若学生要求填写画布，必须给出可写入内容。
+#原则#
+提问不代改。从该帽维度验证点子，引导学生自主研判。
 
 #Style#
-（只能扮演用户提示【你的角色】中的那一顶帽子，禁止串戏）
-${HAT_ROLE_TEXT.white}
-${HAT_ROLE_TEXT.red}
-${HAT_ROLE_TEXT.black}
-${HAT_ROLE_TEXT.yellow}
-${HAT_ROLE_TEXT.green}
-${HAT_ROLE_TEXT.blue}
+${Object.values(HAT_ROLE_TEXT).join('\n')}
 
 #Schema#
 ${WAR_ROOM_SINGLE_REPLY_SCHEMA}
 
 #Response#
-- 必须严格按【你的角色】人设发言：语气、视角、关注点都要像该帽，不得混成其他帽子或通用助教口吻。
-- 建设性、可落地，非反方辩论。
-- 学生提到画布模块/九格/填写某要素时，fills（或 targetModule+moduleContent）必须有可一键写入内容。
-- 只能输出 schema 规定键，禁止 markdown。`;
+严格按【你的角色】发言；承接历史；继续提问引导。`;
+
+/** 兼容旧名 */
+export const WAR_ROOM_ROUND_SYSTEM_PROMPT = WAR_ROOM_ASK_SYSTEM_PROMPT;
+export const WAR_ROOM_ROUND_JSON_SCHEMA = WAR_ROOM_ASK_SCHEMA;
 
 const MODULE_HINT_ZH = {
   customerSegments: '客户细分',
@@ -155,7 +115,7 @@ export function detectModuleKeysFromUserText(text) {
 function formatTranscriptForPrompt(messages, maxChars = 12000) {
   const list = Array.isArray(messages) ? messages : [];
   const lines = list.map((m) => {
-    const role = m.hat === 'user' ? '学生' : HAT_ROLE_TEXT[m.hat]?.slice(0, 8) || m.hat;
+    const role = m.hat === 'user' ? '学生' : HAT_ROLE_TEXT[m.hat]?.slice(0, 12) || m.hat;
     return `[${role}] ${String(m.content || '').trim()}`;
   });
   let text = lines.join('\n\n');
@@ -185,44 +145,34 @@ function workspaceSummary(swot, marketing, finance) {
   return parts.join('\n\n');
 }
 
-export function buildWarRoomRoundUserPrompt({
+export function buildWarRoomAskUserPrompt({
   bundleText,
   swot,
   marketing,
   finance,
   transcriptMessages,
-  roundIndex,
-  hatOrder,
+  activeHat,
   studentDisplayName,
-  canvasSnapshot,
 }) {
-  const orderDesc = hatOrder
-    .map((h, i) => `${i + 1}. ${h}（${HAT_ROLE_TEXT[h]?.split('：')[0] || h}）`)
-    .join('\n');
-  const canvasLines = WAR_ROOM_MODULE_KEYS.map((k) => {
-    const cell = canvasSnapshot?.[k];
-    const c = cell?.content ? String(cell.content).trim() : '';
-    return `- ${k}：${c || '（空）'}`;
-  }).join('\n');
-
-  return `【项目与前期资料】
+  return `【项目与前期资料（文本产物，不含上传压缩包/原型文件）】
 ${String(bundleText || '').trim()}
 
 ${workspaceSummary(swot, marketing, finance)}
 
-【当前画布九格】
-${canvasLines}
-
 【辩论历史】
 ${formatTranscriptForPrompt(transcriptMessages)}
 
-【本轮要求】
-- 轮次：第 ${roundIndex + 1} 轮
-- 本轮 6 条消息的发言顺序（必须严格按此顺序生成 messages 数组）：
-${orderDesc}
-- 学生显示名：${studentDisplayName || '同学'}（蓝帽末条请 @${studentDisplayName || '同学'} 邀请提问）
-- 讨论须紧扣画布九要素，至少 3 条消息应带 targetModule 与可采纳的 moduleContent
-- 黑帽等角色禁止纯否定；须推动可写入九格的可行表述`;
+【你的角色】${HAT_ROLE_TEXT[activeHat] || activeHat}
+
+【任务】
+面向 ${studentDisplayName || '同学'}，以该帽视角提出最多 3 个苏格拉底式追问，从该维度验证创业点子。提问不代改，不代填画布。`;
+}
+
+export function buildWarRoomRoundUserPrompt(args) {
+  return buildWarRoomAskUserPrompt({
+    ...args,
+    activeHat: args.hatOrder?.[0] || args.activeHat || 'white',
+  });
 }
 
 export function buildWarRoomSingleReplyUserPrompt({
@@ -234,20 +184,11 @@ export function buildWarRoomSingleReplyUserPrompt({
   mentionedHat,
   userMessage,
   studentDisplayName,
-  canvasSnapshot,
 }) {
-  const canvasLines = WAR_ROOM_MODULE_KEYS.map((k) => {
-    const cell = canvasSnapshot?.[k];
-    return `- ${k}：${cell?.content?.trim() || '（空）'}`;
-  }).join('\n');
-
-  return `【项目与前期资料】
+  return `【项目与前期资料（文本产物，不含上传文件）】
 ${String(bundleText || '').trim()}
 
 ${workspaceSummary(swot, marketing, finance)}
-
-【当前画布】
-${canvasLines}
 
 【辩论历史】
 ${formatTranscriptForPrompt(transcriptMessages)}
@@ -256,91 +197,49 @@ ${formatTranscriptForPrompt(transcriptMessages)}
 
 【你的角色】${HAT_ROLE_TEXT[mentionedHat] || mentionedHat}
 
-${(() => {
-  const keys = detectModuleKeysFromUserText(userMessage);
-  if (!keys.length) return '';
-  const labels = keys.map((k) => MODULE_HINT_ZH[k] || k).join('、');
-  return `【学生本轮涉及的画布格】${labels}（键名：${keys.join(', ')}）。请在 fills 中为每一格分别填写 moduleContent，使学生可点击采纳写入。`;
-})()}
-
-请以该角色身份回复一条消息，回应学生并推进画布讨论。黑帽须带可采纳的修正建议，勿只做否定。`;
+请以该角色身份回复：承接学生回答并继续提问引导（提问不代改，不代填画布）。`;
 }
 
-function collectFillsFromParsed(parsed) {
-  const fills = [];
-  const push = (targetModule, moduleContent) => {
-    const k = normalizeModuleKey(targetModule);
-    const c = String(moduleContent || '').trim();
-    if (!k || !c) return;
-    if (fills.some((x) => x.targetModule === k)) return;
-    fills.push({ targetModule: k, moduleContent: c });
-  };
-  if (Array.isArray(parsed.fills)) {
-    for (const f of parsed.fills) {
-      push(f?.targetModule, f?.moduleContent);
-    }
-  }
-  push(parsed.targetModule, parsed.moduleContent);
-  return fills;
-}
-
-function normalizeHat(h) {
-  const s = String(h || '').trim().toLowerCase();
-  if (['white', 'red', 'black', 'yellow', 'green', 'blue'].includes(s)) return s;
-  if (s.includes('白')) return 'white';
-  if (s.includes('红')) return 'red';
-  if (s.includes('黑')) return 'black';
-  if (s.includes('黄')) return 'yellow';
-  if (s.includes('绿')) return 'green';
-  if (s.includes('蓝')) return 'blue';
-  return null;
-}
-
-function normalizeModuleKey(k) {
-  const s = String(k || '').trim();
-  if (!s || s === 'null') return null;
-  if (WAR_ROOM_MODULE_KEYS.includes(s)) return s;
-  return null;
-}
-
-export function parseWarRoomRoundFromLlmText(text, expectedOrder) {
+export function parseWarRoomAskFromLlmText(text, expectedHat) {
   let parsed = extractJsonFromLlmText(text);
-  if (!parsed?.messages) {
+  if (!parsed?.content && !Array.isArray(parsed?.questions)) {
     const all = findAllBalancedJsonObjects(String(text || ''));
     for (let i = all.length - 1; i >= 0; i--) {
-      if (Array.isArray(all[i]?.messages)) {
+      if (all[i]?.content || Array.isArray(all[i]?.questions)) {
         parsed = all[i];
         break;
       }
     }
   }
-  if (!parsed?.messages || !Array.isArray(parsed.messages)) {
-    return { error: 'AI 返回格式无效' };
+  const hat = normalizeSixHat(parsed?.hat) || expectedHat;
+  let questions = Array.isArray(parsed?.questions)
+    ? parsed.questions.map((q) => String(q || '').trim()).filter(Boolean).slice(0, 3)
+    : [];
+  let content = String(parsed?.content || '').trim();
+  if (!content && questions.length) {
+    content = questions.map((q, i) => `${i + 1}. ${q}`).join('\n');
   }
-  const raw = parsed.messages.slice(0, 6);
-  if (raw.length !== 6) return { error: '须返回 6 条发言' };
-
-  const messages = raw.map((item, idx) => {
-    const hat = normalizeHat(item.hat) || expectedOrder[idx];
-    const targetModule = normalizeModuleKey(item.targetModule);
-    let moduleContent = String(item.moduleContent || '').trim();
-    if (!targetModule) moduleContent = '';
-    return {
+  if (!content) return { error: 'AI 返回格式无效' };
+  if (!questions.length) {
+    const lines = content.split(/\n+/).map((l) => l.replace(/^\d+[\.\)、]\s*/, '').trim()).filter(Boolean);
+    questions = lines.slice(0, 3);
+  }
+  return {
+    message: {
       hat,
-      content: String(item.content || '').trim(),
-      targetModule,
-      moduleContent,
-    };
-  });
+      content,
+      questions,
+      targetModule: null,
+      moduleContent: '',
+    },
+  };
+}
 
-  for (let i = 0; i < 6; i++) {
-    if (messages[i].hat !== expectedOrder[i]) {
-      messages[i].hat = expectedOrder[i];
-    }
-    if (!messages[i].content) return { error: `第 ${i + 1} 条发言内容为空` };
-  }
-
-  return { messages };
+export function parseWarRoomRoundFromLlmText(text, expectedOrder) {
+  const hat = Array.isArray(expectedOrder) ? expectedOrder[0] : expectedOrder;
+  const r = parseWarRoomAskFromLlmText(text, hat || 'white');
+  if (r.error) return r;
+  return { messages: [r.message] };
 }
 
 export function parseWarRoomSingleReplyFromLlmText(text, mentionedHat) {
@@ -354,18 +253,25 @@ export function parseWarRoomSingleReplyFromLlmText(text, mentionedHat) {
       }
     }
   }
-  if (!parsed?.content) return { error: 'AI 返回格式无效' };
-  const hat = normalizeHat(parsed.hat) || mentionedHat;
-  const fills = collectFillsFromParsed(parsed);
-  const targetModule = fills[0]?.targetModule || null;
-  const moduleContent = fills[0]?.moduleContent || '';
+  if (!parsed?.content) {
+    // 容错：纯文本
+    const plain = String(text || '').trim();
+    if (!plain) return { error: 'AI 返回格式无效' };
+    return {
+      message: {
+        hat: mentionedHat,
+        content: plain,
+        targetModule: null,
+        moduleContent: '',
+      },
+    };
+  }
   return {
     message: {
-      hat,
+      hat: normalizeSixHat(parsed.hat) || mentionedHat,
       content: String(parsed.content).trim(),
-      targetModule,
-      moduleContent,
-      fills: fills.length ? fills : undefined,
+      targetModule: null,
+      moduleContent: '',
     },
   };
 }
@@ -374,10 +280,10 @@ export function parseMentionedHatFromText(text) {
   const t = String(text || '');
   const patterns = [
     { re: /@\s*白帽|@white/i, hat: 'white' },
-    { re: /@\s*红帽|@red/i, hat: 'red' },
-    { re: /@\s*黑帽|@black/i, hat: 'black' },
-    { re: /@\s*黄帽|@yellow/i, hat: 'yellow' },
     { re: /@\s*绿帽|@green/i, hat: 'green' },
+    { re: /@\s*黄帽|@yellow/i, hat: 'yellow' },
+    { re: /@\s*黑帽|@black/i, hat: 'black' },
+    { re: /@\s*红帽|@red/i, hat: 'red' },
     { re: /@\s*蓝帽|@blue/i, hat: 'blue' },
   ];
   for (const p of patterns) {
@@ -385,3 +291,5 @@ export function parseMentionedHatFromText(text) {
   }
   return null;
 }
+
+export { MODULE_HINT_ZH };

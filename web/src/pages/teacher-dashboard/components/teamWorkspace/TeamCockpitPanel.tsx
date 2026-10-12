@@ -1,6 +1,7 @@
 /**
  * 团队实训驾驶舱：分数概览、能力雷达、阶段分柱状、交互热度与近期动态
  */
+import { useEffect, useState } from 'react';
 import {
   Bar,
   BarChart,
@@ -26,7 +27,7 @@ import {
   normalizeTeamDimensionProfile,
   type TeamRoleKey,
 } from '../../../../lib/teamFormationApi';
-import type { TeacherTeamCockpit } from '../../../../lib/teacherMonitorApi';
+import type { TeacherCockpitStageScore, TeacherTeamCockpit } from '../../../../lib/teacherMonitorApi';
 
 const PROCESS_DIM_LABELS: { key: string; label: string }[] = [
   { key: 'participationDepth', label: '参与深度' },
@@ -96,7 +97,7 @@ const SCENE_LABELS: Record<string, string> = {
   ai_idea_turn: 'AI 创意对话',
   ai_idea_generate: 'AI 创意生成',
   six_hats: '六顶帽',
-  hat_studio: '帽子工作室',
+  hat_studio: '六帽创想室',
   survey_ai: '问卷生成',
   market_analysis_generate: '市场分析生成',
   persona_generate: '用户画像生成',
@@ -105,13 +106,70 @@ const SCENE_LABELS: Record<string, string> = {
   product_ai_suggestions_generate: '产品 AI 建议',
   prototype_upload: '原型上传',
   prototype: '原型',
-  bmc_save: '商业画布保存',
+  bmc_save: '商业画布上传',
+  bmc_ai_review: '画布 AI 审查',
   bmc: '商业画布',
-  war_room: '作战室',
+  war_room: '虚拟董事会',
+  war_room_turn: '董事会对话',
+  hat_studio_turn: '六帽对话',
+  six_hats_turn: '六帽对话',
   simulation_run: '仿真推演',
   plan_submit: '计划书提交',
   event: '事件',
 };
+
+/** 阶段证据摘要 → 驾驶舱展示文案 */
+function evidenceChips(s: TeacherCockpitStageScore): string[] {
+  const e = s.evidenceSummary || {};
+  const chips: string[] = [];
+  const num = (k: string) => {
+    const v = Number(e[k]);
+    return Number.isFinite(v) ? v : null;
+  };
+  if (s.key === 'ideation') {
+    const ideas = num('ideaCount');
+    if (ideas != null) chips.push(`创意 ${ideas}`);
+    const hats = num('hatMessageCount');
+    if (hats != null && hats > 0) chips.push(`六帽消息 ${hats}`);
+    const rej = num('topicRejectCount');
+    if (rej != null && rej > 0) chips.push(`选题退回 ${rej}`);
+    if (e.topicStatus) chips.push(`选题 ${String(e.topicStatus)}`);
+  }
+  if (s.key === 'market') {
+    const rounds = num('challengeRounds');
+    if (rounds != null && rounds > 0) chips.push(`对抗 ${rounds} 轮`);
+    if (e.hasReport) chips.push('有调研报告');
+  }
+  if (s.key === 'product') {
+    if (e.hasAiSuggestions) chips.push('已有 AI 建议');
+    if (e.hasPrototype) chips.push(e.prototypeName ? `原型：${String(e.prototypeName)}` : '已上传原型');
+  }
+  if (s.key === 'business') {
+    const parts = [
+      e.swotSaved ? 'SWOT' : null,
+      e.marketingSaved ? '营销' : null,
+      e.financeSaved ? '财务' : null,
+      e.bmcUploaded ? '画布已上传' : null,
+      e.bmcTeacherApproved ? '教师已通过' : null,
+    ].filter(Boolean);
+    if (parts.length) chips.push(parts.join(' · '));
+    const rev = num('bmcAiReviewCount');
+    if (rev != null) {
+      const avg = num('bmcAiReviewAvgScore');
+      chips.push(avg != null ? `AI 审查 ${rev} 次（均分 ${avg}）` : `AI 审查 ${rev} 次`);
+    }
+  }
+  if (s.key === 'simulation') {
+    const runs = num('runCount');
+    if (runs != null) chips.push(`仿真 ${runs} 次`);
+  }
+  if (s.key === 'plan') {
+    if (e.planStatus) chips.push(`计划书 ${String(e.planStatus)}`);
+    const score = num('planScore');
+    if (score != null) chips.push(`得分 ${score}`);
+  }
+  return chips;
+}
 
 const SCENE_TOKEN_ZH: Record<string, string> = {
   midwifery: '启思智能体',
@@ -166,6 +224,13 @@ type Props = {
 };
 
 export default function TeamCockpitPanel({ data, loading, onOpenStage }: Props) {
+  /** 近期 AI 交互：全部 / 各阶段 Tab */
+  const [ixTab, setIxTab] = useState<string>('all');
+  // 切换团队时回到「全部」
+  useEffect(() => {
+    setIxTab('all');
+  }, [data?.team?.id]);
+
   if (loading) {
     return <div className="text-sm text-gray-400 text-center py-16">加载驾驶舱…</div>;
   }
@@ -254,6 +319,21 @@ export default function TeamCockpitPanel({ data, loading, onOpenStage }: Props) 
     count: s.count,
   }));
 
+  const recentAll = stats?.recent || [];
+  const ixTabs = [
+    { key: 'all', label: '全部', count: recentAll.length },
+    ...activeStages.map((s) => ({
+      key: s.key,
+      label: STAGE_SHORT[s.key] || s.name.slice(0, 4),
+      count: recentAll.filter((r) => r.moduleKey === s.key).length,
+    })),
+  ];
+  const recentFiltered =
+    ixTab === 'all' ? recentAll : recentAll.filter((r) => r.moduleKey === ixTab);
+  // 商模 AI 审查汇总（KPI）
+  const businessStage = activeStages.find((s) => s.key === 'business');
+  const bmcReviewCount = Number(businessStage?.evidenceSummary?.bmcAiReviewCount || 0);
+
   return (
     <div className="space-y-4">
       {/* KPI 条 */}
@@ -283,6 +363,17 @@ export default function TeamCockpitPanel({ data, loading, onOpenStage }: Props) 
           <div className="rounded-xl bg-violet-50/70 border border-violet-100 px-3 py-2.5">
             <div className="text-[10px] text-violet-700/70">AI 交互次数</div>
             <div className="text-xl font-bold tabular-nums text-violet-700">{totalIx}</div>
+          </div>
+          <div className="rounded-xl bg-pink-50/70 border border-pink-100 px-3 py-2.5">
+            <div className="text-[10px] text-pink-700/70">画布 AI 审查</div>
+            <div className="text-xl font-bold tabular-nums text-pink-700">
+              {bmcReviewCount > 0 ? bmcReviewCount : '—'}
+            </div>
+            {bmcReviewCount > 0 && businessStage?.evidenceSummary?.bmcAiReviewAvgScore != null ? (
+              <div className="text-[10px] text-pink-600/80 mt-0.5">
+                均分 {String(businessStage.evidenceSummary.bmcAiReviewAvgScore)}
+              </div>
+            ) : null}
           </div>
         </div>
         {fin?.status === 'scored' && (fin.summary || fin.comment) ? (
@@ -524,6 +615,7 @@ export default function TeamCockpitPanel({ data, loading, onOpenStage }: Props) 
             const pct = s.totalScore != null ? s.totalScore : 0;
             const weightPct = Math.round((s.weight || 0) * 1000) / 10;
             const ix = Number(data.interactionCounts?.[s.key] || 0);
+            const chips = evidenceChips(s);
             return (
               <button
                 key={s.key}
@@ -571,10 +663,17 @@ export default function TeamCockpitPanel({ data, loading, onOpenStage }: Props) 
                     })}
                   </div>
                 ) : null}
-                {s.evidenceSummary?.topicRejectCount != null && Number(s.evidenceSummary.topicRejectCount) > 0 ? (
-                  <p className="text-[10px] text-amber-600 mt-1">
-                    选题退回 {String(s.evidenceSummary.topicRejectCount)} 次（软证据）
-                  </p>
+                {chips.length ? (
+                  <div className="flex flex-wrap gap-1 mt-1.5">
+                    {chips.map((c) => (
+                      <span
+                        key={c}
+                        className="text-[10px] px-1.5 py-0.5 rounded bg-slate-50 border border-slate-100 text-slate-600"
+                      >
+                        {c}
+                      </span>
+                    ))}
+                  </div>
                 ) : null}
               </button>
             );
@@ -620,21 +719,43 @@ export default function TeamCockpitPanel({ data, loading, onOpenStage }: Props) 
         </section>
       ) : null}
 
-      {/* 近期动态 */}
-      {(stats?.recent || []).length ? (
-        <section className="bg-white rounded-xl md:rounded-2xl border border-gray-100 p-4 md:p-5">
-          <h3 className="text-sm font-bold text-gray-900 mb-3">近期 AI 交互</h3>
-          <ul className="space-y-2">
-            {stats!.recent.map((r) => (
+      {/* 近期动态：分阶段 Tab */}
+      <section className="bg-white rounded-xl md:rounded-2xl border border-gray-100 p-4 md:p-5">
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+          <h3 className="text-sm font-bold text-gray-900">近期 AI 交互</h3>
+          <p className="text-[11px] text-gray-400">按实训阶段筛选 · 最多展示近 80 条</p>
+        </div>
+        <div className="flex flex-wrap gap-1.5 mb-3">
+          {ixTabs.map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setIxTab(t.key)}
+              className={`px-2.5 py-1 rounded-lg text-xs font-medium cursor-pointer transition-colors ${
+                ixTab === t.key
+                  ? 'bg-teal-500 text-white'
+                  : 'bg-gray-100 text-gray-600 hover:bg-teal-50 hover:text-teal-700'
+              }`}
+            >
+              {t.label}
+              <span className={`ml-1 tabular-nums ${ixTab === t.key ? 'text-white/80' : 'text-gray-400'}`}>
+                {t.count}
+              </span>
+            </button>
+          ))}
+        </div>
+        {recentFiltered.length ? (
+          <ul className="space-y-2 max-h-[28rem] overflow-y-auto pr-0.5">
+            {recentFiltered.map((r) => (
               <li
                 key={r.id}
                 className="rounded-xl border border-gray-100 px-3 py-2 hover:bg-gray-50/80"
               >
                 <div className="flex items-center justify-between gap-2 text-[11px] text-gray-400 mb-0.5">
-                  <span>
+                  <span className="min-w-0 truncate">
                     <span className="text-gray-700 font-medium">{r.studentName}</span>
                     <span className="mx-1">·</span>
-                    {r.moduleName}
+                    <span className="text-teal-700">{STAGE_SHORT[r.moduleKey] || r.moduleName}</span>
                     <span className="mx-1">·</span>
                     {sceneLabel(r.scene)}
                   </span>
@@ -644,8 +765,12 @@ export default function TeamCockpitPanel({ data, loading, onOpenStage }: Props) 
               </li>
             ))}
           </ul>
-        </section>
-      ) : null}
+        ) : (
+          <div className="text-xs text-gray-400 text-center py-8">
+            {ixTab === 'all' ? '暂无 AI 交互记录' : '该阶段暂无近期交互'}
+          </div>
+        )}
+      </section>
 
       <div className="text-center pb-2">
         <button

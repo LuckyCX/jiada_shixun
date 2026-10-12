@@ -14,6 +14,7 @@ export type DemoStageKey =
   | 'simulation'
   | 'plan'
   | 'topicReview'
+  | 'bmcReview'
   | 'planReview';
 
 export type DemoArchiveItem = {

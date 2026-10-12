@@ -12,6 +12,7 @@ import { sendSmtpMail } from '../lib/mailProvider.js';
 import { formatCalendarDateFromPg } from '../lib/calendarDate.js';
 import { validatePasswordStrength } from '../lib/passwordPolicy.js';
 import { signAccessToken, signRefreshToken } from '../lib/authTokens.js';
+import { normalizeModuleFeatures } from '../lib/courseSettingsFeatures.js';
 
 const router = Router();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -346,7 +347,8 @@ router.get('/student/personal-class-enrollments', requireAuth(), requireStudent(
                     'moduleKey', cs.module_key,
                     'startDate', to_char(cs.start_date, 'YYYY-MM-DD'),
                     'deadlineDate', to_char(cs.deadline_date, 'YYYY-MM-DD'),
-                    'skipped', CASE WHEN cs.module_key = 'team' THEN false ELSE COALESCE(cs.skipped, false) END
+                    'skipped', CASE WHEN cs.module_key = 'team' THEN false ELSE COALESCE(cs.skipped, false) END,
+                    'features', COALESCE(cs.features_json, '{}'::jsonb)
                   )
                   ORDER BY CASE cs.module_key
                     WHEN 'team' THEN 1
@@ -400,7 +402,16 @@ router.get('/student/personal-class-enrollments', requireAuth(), requireStudent(
             : teamStartDate
               ? '未到团队组建日期'
               : '未配置团队组建日期',
-          courseSettings: Array.isArray(r.courseSettings) ? r.courseSettings : [],
+          courseSettings: (Array.isArray(r.courseSettings) ? r.courseSettings : []).map((s) => {
+            const moduleKey = String(s?.moduleKey || '');
+            return {
+              moduleKey,
+              startDate: s?.startDate || '',
+              deadlineDate: s?.deadlineDate || '',
+              skipped: Boolean(s?.skipped),
+              features: normalizeModuleFeatures(s?.features, moduleKey),
+            };
+          }),
         };
       })
     );

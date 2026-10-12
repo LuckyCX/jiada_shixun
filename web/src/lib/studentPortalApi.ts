@@ -22,6 +22,10 @@ export type StudentPersonalEnrollment = {
     startDate: string;
     deadlineDate: string;
     skipped?: boolean;
+    features?: {
+      surveyEnabled?: boolean;
+      uploadEnabled?: boolean;
+    };
   }[];
 };
 
@@ -99,6 +103,12 @@ export async function fetchStudentPersonalEnrollments(): Promise<StudentPersonal
           startDate: setting.startDate || '',
           deadlineDate: setting.deadlineDate || '',
           skipped: Boolean(setting.skipped),
+          features: setting.features
+            ? {
+                surveyEnabled: setting.features.surveyEnabled !== false,
+                uploadEnabled: setting.features.uploadEnabled !== false,
+              }
+            : undefined,
         }))
       : [],
   }));

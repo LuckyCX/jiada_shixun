@@ -19,6 +19,7 @@ import TeamQuestionsPresetPage from './components/teamReview/TeamQuestionsPreset
 import TopicReview from './components/topicReview';
 import BusinessPlanReview from './components/businessPlanReview';
 import BusinessPlanDetailPage from './components/businessPlanReview/DetailPage';
+import BmcReview from './components/bmcReview';
 import ClassProjectOverview from '../class-project-overview/page';
 import TeacherGuide from '../teacher-guide/page';
 import CourseSettings from '../course-settings/page';
@@ -53,6 +54,7 @@ type TabKey =
   | 'teamReview'
   | 'topicReview'
   | 'businessPlanReview'
+  | 'bmcReview'
   | 'classProjectOverview'
   | 'teacherGuide'
   | 'courseSettings'
@@ -97,6 +99,7 @@ const SIDEBAR_GROUPS_BASE: SidebarGroup[] = [
     items: [
       { key: 'teamReview', label: '组队管理', icon: 'ri-team-line', type: 'tab' },
       { key: 'topicReview', label: '选题审核', icon: 'ri-file-search-line', type: 'tab' },
+      { key: 'bmcReview', label: '商业画布审核', icon: 'ri-layout-grid-line', type: 'tab' },
       { key: 'businessPlanReview', label: '商业计划书审核', icon: 'ri-file-chart-line', type: 'tab' },
     ],
   },
@@ -136,6 +139,7 @@ const ALL_TAB_KEYS: TabKey[] = [
   'studentManagement',
   'teamReview',
   'topicReview',
+  'bmcReview',
   'businessPlanReview',
   'classProjectOverview',
   'teacherGuide',
@@ -252,6 +256,7 @@ export default function TeacherDashboard() {
 
   const ideationEnabled = enabledModuleKeys.includes('ideation');
   const planEnabled = enabledModuleKeys.includes('plan');
+  const businessEnabled = enabledModuleKeys.includes('business');
 
   const sidebarGroups = useMemo(() => {
     return SIDEBAR_GROUPS_BASE.map((group) => {
@@ -261,11 +266,12 @@ export default function TeacherDashboard() {
         items: group.items.filter((item) => {
           if (item.key === 'topicReview') return ideationEnabled;
           if (item.key === 'businessPlanReview') return planEnabled;
+          if (item.key === 'bmcReview') return businessEnabled;
           return true;
         }),
       };
     });
-  }, [ideationEnabled, planEnabled]);
+  }, [ideationEnabled, planEnabled, businessEnabled]);
 
   const sidebarItems = useMemo(() => sidebarGroups.flatMap((g) => g.items), [sidebarGroups]);
 
@@ -429,8 +435,10 @@ export default function TeacherDashboard() {
       setTeacherTab('monitor');
     } else if (activeTab === 'businessPlanReview' && !planEnabled) {
       setTeacherTab('monitor');
+    } else if (activeTab === 'bmcReview' && !businessEnabled) {
+      setTeacherTab('monitor');
     }
-  }, [activeTab, ideationEnabled, planEnabled]);
+  }, [activeTab, ideationEnabled, planEnabled, businessEnabled]);
 
   const filteredTeams = monitorTeams.filter((t) => {
     const matchStatus = filterStatus === 'all' || t.status === filterStatus;
@@ -632,6 +640,16 @@ export default function TeacherDashboard() {
             onOpenDetail={(id) => setTeacherTab('businessPlanReview', { submissionId: id })}
           />
         );
+
+      case 'bmcReview':
+        if (!selectedPersonalClass) {
+          return (
+            <div className="bg-white rounded-xl border border-dashed border-gray-200 py-16 text-center text-gray-500 text-sm">
+              请先在右上角选择班级
+            </div>
+          );
+        }
+        return <BmcReview personalClass={selectedPersonalClass} />;
 
       case 'classProjectOverview':
         return <ClassProjectOverview />;

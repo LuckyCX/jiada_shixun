@@ -27,6 +27,7 @@ import {
 } from '../lib/marketResearchSurveyDb.js';
 import { resolvePublicWebOrigin } from '../lib/publicWebOrigin.js';
 import { normalizeUploadFileName } from '../lib/uploadFileName.js';
+import { loadMarketFeatures } from '../lib/courseSettingsFeatures.js';
 import {
   buildMarketResearchContext,
   buildSurveyOnlyContext,
@@ -201,12 +202,13 @@ function mapPlanRow(row) {
   };
 }
 
-function validatePlanBody(body, memberIds, stage) {
+function validatePlanBody(body, memberIds, stage, { requireMethods = true } = {}) {
   const goal = String(body?.goal || '').trim();
   if (!goal) return { error: '请填写调研目标' };
   const methodsRaw = Array.isArray(body?.methods) ? body.methods.map((m) => String(m).trim()).filter(Boolean) : [];
   const methods = filterPlanMethods(methodsRaw);
-  if (!methods.length) return { error: '请至少选择一种调研方法' };
+  // 关闭「调研数据上传」时不强制选择上传方法
+  if (requireMethods && !methods.length) return { error: '请至少选择一种调研方法' };
   for (const m of methodsRaw) {
     if (m === LEGACY_ONLINE_SURVEY_METHOD) continue;
     if (!METHODS_ALLOWED.includes(m)) return { error: `无效的调研方法：${m}` };
@@ -351,11 +353,13 @@ router.get('/student/personal-classes/:classId/market-research/plan', requireAut
       [ctx.team.id]
     );
     const stage = await getMarketStageDates(ctx.pool, ctx.classId);
+    const features = await loadMarketFeatures(ctx.pool, ctx.classId);
     return ok(req, res, {
       plan: mapPlanRow(rows[0]),
       isTeamLeader: ctx.isTeamLeader,
       teamMembers: ctx.members,
       stagePeriod: stage,
+      features,
     });
   } catch (e) {
     logError(`GET market-research plan traceId=${req.traceId}`, e);
@@ -373,7 +377,10 @@ router.put('/student/personal-classes/:classId/market-research/plan', requireAut
 
     const memberIds = new Set(ctx.members.map((m) => m.id));
     const stage = await getMarketStageDates(ctx.pool, ctx.classId);
-    const v = validatePlanBody(req.body, memberIds, stage);
+    const features = await loadMarketFeatures(ctx.pool, ctx.classId);
+    const v = validatePlanBody(req.body, memberIds, stage, {
+      requireMethods: features.uploadEnabled,
+    });
     if (v.error) return bad(req, res, 400, 40004, v.error);
 
     await client.query('BEGIN');
@@ -417,13 +424,16 @@ router.put('/student/personal-classes/:classId/market-research/plan', requireAut
       ? `队长已更新调研计划。分工：${roleSummary}`
       : '队长已更新调研计划，请查看分工与时间节点。';
 
+    const notifyLink = features.uploadEnabled
+      ? '/student-center?tab=module-market&marketTab=methods'
+      : '/student-center?tab=module-market&marketTab=survey';
     await client.query(
       `INSERT INTO notifications (receiver_id, sender_id, type, title, content, related_module, related_link, is_read)
        SELECT m.student_id, $2, 'task', $3, $4, 'market_research_plan',
-              '/student-center?tab=module-market&marketTab=methods', false
+              $5, false
        FROM teacher_personal_class_team_members m
        WHERE m.team_id = $1 AND m.student_id <> $2`,
-      [ctx.team.id, ctx.sid, '调研计划已更新', notifyContent]
+      [ctx.team.id, ctx.sid, '调研计划已更新', notifyContent, notifyLink]
     );
 
     await client.query('COMMIT');
@@ -434,6 +444,7 @@ router.put('/student/personal-classes/:classId/market-research/plan', requireAut
       isTeamLeader: true,
       teamMembers: ctx.members,
       stagePeriod: stage,
+      features,
     });
   } catch (e) {
     if (transactionOpen) await client.query('ROLLBACK').catch(() => {});
@@ -493,6 +504,10 @@ router.post(
     try {
       const ctx = await requireTeamContext(req, res);
       if (!ctx) return;
+      const features = await loadMarketFeatures(ctx.pool, ctx.classId);
+      if (!features.uploadEnabled) {
+        return bad(req, res, 400, 40032, '教师已关闭调研数据上传，无法上传文件');
+      }
       const method = String(req.body?.method || '').trim();
       if (!UPLOAD_METHODS.includes(method)) return bad(req, res, 400, 40003, '无效的调研方法');
       if (!req.file) return bad(req, res, 400, 40004, '请选择文件');
@@ -566,6 +581,10 @@ router.delete(
     try {
       const ctx = await requireTeamContext(req, res);
       if (!ctx) return;
+      const features = await loadMarketFeatures(ctx.pool, ctx.classId);
+      if (!features.uploadEnabled) {
+        return bad(req, res, 400, 40032, '教师已关闭调研数据上传，无法删除文件');
+      }
       const uploadId = parseId(req.params.uploadId);
       if (!uploadId) return bad(req, res, 400, 40003, '参数无效');
 
@@ -622,8 +641,13 @@ router.post(
       const planPayload = planPayloadFromRow(planRow, ctx.members);
       planPayload.methods = filterPlanMethods(planPayload.methods || []);
       const projectTopicText = await loadProjectTopicTextForTeam(ctx.pool, ctx.team.id);
-      const fullCtx = await buildMarketResearchContext(ctx.pool, ctx.team.id, UPLOAD_ROOT);
-      const uploadsText = formatUploadsForPrompt(fullCtx.uploads);
+      const features = await loadMarketFeatures(ctx.pool, ctx.classId);
+      // 关闭调研数据上传时，问卷 AI 不再引用历史上传摘录
+      let uploadsText = '';
+      if (features.uploadEnabled) {
+        const fullCtx = await buildMarketResearchContext(ctx.pool, ctx.team.id, UPLOAD_ROOT);
+        uploadsText = formatUploadsForPrompt(fullCtx.uploads);
+      }
       const userPrompt = buildMarketSurveyUserPrompt(planPayload, params, {
         projectTopicText,
         uploadsText,

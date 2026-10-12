@@ -3,6 +3,10 @@ import { fileURLToPath } from 'url';
 import { assembleBusinessModelAiBundle } from './businessModelContext.js';
 import { sectionsToFullText } from './businessPlanSections.js';
 import { loadSkippedModuleKeysByTeamId } from './courseWorkflow.js';
+import {
+  loadMarketAnalysisTextForPrompt,
+  loadMarketPersonasTextForPrompt,
+} from './marketResearchContext.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UPLOAD_ROOT = path.join(__dirname, '../../uploads/market-research');
@@ -86,13 +90,21 @@ async function loadRoleSimulationSummary(pool, teamId) {
 export async function assembleBusinessPlanBundle(pool, teamId, uploadRoot = UPLOAD_ROOT) {
   const { skipped } = await loadSkippedModuleKeysByTeamId(pool, teamId);
   const parts = ['【前期实训汇编】', await assembleBusinessModelAiBundle(pool, teamId, uploadRoot)];
+  // 浓缩市场成果：分析报告 + 用户画像（计划书章节强依赖）
+  if (!skipped.has('market')) {
+    const [analysisText, personasText] = await Promise.all([
+      loadMarketAnalysisTextForPrompt(pool, teamId, 6000),
+      loadMarketPersonasTextForPrompt(pool, teamId, 5000),
+    ]);
+    parts.push('\n' + analysisText, '\n' + personasText);
+  }
   if (!skipped.has('business')) {
     parts.push('\n【商业模式设计（本队已保存）】', await loadBusinessModelWorkspaceText(pool, teamId));
   }
   if (!skipped.has('simulation')) {
     parts.push('\n【AI 仿真模拟（近期记录）】', await loadRoleSimulationSummary(pool, teamId));
   }
-  return truncateMiddle(parts.join('\n'), 16000);
+  return truncateMiddle(parts.join('\n'), 22000);
 }
 
 export function bundleForAnalyzeVersion(sections, contextBundle) {

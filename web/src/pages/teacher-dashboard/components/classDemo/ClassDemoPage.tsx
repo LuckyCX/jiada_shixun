@@ -11,6 +11,8 @@ import BusinessPlanModule from './mirror/BusinessPlanModule';
 import TopicReview from './topicReview';
 import BusinessPlanReview from './planReview';
 import BusinessPlanDetailPage from './planReview/DetailPage';
+import BmcReview from '../bmcReview';
+import { fetchTeacherBmcReviews, reviewTeacherBmc } from './demoBusinessApi';
 import { type DemoStageKey } from './demoStore';
 
 export default function ClassDemoPage({
@@ -36,9 +38,12 @@ export default function ClassDemoPage({
     { key: 'knowledge', label: '实践课程', icon: 'ri-book-2-line' },
   ];
   const showTopicReview = stages.some((item) => item.key === 'ideation');
+  const showBmcReview = stages.some((item) => item.key === 'business');
   const showPlanReview = stages.some((item) => item.key === 'plan');
+  // 审核菜单顺序：选题 → 画布 → 计划书（画布在计划书前）
   const reviewMenus: { key: DemoStageKey; label: string; icon: string }[] = [
     ...(showTopicReview ? [{ key: 'topicReview' as const, label: '选题审核', icon: 'ri-checkbox-circle-line' }] : []),
+    ...(showBmcReview ? [{ key: 'bmcReview' as const, label: '商业画布审核', icon: 'ri-layout-grid-line' }] : []),
     ...(showPlanReview ? [{ key: 'planReview' as const, label: '商业计划书审核', icon: 'ri-file-edit-line' }] : []),
   ];
   const activeKey = (stage !== 'archive' && (learningMenus.some((item) => item.key === stage) || stages.some((item) => item.key === stage) || reviewMenus.some((item) => item.key === stage))
@@ -59,6 +64,10 @@ export default function ClassDemoPage({
       onStageChange('overview');
       return;
     }
+    if (stage === 'bmcReview' && !showBmcReview) {
+      onStageChange('overview');
+      return;
+    }
     if (stage === 'planReview' && !showPlanReview) {
       onStageChange('overview');
       return;
@@ -67,7 +76,7 @@ export default function ClassDemoPage({
     if (isCourseStage && !enabledModuleKeys.includes(stage as CourseSettingStageKey)) {
       onStageChange('overview');
     }
-  }, [stage, enabledModuleKeys, showTopicReview, showPlanReview, onStageChange]);
+  }, [stage, enabledModuleKeys, showTopicReview, showBmcReview, showPlanReview, onStageChange]);
 
   useEffect(() => {
     setPlanDetailId(null);
@@ -153,6 +162,12 @@ export default function ClassDemoPage({
           {activeKey === 'plan' ? <BusinessPlanModule classId={classId} isTeamLeader studentDisplayName="演示学员" teamMemberCount={1} /> : null}
           {activeKey === 'topicReview' ? (
             <TopicReview personalClass={{ id: classId, name: className, academicYear: '', semester: '', createdAt: '', studentCount: 1 }} />
+          ) : null}
+          {activeKey === 'bmcReview' ? (
+            <BmcReview
+              personalClass={{ id: classId, name: className, academicYear: '', semester: '', createdAt: '', studentCount: 1 }}
+              api={{ fetchTeacherBmcReviews, reviewTeacherBmc }}
+            />
           ) : null}
           {activeKey === 'planReview' && planDetailId ? (
             <BusinessPlanDetailPage classId={classId} submissionId={planDetailId} onBack={() => setPlanDetailId(null)} />

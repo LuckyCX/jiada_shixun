@@ -388,4 +388,54 @@ export function formatContextForPrompt(ctx) {
   return lines.join('\n');
 }
 
+function truncateMiddleForPrompt(s, max) {
+  const t = String(s || '').trim();
+  if (t.length <= max) return t;
+  const head = Math.floor(max * 0.55);
+  const tail = Math.floor(max * 0.35);
+  return `${t.slice(0, head)}\n…\n${t.slice(t.length - tail)}`;
+}
+
+/** 市场 AI 分析报告 → 提示词文本（仿真 / 计划书共用） */
+export async function loadMarketAnalysisTextForPrompt(pool, teamId, maxChars = 6000) {
+  const { rows } = await pool.query(
+    `SELECT result, generated_at
+     FROM teacher_personal_class_team_market_analysis
+     WHERE team_id = $1`,
+    [teamId]
+  );
+  const row = rows[0];
+  if (!row?.result) return '【市场调研 · AI智能分析报告】\n（暂无分析报告）';
+  const generatedAt = row.generated_at ? new Date(row.generated_at).toISOString() : '';
+  const text = [
+    '【市场调研 · AI智能分析报告】',
+    generatedAt ? `生成时间：${generatedAt}` : '',
+    JSON.stringify(row.result, null, 2),
+  ]
+    .filter(Boolean)
+    .join('\n');
+  return truncateMiddleForPrompt(text, maxChars);
+}
+
+/** 用户画像 → 提示词文本（最多 6 条） */
+export async function loadMarketPersonasTextForPrompt(pool, teamId, maxChars = 5000) {
+  const { rows } = await pool.query(
+    `SELECT payload, source, created_at
+     FROM teacher_personal_class_team_market_personas
+     WHERE team_id = $1
+     ORDER BY created_at ASC`,
+    [teamId]
+  );
+  if (!rows.length) return '【市场调研 · 用户画像】\n（暂无用户画像）';
+  const blocks = rows.slice(0, 6).map((r, idx) => {
+    const createdAt = r.created_at ? new Date(r.created_at).toISOString() : '';
+    const source = String(r.source || '').trim();
+    const header = [`画像${idx + 1}`, source ? `来源：${source}` : '', createdAt ? `生成时间：${createdAt}` : '']
+      .filter(Boolean)
+      .join(' / ');
+    return `- ${header}\n${JSON.stringify(r.payload || {}, null, 2)}`;
+  });
+  return truncateMiddleForPrompt(['【市场调研 · 用户画像】', ...blocks].join('\n'), maxChars);
+}
+
 export { UPLOAD_METHODS };

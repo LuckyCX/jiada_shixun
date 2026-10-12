@@ -117,8 +117,8 @@ function countBusinessModelProgressFromWorkspace(d: BusinessModelWorkspacePayloa
   if (d.swotSavedAt) done += 1;
   if (d.marketingSavedAt) done += 1;
   if (d.financeSavedAt) done += 1;
-  if (isTeamWarRoomCanvasComplete(d)) done += 1;
   if (d.bmcCanvasSavedAt) done += 1;
+  if (String(d.bmcReviewStatus || '') === 'approved') done += 1;
   return done;
 }
 
@@ -503,7 +503,8 @@ export default function StudentCenterPage() {
         setTeamMarketReportUploaded(Boolean(marketSt.uploaded));
         setTeamProductPrototypeUploaded(Boolean(productSt.uploaded));
         if (businessWs) {
-          setTeamBmcCanvasUploaded(Boolean(businessWs.bmcCanvasSavedAt));
+          // 阶段完成以教师审核通过为准
+          setTeamBmcCanvasUploaded(String(businessWs.bmcReviewStatus || '') === 'approved');
           const businessDone = countBusinessModelProgressFromWorkspace(businessWs);
           setModuleProgressState((s) =>
             s.business === businessDone ? s : { ...s, business: businessDone }
@@ -782,6 +783,7 @@ export default function StudentCenterPage() {
     if (moduleId === 'ideation') return ideationTopicApproved || (moduleProgressState.ideation || 0) >= (MODULE_COMPLETE_THRESHOLD.ideation ?? 99);
     if (moduleId === 'market') return teamMarketReportUploaded;
     if (moduleId === 'product') return teamProductPrototypeUploaded;
+    // 商业模式：教师审核通过才算完成（上传仅 pending）
     if (moduleId === 'business') return teamBmcCanvasUploaded;
     // 仿真完成：必须以全员达标为准，不能仅看个人轮次满 3
     if (moduleId === 'simulation') return simTeamQualified;
