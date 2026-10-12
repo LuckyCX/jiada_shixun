@@ -39,8 +39,20 @@ type StudySession = {
   knowledgePoints: { id: string; title: string; description: string }[];
 };
 
-function publishedNodes(nodes: CourseResourceNode[]): CourseResourceNode[] {
-  return (nodes || []).filter((node) => node.status === 'published');
+/**
+ * 与学生端 / 后端 keepPublished 一致：仅三级小节看 published；
+ * 一二级目录默认 draft（不可发布），只要有已发布子节点就保留。
+ */
+function filterPublishedTree(nodes: CourseResourceNode[]): CourseResourceNode[] {
+  return (nodes || [])
+    .map((node) => {
+      const children = filterPublishedTree(node.children || []);
+      if (node.level === 3) {
+        return node.status === 'published' ? { ...node, children: [] } : null;
+      }
+      return children.length > 0 ? { ...node, children } : null;
+    })
+    .filter((node): node is CourseResourceNode => Boolean(node));
 }
 
 function findNode(nodes: CourseResourceNode[], id: string): CourseResourceNode | null {
@@ -53,8 +65,8 @@ function findNode(nodes: CourseResourceNode[], id: string): CourseResourceNode |
 }
 
 function firstLeaf(nodes: CourseResourceNode[]): CourseResourceNode | null {
-  for (const node of publishedNodes(nodes)) {
-    const children = publishedNodes(node.children || []);
+  for (const node of nodes || []) {
+    const children = node.children || [];
     if (!children.length) return node;
     const leaf = firstLeaf(children);
     if (leaf) return leaf;
@@ -63,7 +75,7 @@ function firstLeaf(nodes: CourseResourceNode[]): CourseResourceNode | null {
 }
 
 function toTree(nodes: CourseResourceNode[]): { title: string; key: string; children?: { title: string; key: string }[] }[] {
-  return publishedNodes(nodes).map((node) => {
+  return (nodes || []).map((node) => {
     const children = toTree(node.children || []);
     return children.length ? { title: node.title, key: node.id, children } : { title: node.title, key: node.id };
   });
@@ -338,10 +350,13 @@ export function DemoPracticeCourse({
   }, [modules]);
 
   const current = catalog.find((item) => item.key === moduleKey) || catalog[0];
-  const tree = current ? toTree(current.nodes) : [];
-  const activeId = chapterId && current && findNode(current.nodes, chapterId) ? chapterId : firstLeaf(current?.nodes || [])?.id || '';
-  const activeNode = current && activeId ? findNode(current.nodes, activeId) : null;
-  const isLeaf = Boolean(activeNode && publishedNodes(activeNode.children || []).length === 0);
+  // 教师 API 返回全量树（含 draft），展示时只保留已发布三级小节及其祖先
+  const visibleNodes = current ? filterPublishedTree(current.nodes) : [];
+  const tree = toTree(visibleNodes);
+  const activeId =
+    chapterId && findNode(visibleNodes, chapterId) ? chapterId : firstLeaf(visibleNodes)?.id || '';
+  const activeNode = activeId ? findNode(visibleNodes, activeId) : null;
+  const isLeaf = Boolean(activeNode && !(activeNode.children || []).length);
   const chapterResources = isLeaf ? activeNode?.resources || [] : [];
   const pointById = new Map((current?.points || []).map((point) => [point.id, point]));
   const chapterPoints = isLeaf
@@ -351,8 +366,9 @@ export function DemoPracticeCourse({
   const allPoints = catalog.flatMap((item) => item.points);
   const completedKnowledgeCount = allPoints.filter((point) => passed[point.id]).length;
   const resourceCount = catalog.reduce((sum, item) => {
-    const walk = (nodes: CourseResourceNode[]): number => publishedNodes(nodes).reduce((acc, node) => acc + (node.resources?.length || 0) + walk(node.children || []), 0);
-    return sum + walk(item.nodes);
+    const walk = (nodes: CourseResourceNode[]): number =>
+      nodes.reduce((acc, node) => acc + (node.resources?.length || 0) + walk(node.children || []), 0);
+    return sum + walk(filterPublishedTree(item.nodes));
   }, 0);
   const passRate = allPoints.length ? Math.round((completedKnowledgeCount / allPoints.length) * 100) : 0;
 
