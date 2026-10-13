@@ -242,7 +242,7 @@ async function studentEnrolledInClass(pool, studentId, classId) {
 
 async function getConfirmedTeam(pool, studentId, classId) {
   const { rows } = await pool.query(
-    `SELECT t.id, t.name
+    `SELECT t.id, t.name, t.is_solo AS "isSolo"
      FROM teacher_personal_class_team_members m
      JOIN teacher_personal_class_teams t ON t.id = m.team_id
      WHERE t.teacher_personal_class_id = $1
@@ -252,7 +252,11 @@ async function getConfirmedTeam(pool, studentId, classId) {
     [classId, studentId]
   );
   if (!rows.length) return null;
-  return { id: Number(rows[0].id), name: rows[0].name };
+  return {
+    id: Number(rows[0].id),
+    name: rows[0].name,
+    isSolo: Boolean(rows[0].isSolo),
+  };
 }
 
 async function resolveTeamLeaderId(pool, teamId) {
@@ -305,6 +309,8 @@ async function requireTeamContext(req, res) {
   }
   const leaderId = await resolveTeamLeaderId(pool, team.id);
   const members = await loadTeamMembers(pool, team.id);
+  // 个人公司或仅 1 人：不强制协作锁 / 上传队长门控
+  const isSolo = Boolean(team.isSolo) || members.length <= 1;
   return {
     sid,
     classId,
@@ -312,6 +318,7 @@ async function requireTeamContext(req, res) {
     team,
     leaderId,
     members,
+    isSolo,
     isTeamLeader: String(leaderId || '') === String(sid),
   };
 }
@@ -475,10 +482,17 @@ async function buildWorkspaceApi(pool, teamId, studentId) {
   const teamRecords = await loadWarRoomTeamRecords(pool, teamId);
   const leaderId = await resolveTeamLeaderId(pool, teamId);
   const members = await loadTeamMembers(pool, teamId);
+  const { rows: teamMeta } = await pool.query(
+    `SELECT is_solo AS "isSolo" FROM teacher_personal_class_teams WHERE id = $1`,
+    [teamId]
+  );
+  const isSolo = Boolean(teamMeta[0]?.isSolo) || members.length <= 1;
   return {
     ...rowToApi(row, { canvas, transcript, teamRecords }),
     studentId: String(studentId),
     isTeamLeader: String(leaderId || '') === String(studentId),
+    isSolo,
+    teamMemberCount: members.length,
     teamMembers: members,
   };
 }
@@ -782,6 +796,66 @@ async function logBusinessGuideInteraction(ctx, scene, content, meta = {}) {
   }
 }
 
+/** 格锁有效期（与前端心跳配合） */
+const BMC_CELL_LOCK_TTL_MS = 90_000;
+
+/**
+ * 读取团队未过期的画布格锁
+ * @returns {Promise<Map<string, { lockedBy: string, lockedByName: string }>>}
+ */
+async function loadActiveBmcCellLockMap(pool, teamId) {
+  const { rows } = await pool.query(
+    `SELECT l.cell_key, l.locked_by, l.heartbeat_at,
+            COALESCE(u.real_name, u.username) AS locked_by_name
+     FROM teacher_personal_class_team_bmc_cell_locks l
+     LEFT JOIN users u ON u.id = l.locked_by
+     WHERE l.team_id = $1`,
+    [teamId]
+  );
+  const map = new Map();
+  const now = Date.now();
+  for (const row of rows) {
+    const hb = row.heartbeat_at ? new Date(row.heartbeat_at).getTime() : 0;
+    if (now - hb > BMC_CELL_LOCK_TTL_MS) continue;
+    map.set(String(row.cell_key), {
+      lockedBy: String(row.locked_by),
+      lockedByName: String(row.locked_by_name || '同学'),
+    });
+  }
+  return map;
+}
+
+/**
+ * 多人协作落盘：只合并本人变更格；若变更格被他人锁定则记入 conflicts
+ * @param {unknown} incomingRaw
+ * @param {string[] | null | undefined} changedKeys
+ */
+async function mergeTeamBmcCanvas(pool, teamId, studentId, incomingRaw, changedKeys) {
+  const row = await loadWorkspaceRow(pool, teamId);
+  const current = coerceBmc(row?.bmc_canvas_json);
+  const incoming = coerceBmc(incomingRaw);
+  const locks = await loadActiveBmcCellLockMap(pool, teamId);
+  const keys =
+    Array.isArray(changedKeys) && changedKeys.length
+      ? changedKeys.map((k) => String(k)).filter((k) => BMC_MODULE_KEYS.includes(k))
+      : BMC_MODULE_KEYS.filter((k) => String(incoming[k] || '') !== String(current[k] || ''));
+  const out = { ...current };
+  /** @type {{ cellKey: string, lockedByName: string }[]} */
+  const conflicts = [];
+  /** @type {string[]} */
+  const appliedKeys = [];
+  for (const k of keys) {
+    const lock = locks.get(k);
+    if (lock && String(lock.lockedBy) !== String(studentId)) {
+      conflicts.push({ cellKey: k, lockedByName: lock.lockedByName });
+      continue;
+    }
+    out[k] = incoming[k];
+    appliedKeys.push(k);
+  }
+  return { bmc: out, conflicts, appliedKeys };
+}
+
 async function persistBmcFields(pool, teamId, studentId, bmc, opts) {
   const row = await loadWorkspaceRow(pool, teamId);
   const swot = row ? coerceSwot(row.swot_json) : defaultSwot();
@@ -1012,7 +1086,10 @@ router.put(
     try {
       const ctx = await requireTeamContext(req, res);
       if (!ctx) return;
-      // 全员可上传；上传后进入教师待审，通过后才算阶段完成
+      // 团队公司仅组长可上传最终画布；个人公司不受限
+      if (!ctx.isSolo && !ctx.isTeamLeader) {
+        return bad(req, res, 403, 40303, '仅组长可上传最终商业画布');
+      }
       const body = req.body && typeof req.body === 'object' ? req.body : {};
       const bmc = coerceBmc(body.bmc);
       const emptyKeys = BMC_MODULE_KEYS.filter((k) => !String(bmc[k] || '').trim());
@@ -1049,8 +1126,6 @@ router.put(
     }
   }
 );
-
-const BMC_CELL_LOCK_TTL_MS = 90_000;
 
 router.post(
   '/student/personal-classes/:classId/business-model/bmc/cell-locks',
@@ -1158,7 +1233,35 @@ router.post(
       const ctx = await requireTeamContext(req, res);
       if (!ctx) return;
       const selfNote = String(req.body?.selfNote || '').trim();
-      const bmc = coerceBmc(req.body?.bmc || (await loadWorkspaceRow(ctx.pool, ctx.team.id))?.bmc_canvas_json);
+      const incoming = coerceBmc(
+        req.body?.bmc || (await loadWorkspaceRow(ctx.pool, ctx.team.id))?.bmc_canvas_json
+      );
+      const changedKeys = Array.isArray(req.body?.changedKeys) ? req.body.changedKeys : null;
+      // 团队：按变更格合并，避免整包覆盖队友正在编辑/已保存的格子
+      let bmc = incoming;
+      if (!ctx.isSolo) {
+        const merged = await mergeTeamBmcCanvas(
+          ctx.pool,
+          ctx.team.id,
+          ctx.sid,
+          incoming,
+          changedKeys
+        );
+        if (merged.conflicts.length) {
+          const tip = merged.conflicts
+            .map((c) => `${c.cellKey}（${c.lockedByName}）`)
+            .join('、');
+          return badWithData(
+            req,
+            res,
+            409,
+            40901,
+            `部分格子正在被队友编辑，请稍后再提交审查：${tip}`,
+            { conflicts: merged.conflicts }
+          );
+        }
+        bmc = merged.bmc;
+      }
       const provider = await getEnabledProvider('multimodal');
       if (!provider) return bad(req, res, 400, 40011, '未配置已启用的多模态模型');
       const bundle = await assembleBusinessModelAiBundle(ctx.pool, ctx.team.id, UPLOAD_ROOT);
@@ -1194,7 +1297,7 @@ router.post(
         ]
       );
       const row = rows[0];
-      // 同步落盘当前九格（不改审核状态）
+      // 同步落盘（团队已合并，不整包覆盖队友格子）
       await persistBmcFields(ctx.pool, ctx.team.id, ctx.sid, bmc, { setGenerated: false, setSaved: false });
       try {
         const { insertTeamAiInteractionLog } = await import('../lib/teamAiInteractionLog.js');
@@ -1996,3 +2099,4 @@ router.get(
 );
 
 export default router;
+

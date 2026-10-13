@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { message, Modal, Spin } from 'antd';
 import VersionControl, { Version } from '../../../../../components/feature/VersionControl';
@@ -221,7 +221,14 @@ export default function BusinessModelModule({
   const [sectionHistoryOpen, setSectionHistoryOpen] = useState<BmSectionKey | null>(null);
   const [sectionHistory, setSectionHistory] = useState<BmcAiReviewItem[]>([]);
   const [guideOpen, setGuideOpen] = useState<Partial<Record<keyof BMCData, boolean>>>({});
-  const [lockedCell, setLockedCell] = useState<string | null>(null);
+  /** 当前本人持有编辑锁的格子；团队多人时未持锁不可改 */
+  const [heldCell, setHeldCell] = useState<string | null>(null);
+  /** 抢锁失败时记录对方姓名，用于只读提示 */
+  const [blockedCells, setBlockedCells] = useState<Partial<Record<keyof BMCData, string>>>({});
+  /** 个人公司 / 单人：不做协作锁与组长上传限制；加载前先按个人放开，避免首屏误锁 */
+  const [isSoloTeam, setIsSoloTeam] = useState(true);
+  /** 本会话已改动的画布格，审查落盘时只合并这些格，避免覆盖队友 */
+  const dirtyBmcKeysRef = useRef<Set<string>>(new Set());
 
   const [showShareModal, setShowShareModal] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
@@ -242,6 +249,8 @@ export default function BusinessModelModule({
   const [warRoomTeamRecords, setWarRoomTeamRecords] = useState<WarRoomTeamRecordSummary[]>([]);
 
   const canCaptain = workspaceIsTeamLeader || isTeamLeader;
+  // 团队多人公司才启用格锁
+  const needCellLock = !isSoloTeam;
 
   const [versions, setVersions] = useState<Version[]>([]);
   const [currentVersion, setCurrentVersion] = useState(1);
@@ -316,8 +325,10 @@ export default function BusinessModelModule({
         setCanvasData(bmcFromPayload(d.bmc));
         setCanvasTabUploaded(Boolean(d.bmcCanvasSavedAt));
         setWorkspaceIsTeamLeader(Boolean(d.isTeamLeader));
+        setIsSoloTeam(Boolean(d.isSolo) || (d.teamMemberCount || members.length || 0) <= 1);
         setBmcReviewStatus(String(d.bmcReviewStatus || 'draft'));
         setBmcReviewComment(String(d.bmcReviewComment || ''));
+        dirtyBmcKeysRef.current = new Set();
         // 同步加载审查次数，控制「上传画布」是否可用
         try {
           const rev = await fetchBmcAiReviews(classId.trim());
@@ -374,13 +385,30 @@ export default function BusinessModelModule({
     onTaskComplete,
   ]);
 
-  const applyWorkspaceBmc = (d: BusinessModelWorkspacePayload) => {
+  const applyWorkspaceBmc = (d: BusinessModelWorkspacePayload, opts?: { clearDirty?: boolean }) => {
     setCanvasData(bmcFromPayload(d.bmc));
     setCanvasTabUploaded(Boolean(d.bmcCanvasSavedAt));
     setWorkspaceIsTeamLeader(Boolean(d.isTeamLeader));
+    setIsSoloTeam(Boolean(d.isSolo) || (d.teamMemberCount || d.teamMembers?.length || 0) <= 1);
     setBmcReviewStatus(String(d.bmcReviewStatus || 'draft'));
     setBmcReviewComment(String(d.bmcReviewComment || ''));
+    if (opts?.clearDirty !== false) dirtyBmcKeysRef.current = new Set();
   };
+
+  // 持锁期间定时续心跳，避免 90s TTL 过期后被队友抢走
+  useEffect(() => {
+    if (!needCellLock || !heldCell || !classId?.trim()) return;
+    const cellKey = heldCell;
+    const cid = classId.trim();
+    const timer = window.setInterval(() => {
+      void acquireBmcCellLock(cid, cellKey).catch(() => {
+        setHeldCell((cur) => (cur === cellKey ? null : cur));
+        setBlockedCells((prev) => ({ ...prev, [cellKey as keyof BMCData]: '队友' }));
+        message.warning('编辑锁已失效，请重新点击该格后再编辑');
+      });
+    }, 30_000);
+    return () => window.clearInterval(timer);
+  }, [needCellLock, heldCell, classId]);
 
   const handleSubmitAiReview = async () => {
     if (!classId?.trim()) {
@@ -399,9 +427,11 @@ export default function BusinessModelModule({
       : selfNote;
     setIsReviewing(true);
     try {
+      const changedKeys = [...dirtyBmcKeysRef.current];
       const res = await submitBmcAiReview(classId.trim(), {
         selfNote: noteForSubmit,
         bmc: canvasData as BmcPayload,
+        ...(needCellLock ? { changedKeys } : {}),
       });
       setLatestReview(res.review);
       setAiReviewCount((n) => Math.max(1, n + 1));
@@ -430,6 +460,10 @@ export default function BusinessModelModule({
   const handleUploadCanvas = async () => {
     if (!classId?.trim()) {
       message.warning('缺少班级信息');
+      return;
+    }
+    if (!isSoloTeam && !canCaptain) {
+      message.info('仅组长可上传最终商业画布');
       return;
     }
     if (aiReviewCount < 1) {
@@ -743,7 +777,10 @@ export default function BusinessModelModule({
   };
 
   const updateCanvasField = (field: keyof BMCData, value: string) => {
-    setCanvasData(prev => ({ ...prev, [field]: value }));
+    // 团队协作：未抢到该格锁时拒绝写入，防止本地脏写后整包覆盖
+    if (needCellLock && heldCell !== field) return;
+    dirtyBmcKeysRef.current.add(field);
+    setCanvasData((prev) => ({ ...prev, [field]: value }));
   };
 
   const handleTeamShare = () => {
@@ -789,7 +826,9 @@ export default function BusinessModelModule({
   const deleteRevenue = (id: number) => setRevenues(revenues.filter(r => r.id !== id));
   const canSubmitAiReview = hasBmcContent(canvasData);
   const emptyCanvasLabels = emptyBmcLabels(canvasData);
-  const canUploadCanvas = aiReviewCount >= 1 && !trainingEnded && bmcReviewStatus !== 'approved';
+  const canUploadByRole = isSoloTeam || canCaptain;
+  const canUploadCanvas =
+    canUploadByRole && aiReviewCount >= 1 && !trainingEnded && bmcReviewStatus !== 'approved';
 
   const handleAddCost = () => {
     if (!newCostName.trim() || !newCostAmount) return;
@@ -840,21 +879,53 @@ export default function BusinessModelModule({
         value={canvasData[cfg.key]}
         onFocus={() => {
           if (!classId?.trim() || trainingEnded) return;
+          if (bmcReviewStatus === 'pending' || bmcReviewStatus === 'approved') return;
+          if (!needCellLock) {
+            setHeldCell(cfg.key);
+            return;
+          }
           void acquireBmcCellLock(classId.trim(), cfg.key)
-            .then(() => setLockedCell(cfg.key))
-            .catch((e) => message.warning(e instanceof Error ? e.message : '该格正在被他人编辑'));
+            .then(() => {
+              setHeldCell(cfg.key);
+              setBlockedCells((prev) => {
+                if (!prev[cfg.key]) return prev;
+                const next = { ...prev };
+                delete next[cfg.key];
+                return next;
+              });
+            })
+            .catch((e) => {
+              const tip = e instanceof Error ? e.message : '该格正在被他人编辑';
+              const nameMatch = tip.match(/已被\s*(.+?)\s*编辑/);
+              setBlockedCells((prev) => ({
+                ...prev,
+                [cfg.key]: nameMatch?.[1] || '队友',
+              }));
+              setHeldCell((cur) => (cur === cfg.key ? null : cur));
+              message.warning(tip);
+            });
         }}
         onBlur={() => {
-          if (lockedCell === cfg.key && classId?.trim()) {
+          if (heldCell !== cfg.key) return;
+          if (needCellLock && classId?.trim()) {
             void releaseBmcCellLock(classId.trim(), cfg.key).catch(() => {});
-            setLockedCell(null);
           }
+          setHeldCell(null);
         }}
         onChange={(e) => updateCanvasField(cfg.key, e.target.value)}
-        readOnly={trainingEnded || bmcReviewStatus === 'pending' || bmcReviewStatus === 'approved'}
+        readOnly={
+          trainingEnded ||
+          bmcReviewStatus === 'pending' ||
+          bmcReviewStatus === 'approved' ||
+          (needCellLock && heldCell !== cfg.key)
+        }
         rows={rows}
         className={`flex-1 w-full min-h-0 px-2 xl:px-3 py-1.5 xl:py-2 text-xs border ${cfg.ringBorder} rounded-lg focus:outline-none focus:ring-2 ${cfg.ring} focus:border-transparent resize-none bg-white read-only:bg-gray-50 read-only:cursor-default`}
-        placeholder={`请输入${cfg.label}`}
+        placeholder={
+          blockedCells[cfg.key]
+            ? `${blockedCells[cfg.key]} 正在编辑此格`
+            : `请输入${cfg.label}`
+        }
       />
       {/* 引导入口放输入框下方右下角，笔记本窄列不再与标题抢宽 */}
       <div className="mt-1 flex justify-end">
@@ -913,7 +984,11 @@ export default function BusinessModelModule({
               <div className="space-y-4">
                 <div className="bg-pink-50 border border-pink-200 rounded-xl px-4 py-3">
                   <h3 className="text-sm font-bold text-pink-900 mb-0.5">商业模式画布（BMC）</h3>
-                  <p className="text-xs text-pink-700">至少完成 1 次 AI 审查后，再上传给教师审核</p>
+                  <p className="text-xs text-pink-700">
+                    {isSoloTeam
+                      ? '至少完成 1 次 AI 审查后，再上传给教师审核'
+                      : '团队协作：点击格子获取编辑锁后再填写，避免互相覆盖；至少 1 次 AI 审查后，由组长上传给教师审核'}
+                  </p>
                 </div>
 
                 <div className="grid grid-cols-5 gap-2 xl:gap-4">
@@ -955,13 +1030,24 @@ export default function BusinessModelModule({
                       type="button"
                       onClick={() => void handleUploadCanvas()}
                       disabled={!canUploadCanvas || isUploadingCanvas}
-                      title={aiReviewCount < 1 ? '请先完成至少 1 次 AI 审查' : undefined}
+                      title={
+                        !canUploadByRole
+                          ? '仅组长可上传最终商业画布'
+                          : aiReviewCount < 1
+                            ? '请先完成至少 1 次 AI 审查'
+                            : undefined
+                      }
                       className="px-3 py-1.5 text-xs font-medium bg-pink-500 text-white rounded-lg hover:bg-pink-600 cursor-pointer disabled:opacity-50 whitespace-nowrap"
                     >
                       <i className="ri-upload-line mr-1"></i>
                       {isUploadingCanvas ? '上传中…' : '上传画布'}
                     </button>
                   </div>
+                  {!isSoloTeam && !canCaptain ? (
+                    <p className="text-[11px] text-amber-700 w-full text-right">
+                      队员可协作填写与 AI 审查；最终上传仅组长可操作
+                    </p>
+                  ) : null}
                 </div>
 
                 {/* 自述输入框内嵌提交按钮（单独一行） */}

@@ -1,16 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="ChangeListManager">
-    <list default="true" id="96dd51df-5f23-4b6c-b1bf-59722eb397f8" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/node/src/routes/adminUsers.js" beforeDir="false" afterPath="$PROJECT_DIR$/node/src/routes/adminUsers.js" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/node/src/routes/colleges.js" beforeDir="false" afterPath="$PROJECT_DIR$/node/src/routes/colleges.js" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/web/src/lib/authApi.ts" beforeDir="false" afterPath="$PROJECT_DIR$/web/src/lib/authApi.ts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/web/src/pages/admin-dashboard/components/classManagement/DeleteClassModal.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/web/src/pages/admin-dashboard/components/classManagement/DeleteClassModal.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/web/src/pages/admin-dashboard/components/userManagement/AdminUsersPanel.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/web/src/pages/admin-dashboard/components/userManagement/AdminUsersPanel.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/web/src/pages/admin-dashboard/components/userManagement/BatchImportModal.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/web/src/pages/admin-dashboard/components/userManagement/BatchImportModal.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/web/src/pages/admin-dashboard/components/userManagement/adminUsersApi.ts" beforeDir="false" afterPath="$PROJECT_DIR$/web/src/pages/admin-dashboard/components/userManagement/adminUsersApi.ts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/web/src/pages/admin-dashboard/components/userManagement/types.ts" beforeDir="false" afterPath="$PROJECT_DIR$/web/src/pages/admin-dashboard/components/userManagement/types.ts" afterDir="false" />
-    </list>
+    <list default="true" id="96dd51df-5f23-4b6c-b1bf-59722eb397f8" name="Changes" comment="" />
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -74,6 +65,7 @@
       <updated>1788253449173</updated>
       <workItem from="1788253450278" duration="1437000" />
       <workItem from="1788621673741" duration="11000" />
+      <workItem from="1791874984028" duration="51000" />
     </task>
     <servers />
   </component>

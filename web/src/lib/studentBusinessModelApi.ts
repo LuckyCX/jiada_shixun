@@ -89,6 +89,9 @@ export type BusinessModelWorkspacePayload = {
   financeSavedAt: string;
   studentId?: string;
   isTeamLeader?: boolean;
+  /** 个人公司（或仅 1 人）时前端不强制协作锁 / 上传队长门控 */
+  isSolo?: boolean;
+  teamMemberCount?: number;
   teamMembers?: BusinessModelTeamMember[];
   bmc?: BmcPayload;
   bmcCanvasSavedAt?: string;
@@ -207,7 +210,7 @@ export type SaveBusinessModelBmcError = Error & {
 
 export async function submitBmcAiReview(
   classId: string,
-  body: { selfNote: string; bmc: BmcPayload }
+  body: { selfNote: string; bmc: BmcPayload; changedKeys?: string[] }
 ): Promise<{ review: BmcAiReviewItem; workspace: BusinessModelWorkspacePayload }> {
   return portalAuthenticatedFetch('student', `${base(classId)}/bmc/ai-review`, {
     method: 'POST',

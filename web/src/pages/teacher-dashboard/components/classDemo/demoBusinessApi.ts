@@ -80,6 +80,8 @@ function emptyWorkspace(): BusinessModelWorkspacePayload {
     financeSavedAt: '',
     studentId: DEMO_STUDENT_ID,
     isTeamLeader: true,
+    isSolo: true,
+    teamMemberCount: 1,
     teamMembers: [{ id: DEMO_STUDENT_ID, name: DEMO_STUDENT_NAME }],
     bmc: emptyBmc(),
     warRoom: {
@@ -120,6 +122,8 @@ function read(classId: string) {
   ensureWarRoom(ws);
   ws.teamMembers = [{ id: DEMO_STUDENT_ID, name: DEMO_STUDENT_NAME }];
   ws.isTeamLeader = true;
+  ws.isSolo = true;
+  ws.teamMemberCount = 1;
   return ws;
 }
 
@@ -322,7 +326,10 @@ export async function reviewTeacherBmc(
   return { teamId: 'demo-team', status, reviewComment: ws.bmcReviewComment };
 }
 
-export async function submitBmcAiReview(classId: string, body: { selfNote: string; bmc: BmcPayload }) {
+export async function submitBmcAiReview(
+  classId: string,
+  body: { selfNote: string; bmc: BmcPayload; changedKeys?: string[] }
+) {
   const ws = await saveBusinessModelWorkspacePartial(classId, {});
   const review = {
     id: `demo-rev-${Date.now()}`,
