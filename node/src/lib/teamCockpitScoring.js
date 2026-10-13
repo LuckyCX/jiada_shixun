@@ -298,6 +298,45 @@ async function buildEvidence(pool, classId, teamId, moduleKey) {
     evidence.bmcAiReviewCount = Number(revRows[0]?.c || 0);
     evidence.bmcAiReviewAvgScore = Number(revRows[0]?.avg_score || 0);
     evidence.bmcTeacherApproved = String(rows[0]?.bmc_review_status || '') === 'approved';
+
+    // SWOT/营销/成本分节审查统计 + 近期审查对话（纳入过程分证据）
+    const { rows: secStats } = await pool.query(
+      `SELECT section, COUNT(*)::int AS c, COALESCE(AVG(ai_score),0)::float AS avg_score
+       FROM teacher_personal_class_team_bm_section_ai_reviews
+       WHERE team_id = $1
+       GROUP BY section`,
+      [teamId]
+    ).catch(() => ({ rows: [] }));
+    evidence.sectionAiReviews = (secStats || []).map((r) => ({
+      section: r.section,
+      count: Number(r.c || 0),
+      avgScore: Number(r.avg_score || 0),
+    }));
+
+    const { rows: secRecent } = await pool.query(
+      `SELECT section, LEFT(self_note, 200) AS self_note,
+              LEFT(COALESCE(ai_result->>'summary', ''), 300) AS summary,
+              ai_score, created_at
+       FROM teacher_personal_class_team_bm_section_ai_reviews
+       WHERE team_id = $1
+       ORDER BY created_at DESC LIMIT 16`,
+      [teamId]
+    ).catch(() => ({ rows: [] }));
+    const { rows: chatSample } = await pool.query(
+      `SELECT role, LEFT(content, 400) AS content, round_index, scene, created_at
+       FROM teacher_personal_class_team_ai_interaction_logs
+       WHERE team_id = $1 AND module_key = 'business'
+       ORDER BY created_at DESC LIMIT 24`,
+      [teamId]
+    ).catch(() => ({ rows: [] }));
+    evidence.recentSectionReviews = (secRecent || []).map((r) => ({
+      section: r.section,
+      selfNote: r.self_note || '',
+      summary: r.summary || '',
+      aiScore: r.ai_score != null ? Number(r.ai_score) : null,
+      createdAt: r.created_at,
+    }));
+    evidence.recentChats = (chatSample || []).reverse();
   }
 
   if (moduleKey === 'simulation') {
@@ -855,6 +894,10 @@ function summarizeEvidence(ev) {
     swotSaved: Boolean(ws?.swot_saved_at),
     marketingSaved: Boolean(ws?.marketing_saved_at),
     financeSaved: Boolean(ws?.finance_saved_at),
+    sectionAiReviewTotal: Array.isArray(ev.sectionAiReviews)
+      ? ev.sectionAiReviews.reduce((s, x) => s + Number(x.count || 0), 0)
+      : null,
+    recentChatCount: Array.isArray(ev.recentChats) ? ev.recentChats.length : null,
     runCount: ev.runCount ?? null,
     planStatus: ev.plan?.status ?? null,
     planScore: ev.plan?.totalScore ?? null,

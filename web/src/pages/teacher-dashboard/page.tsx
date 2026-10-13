@@ -120,6 +120,7 @@ const TEACHER_CLASS_PARAM = 'classId';
 const TEACHER_SUB_PARAM = 'sub';
 const TEACHER_TEAM_PARAM = 'teamId';
 const TEACHER_STAGE_PARAM = 'stage';
+const TEACHER_BM_TAB_PARAM = 'bmTab';
 const TEACHER_SUBMISSION_PARAM = 'submissionId';
 
 const CLASS_CONTEXT_TABS: TabKey[] = ['guidance', 'teamReview', 'studentManagement', 'teamWorkspace', 'classDemo'];
@@ -175,6 +176,7 @@ export default function TeacherDashboard() {
       sub?: 'main' | 'questions' | null;
       teamId?: string | number | null;
       stage?: string | null;
+      bmTab?: string | null;
       submissionId?: string | null;
     }
   ) => {
@@ -187,6 +189,7 @@ export default function TeacherDashboard() {
           next.delete(TEACHER_SUB_PARAM);
           next.delete(TEACHER_TEAM_PARAM);
           next.delete(TEACHER_STAGE_PARAM);
+          next.delete(TEACHER_BM_TAB_PARAM);
           next.delete(TEACHER_SUBMISSION_PARAM);
         } else {
           next.set(TEACHER_TAB_PARAM, tab);
@@ -216,9 +219,19 @@ export default function TeacherDashboard() {
             if (opts.stage) next.set(TEACHER_STAGE_PARAM, opts.stage);
             else next.delete(TEACHER_STAGE_PARAM);
           }
+          // 商模子 Tab 深链（仅团队工作台 + stage=business）
+          if (tab === 'teamWorkspace' && opts && 'bmTab' in opts) {
+            if (opts.bmTab && opts.stage === 'business') next.set(TEACHER_BM_TAB_PARAM, opts.bmTab);
+            else next.delete(TEACHER_BM_TAB_PARAM);
+          } else if (tab !== 'teamWorkspace') {
+            next.delete(TEACHER_BM_TAB_PARAM);
+          } else if (opts && 'stage' in opts && opts.stage !== 'business') {
+            next.delete(TEACHER_BM_TAB_PARAM);
+          }
         } else {
           next.delete(TEACHER_TEAM_PARAM);
           next.delete(TEACHER_STAGE_PARAM);
+          next.delete(TEACHER_BM_TAB_PARAM);
         }
         // 商业计划书详情：仅显式传入 submissionId 时进入详情，否则回列表
         if (tab === 'businessPlanReview') {
@@ -237,6 +250,7 @@ export default function TeacherDashboard() {
   };
   const workspaceTeamId = Number(searchParams.get(TEACHER_TEAM_PARAM) || 0) || 0;
   const workspaceStage = searchParams.get(TEACHER_STAGE_PARAM) || '';
+  const workspaceBmTab = searchParams.get(TEACHER_BM_TAB_PARAM) || '';
   const businessPlanSubmissionId = String(searchParams.get(TEACHER_SUBMISSION_PARAM) || '').trim();
   const [guidancePresetTeamId, setGuidancePresetTeamId] = useState<number | null>(null);
   const [showBatchScoring, setShowBatchScoring] = useState(false);
@@ -704,11 +718,13 @@ export default function TeacherDashboard() {
             classId={classId}
             teamId={workspaceTeamId}
             stage={workspaceStage}
-            onStageChange={(moduleKey) =>
+            bmTab={workspaceBmTab}
+            onStageChange={(moduleKey, opts) =>
               setTeacherTab('teamWorkspace', {
                 classId,
                 teamId: workspaceTeamId,
                 stage: moduleKey,
+                bmTab: opts?.bmTab || null,
               })
             }
             onBack={() => setTeacherTab('monitor')}

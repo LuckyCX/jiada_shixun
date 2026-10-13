@@ -775,6 +775,28 @@ async function loadBusinessStage(pool, classId, teamId, members) {
      LIMIT 50`,
     [teamId]
   );
+  // SWOT / 营销 / 成本分节审查
+  const { rows: sectionReviewRows } = await pool.query(
+    `SELECT r.id, r.section, r.self_note, r.ai_result, r.ai_score, r.created_at, r.submitted_by,
+            COALESCE(u.real_name, u.username, '') AS submitter_name
+     FROM teacher_personal_class_team_bm_section_ai_reviews r
+     JOIN users u ON u.id = r.submitted_by
+     WHERE r.team_id = $1
+     ORDER BY r.created_at DESC
+     LIMIT 80`,
+    [teamId]
+  ).catch(() => ({ rows: [] }));
+
+  const mapReview = (r) => ({
+    id: String(r.id),
+    section: r.section ? String(r.section) : undefined,
+    selfNote: String(r.self_note || ''),
+    aiResult: asObj(r.ai_result),
+    aiScore: r.ai_score != null ? Number(r.ai_score) : null,
+    createdAt: fmtZh(r.created_at),
+    submittedBy: String(r.submitted_by),
+    submitterName: String(r.submitter_name || '').trim() || '同学',
+  });
 
   return {
     moduleKey: 'business',
@@ -791,15 +813,10 @@ async function loadBusinessStage(pool, classId, teamId, members) {
       bmcReviewStatus: String(ws?.bmc_review_status || 'draft'),
       bmcReviewComment: String(ws?.bmc_review_comment || ''),
       bmcReviewedAt: fmtZh(ws?.bmc_reviewed_at),
-      bmcAiReviews: aiReviewRows.map((r) => ({
-        id: String(r.id),
-        selfNote: String(r.self_note || ''),
-        aiResult: asObj(r.ai_result),
-        aiScore: r.ai_score != null ? Number(r.ai_score) : null,
-        createdAt: fmtZh(r.created_at),
-        submittedBy: String(r.submitted_by),
-        submitterName: String(r.submitter_name || '').trim() || '同学',
-      })),
+      bmcAiReviews: aiReviewRows.map(mapReview),
+      swotAiReviews: (sectionReviewRows || []).filter((r) => r.section === 'swot').map(mapReview),
+      marketingAiReviews: (sectionReviewRows || []).filter((r) => r.section === 'marketing').map(mapReview),
+      financeAiReviews: (sectionReviewRows || []).filter((r) => r.section === 'finance').map(mapReview),
     },
     members: members.map((m) => {
       const draft = warDraftRows.find((w) => String(w.student_id) === m.studentId);

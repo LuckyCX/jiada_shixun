@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useState, type ReactNode } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { message, Modal, Spin } from 'antd';
 import VersionControl, { Version } from '../../../../../components/feature/VersionControl';
 import AppModalPortal from '../../../../../components/AppModalPortal';
@@ -7,6 +7,7 @@ import WarRoom from './WarRoom';
 import {
   acquireBmcCellLock,
   fetchBmcAiReviews,
+  fetchBmSectionAiReviews,
   fetchBusinessModelWorkspace,
   generateBusinessModelFinanceItemsAi,
   generateBusinessModelMarketingAi,
@@ -15,12 +16,22 @@ import {
   saveBusinessModelBmc,
   saveBusinessModelWorkspacePartial,
   submitBmcAiReview,
+  submitBmSectionAiReview,
   type BmcAiReviewItem,
   type BmcPayload,
+  type BmSectionKey,
   type BusinessModelTeamMember,
   type BusinessModelWorkspacePayload,
   type WarRoomTeamRecordSummary,
 } from '../demoBusinessApi';
+
+const BM_TAB_KEYS = ['swot', 'marketing', 'finance', 'canvas', 'warroom'] as const;
+type BmTabKey = (typeof BM_TAB_KEYS)[number];
+
+function parseBmTab(raw: string | null): BmTabKey | null {
+  const v = String(raw || '').trim();
+  return (BM_TAB_KEYS as readonly string[]).includes(v) ? (v as BmTabKey) : null;
+}
 
 interface BMCData {
   keyPartnerships: string;
@@ -170,7 +181,9 @@ export default function BusinessModelModule({
   onBmcCanvasUploaded,
 }: BusinessModelModuleProps) {
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState<'canvas' | 'swot' | 'marketing' | 'finance' | 'warroom'>('swot');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialBmTab = parseBmTab(searchParams.get('bmTab')) || 'swot';
+  const [activeTab, setActiveTab] = useState<BmTabKey>(initialBmTab);
   const [workspaceLoading, setWorkspaceLoading] = useState(false);
   const [aiSwotRunning, setAiSwotRunning] = useState(false);
   const [aiMarketingRunning, setAiMarketingRunning] = useState(false);
@@ -197,6 +210,16 @@ export default function BusinessModelModule({
   const [reviewHistory, setReviewHistory] = useState<BmcAiReviewItem[]>([]);
   /** 团队已完成的 AI 审查次数；≥1 才允许上传画布 */
   const [aiReviewCount, setAiReviewCount] = useState(0);
+  /** SWOT / 营销 / 成本：分节审查 */
+  const [sectionSelfNote, setSectionSelfNote] = useState<Record<BmSectionKey, string>>({
+    swot: '',
+    marketing: '',
+    finance: '',
+  });
+  const [sectionReviewing, setSectionReviewing] = useState<BmSectionKey | null>(null);
+  const [sectionLatest, setSectionLatest] = useState<Partial<Record<BmSectionKey, BmcAiReviewItem>>>({});
+  const [sectionHistoryOpen, setSectionHistoryOpen] = useState<BmSectionKey | null>(null);
+  const [sectionHistory, setSectionHistory] = useState<BmcAiReviewItem[]>([]);
   const [guideOpen, setGuideOpen] = useState<Partial<Record<keyof BMCData, boolean>>>({});
   const [lockedCell, setLockedCell] = useState<string | null>(null);
 
@@ -255,6 +278,19 @@ export default function BusinessModelModule({
     setTimeout(() => setToast(''), 2500);
   };
 
+  // URL bmTab → 定位商模子 Tab（驾驶舱深链）
+  useEffect(() => {
+    const fromUrl = parseBmTab(searchParams.get('bmTab'));
+    if (fromUrl && fromUrl !== activeTab) setActiveTab(fromUrl);
+  }, [searchParams]);
+
+  const selectTab = (tab: BmTabKey) => {
+    setActiveTab(tab);
+    const next = new URLSearchParams(searchParams);
+    next.set('bmTab', tab);
+    setSearchParams(next, { replace: true });
+  };
+
   useEffect(() => {
     if (!classId?.trim()) return;
     let cancelled = false;
@@ -282,16 +318,31 @@ export default function BusinessModelModule({
         setWorkspaceIsTeamLeader(Boolean(d.isTeamLeader));
         setBmcReviewStatus(String(d.bmcReviewStatus || 'draft'));
         setBmcReviewComment(String(d.bmcReviewComment || ''));
+        // 同步加载审查次数，控制「上传画布」是否可用
         try {
           const rev = await fetchBmcAiReviews(classId.trim());
           if (!cancelled) {
-            const list = (rev.reviews || []) as BmcAiReviewItem[];
+            const list = rev.reviews || [];
             setAiReviewCount(list.length);
             if (list[0]) setLatestReview(list[0]);
           }
         } catch {
           if (!cancelled) setAiReviewCount(0);
         }
+        // 各分节最新审查结果
+        const sections: BmSectionKey[] = ['swot', 'marketing', 'finance'];
+        const latestMap: Partial<Record<BmSectionKey, BmcAiReviewItem>> = {};
+        await Promise.all(
+          sections.map(async (sec) => {
+            try {
+              const r = await fetchBmSectionAiReviews(classId.trim(), sec);
+              if (r.reviews?.[0]) latestMap[sec] = r.reviews[0];
+            } catch {
+              /* ignore */
+            }
+          })
+        );
+        if (!cancelled) setSectionLatest(latestMap);
       } catch (e) {
         if (!cancelled) message.error(e instanceof Error ? e.message : '加载失败');
       } finally {
@@ -336,11 +387,13 @@ export default function BusinessModelModule({
       message.warning('缺少班级信息');
       return;
     }
+    // 至少一格有内容才允许审查
     if (!hasBmcContent(canvasData)) {
       message.warning('请至少填写一个画布格子后再提交审查');
       return;
     }
     const emptyLabels = emptyBmcLabels(canvasData);
+    // 未填格子在自述中备注「未填写」，便于 AI 与审查记录识别
     const noteForSubmit = emptyLabels.length
       ? `${String(selfNote || '').trim()}${selfNote.trim() ? '\n\n' : ''}未填写格子：${emptyLabels.join('、')}（备注：未填写）`
       : selfNote;
@@ -365,7 +418,7 @@ export default function BusinessModelModule({
     if (!classId?.trim()) return;
     try {
       const res = await fetchBmcAiReviews(classId.trim());
-      const list = (res.reviews || []) as BmcAiReviewItem[];
+      const list = res.reviews || [];
       setReviewHistory(list);
       setAiReviewCount(list.length);
       setReviewHistoryOpen(true);
@@ -508,9 +561,9 @@ export default function BusinessModelModule({
         setMarketingSaveTime,
         setFinanceSaveTime,
       });
-      showToast('SWOT 已由 AI 生成并保存');
+      showToast('已写入 SWOT 引导提纲，请完善后保存');
     } catch (e) {
-      message.error(e instanceof Error ? e.message : '生成失败');
+      message.error(e instanceof Error ? e.message : '引导填写失败');
     } finally {
       setAiSwotRunning(false);
     }
@@ -533,9 +586,9 @@ export default function BusinessModelModule({
         setMarketingSaveTime,
         setFinanceSaveTime,
       });
-      showToast('4P 策略已由 AI 生成并保存');
+      showToast('已写入 4P 引导提纲，请完善后保存');
     } catch (e) {
-      message.error(e instanceof Error ? e.message : '生成失败');
+      message.error(e instanceof Error ? e.message : '引导填写失败');
     } finally {
       setAiMarketingRunning(false);
     }
@@ -558,12 +611,135 @@ export default function BusinessModelModule({
         setMarketingSaveTime,
         setFinanceSaveTime,
       });
-      message.info('根据项目信息和通用财务数据推算，请根据实际情况修改。');
+      showToast('已写入成本/收入引导明细（含估算金额），请按实际修改后保存');
     } catch (e) {
-      message.error(e instanceof Error ? e.message : '生成失败');
+      message.error(e instanceof Error ? e.message : '引导填写失败');
     } finally {
       setAiFinanceRunning(false);
     }
+  };
+
+  const hasSectionContent = (section: BmSectionKey) => {
+    if (section === 'swot') {
+      return Object.values(swotData).some((v) => String(v || '').trim());
+    }
+    if (section === 'marketing') {
+      return Object.values(marketingData).some((v) => String(v || '').trim());
+    }
+    return costs.length > 0 || revenues.length > 0;
+  };
+
+  const handleSubmitSectionReview = async (section: BmSectionKey) => {
+    if (!classId?.trim()) {
+      message.warning('缺少班级信息');
+      return;
+    }
+    if (!hasSectionContent(section)) {
+      message.warning('请先填写内容后再提交审查');
+      return;
+    }
+    setSectionReviewing(section);
+    try {
+      const body =
+        section === 'swot'
+          ? { selfNote: sectionSelfNote.swot, swot: swotData }
+          : section === 'marketing'
+            ? { selfNote: sectionSelfNote.marketing, marketing: marketingData }
+            : { selfNote: sectionSelfNote.finance, finance: { costs, revenues } };
+      const res = await submitBmSectionAiReview(classId.trim(), section, body);
+      setSectionLatest((prev) => ({ ...prev, [section]: res.review }));
+      applyPayloadToState(res.workspace, {
+        setSwotData,
+        setMarketingData,
+        setCosts,
+        setRevenues,
+        setSwotSaveTime,
+        setMarketingSaveTime,
+        setFinanceSaveTime,
+      });
+      showToast('本轮审查已完成');
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '审查失败');
+    } finally {
+      setSectionReviewing(null);
+    }
+  };
+
+  const openSectionReviewHistory = async (section: BmSectionKey) => {
+    if (!classId?.trim()) return;
+    try {
+      const res = await fetchBmSectionAiReviews(classId.trim(), section);
+      setSectionHistory(res.reviews || []);
+      setSectionHistoryOpen(section);
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '加载审查记录失败');
+    }
+  };
+
+  const renderSectionReviewBlock = (section: BmSectionKey, saveAction?: ReactNode) => {
+    const latest = sectionLatest[section];
+    const reviewing = sectionReviewing === section;
+    return (
+      <div className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-base font-bold text-gray-900">本轮审查与结果</h3>
+          <div className="flex items-center gap-2 flex-wrap justify-end">
+            <button
+              type="button"
+              onClick={() => void openSectionReviewHistory(section)}
+              className="px-3 py-1.5 text-xs font-medium text-teal-700 bg-teal-50 rounded-lg cursor-pointer hover:bg-teal-100 whitespace-nowrap"
+            >
+              审查记录
+            </button>
+            {saveAction}
+          </div>
+        </div>
+        <div className="rounded-xl border border-gray-200 overflow-hidden focus-within:ring-2 focus-within:ring-pink-400 focus-within:border-pink-300">
+          <textarea
+            value={sectionSelfNote[section]}
+            onChange={(e) => setSectionSelfNote((prev) => ({ ...prev, [section]: e.target.value }))}
+            rows={3}
+            placeholder="本轮自述：这一轮你改了什么、为什么这么改？"
+            className="w-full text-xs px-3 py-2 resize-none border-0 focus:outline-none focus:ring-0 bg-white"
+          />
+          <div className="flex items-center justify-between gap-2 px-3 py-2 border-t border-gray-100 bg-gray-50/90">
+            <p className="text-[11px] text-gray-400 min-w-0">
+              {hasSectionContent(section) ? '可提交本轮审查' : '请先填写内容后再提交审查'}
+            </p>
+            <button
+              type="button"
+              onClick={() => void handleSubmitSectionReview(section)}
+              disabled={trainingEnded || reviewing || !hasSectionContent(section)}
+              className="px-4 py-1.5 bg-gradient-to-r from-teal-500 to-cyan-600 text-white text-sm font-medium rounded-lg cursor-pointer disabled:opacity-50 shrink-0 whitespace-nowrap"
+            >
+              {reviewing ? '审查中…' : '提交本轮审查'}
+            </button>
+          </div>
+        </div>
+        <div className="min-w-0 rounded-xl border border-gray-100 bg-gray-50/50 px-4 py-3">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm font-semibold text-gray-800">审查结果</span>
+            {latest?.aiScore != null ? (
+              <span className="text-sm font-semibold text-teal-700">AI 评分 {latest.aiScore}</span>
+            ) : null}
+          </div>
+          {latest ? (
+            <div className="space-y-2 text-sm text-gray-700">
+              <p>{latest.aiResult?.summary || '暂无总评'}</p>
+              {Array.isArray(latest.aiResult?.suggestions) && latest.aiResult.suggestions.length ? (
+                <ul className="list-disc pl-5 text-xs text-gray-600 space-y-1">
+                  {latest.aiResult.suggestions.map((s) => (
+                    <li key={s}>{s}</li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+          ) : (
+            <p className="text-sm text-gray-400">提交本轮审查后，结果将显示在这里</p>
+          )}
+        </div>
+      </div>
+    );
   };
 
   const updateCanvasField = (field: keyof BMCData, value: string) => {
@@ -715,7 +891,7 @@ export default function BusinessModelModule({
           {tabs.map(tab => (
             <button
               key={tab.key}
-              onClick={() => setActiveTab(tab.key)}
+              onClick={() => selectTab(tab.key)}
               className={`flex-1 px-5 py-4 text-sm font-medium transition-colors whitespace-nowrap cursor-pointer ${
                 activeTab === tab.key ? 'text-pink-600 border-b-2 border-pink-600' : 'text-gray-600 hover:text-gray-900'
               }`}
@@ -788,6 +964,7 @@ export default function BusinessModelModule({
                   </div>
                 </div>
 
+                {/* 自述输入框内嵌提交按钮（单独一行） */}
                 <div className="rounded-xl border border-gray-200 overflow-hidden focus-within:ring-2 focus-within:ring-pink-400 focus-within:border-pink-300">
                   <textarea
                     value={selfNote}
@@ -815,6 +992,7 @@ export default function BusinessModelModule({
                   </div>
                 </div>
 
+                {/* 审查结果：输入区下方单独一行 */}
                 <div className="min-w-0 rounded-xl border border-gray-100 bg-gray-50/50 px-4 py-3">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-sm font-semibold text-gray-800">审查结果</span>
@@ -873,6 +1051,43 @@ export default function BusinessModelModule({
             </div>
           )}
 
+          <Modal
+            open={Boolean(sectionHistoryOpen)}
+            onCancel={() => setSectionHistoryOpen(null)}
+            footer={null}
+            title={
+              sectionHistoryOpen === 'swot'
+                ? 'SWOT 审查记录'
+                : sectionHistoryOpen === 'marketing'
+                  ? '营销策略审查记录'
+                  : '成本分析审查记录'
+            }
+            width={640}
+          >
+            <div className="space-y-3 max-h-[60vh] overflow-y-auto">
+              {sectionHistory.length === 0 ? (
+                <p className="text-sm text-gray-400 text-center py-8">暂无审查记录</p>
+              ) : (
+                sectionHistory.map((item) => (
+                  <div key={item.id} className="border border-gray-100 rounded-xl p-3">
+                    <div className="flex items-center justify-between text-xs text-gray-500 mb-1">
+                      <span>
+                        {item.teamName ? `${item.teamName} · ` : ''}
+                        {item.submitterName || '同学'}
+                      </span>
+                      <span>{new Date(item.createdAt).toLocaleString('zh-CN')}</span>
+                    </div>
+                    <p className="text-xs text-gray-600 mb-1">自述：{item.selfNote || '（无）'}</p>
+                    <p className="text-sm text-gray-800">{item.aiResult?.summary || '—'}</p>
+                    {item.aiScore != null ? (
+                      <p className="text-xs text-teal-700 mt-1">评分 {item.aiScore}</p>
+                    ) : null}
+                  </div>
+                ))
+              )}
+            </div>
+          </Modal>
+
           {activeTab === 'swot' && (
             <div className="space-y-8">
               {workspaceLoading ? (
@@ -899,8 +1114,8 @@ export default function BusinessModelModule({
                       disabled={trainingEnded || aiSwotRunning || !classId?.trim()}
                       className="px-4 py-2 bg-gradient-to-r from-teal-500 to-emerald-500 text-white text-sm font-semibold rounded-xl hover:shadow-md transition-all whitespace-nowrap cursor-pointer disabled:opacity-50 flex items-center gap-2"
                     >
-                      {aiSwotRunning ? <i className="ri-loader-4-line animate-spin" /> : <i className="ri-sparkling-line" />}
-                      AI 生成
+                      {aiSwotRunning ? <i className="ri-loader-4-line animate-spin" /> : <i className="ri-compass-3-line" />}
+                      AI 引导填写
                     </button>
                   </div>
                 </div>
@@ -926,9 +1141,18 @@ export default function BusinessModelModule({
                   </div>
                 ))}
               </div>
-              <button onClick={handleSaveSwot} disabled={isSavingSwot} className="w-full px-6 py-3 bg-pink-500 text-white text-sm font-bold rounded-xl hover:bg-pink-600 transition-colors whitespace-nowrap cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2">
-                {isSavingSwot ? <><i className="ri-loader-4-line animate-spin"></i>保存中...</> : <><i className="ri-save-line"></i>保存分析</>}
-              </button>
+              {renderSectionReviewBlock(
+                'swot',
+                <button
+                  type="button"
+                  onClick={handleSaveSwot}
+                  disabled={isSavingSwot}
+                  className="px-3 py-1.5 text-xs font-medium bg-pink-500 text-white rounded-lg hover:bg-pink-600 cursor-pointer disabled:opacity-50 whitespace-nowrap flex items-center gap-1"
+                >
+                  {isSavingSwot ? <i className="ri-loader-4-line animate-spin" /> : <i className="ri-save-line" />}
+                  {isSavingSwot ? '保存中…' : '保存分析'}
+                </button>
+              )}
                 </>
               )}
             </div>
@@ -960,8 +1184,8 @@ export default function BusinessModelModule({
                       disabled={trainingEnded || aiMarketingRunning || !classId?.trim()}
                       className="px-4 py-2 bg-gradient-to-r from-teal-500 to-emerald-500 text-white text-sm font-semibold rounded-xl hover:shadow-md transition-all whitespace-nowrap cursor-pointer disabled:opacity-50 flex items-center gap-2"
                     >
-                      {aiMarketingRunning ? <i className="ri-loader-4-line animate-spin" /> : <i className="ri-sparkling-line" />}
-                      AI 生成
+                      {aiMarketingRunning ? <i className="ri-loader-4-line animate-spin" /> : <i className="ri-compass-3-line" />}
+                      AI 引导填写
                     </button>
                   </div>
                 </div>
@@ -987,9 +1211,18 @@ export default function BusinessModelModule({
                   ))}
                 </div>
               </div>
-              <button onClick={handleSaveMarketing} disabled={isSavingMarketing} className="w-full px-6 py-3 bg-pink-500 text-white text-sm font-bold rounded-xl hover:bg-pink-600 transition-colors whitespace-nowrap cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2">
-                {isSavingMarketing ? <><i className="ri-loader-4-line animate-spin"></i>保存中...</> : <><i className="ri-save-line"></i>保存策略</>}
-              </button>
+              {renderSectionReviewBlock(
+                'marketing',
+                <button
+                  type="button"
+                  onClick={handleSaveMarketing}
+                  disabled={isSavingMarketing}
+                  className="px-3 py-1.5 text-xs font-medium bg-pink-500 text-white rounded-lg hover:bg-pink-600 cursor-pointer disabled:opacity-50 whitespace-nowrap flex items-center gap-1"
+                >
+                  {isSavingMarketing ? <i className="ri-loader-4-line animate-spin" /> : <i className="ri-save-line" />}
+                  {isSavingMarketing ? '保存中…' : '保存策略'}
+                </button>
+              )}
                 </>
               )}
             </div>
@@ -1021,8 +1254,8 @@ export default function BusinessModelModule({
                       disabled={trainingEnded || aiFinanceRunning || !classId?.trim()}
                       className="px-4 py-2 bg-gradient-to-r from-teal-500 to-emerald-500 text-white text-sm font-semibold rounded-xl hover:shadow-md transition-all whitespace-nowrap cursor-pointer disabled:opacity-50 flex items-center gap-2"
                     >
-                      {aiFinanceRunning ? <i className="ri-loader-4-line animate-spin" /> : <i className="ri-sparkling-line" />}
-                      AI 生成
+                      {aiFinanceRunning ? <i className="ri-loader-4-line animate-spin" /> : <i className="ri-compass-3-line" />}
+                      AI 引导填写
                     </button>
                   </div>
                 </div>
@@ -1113,21 +1346,18 @@ export default function BusinessModelModule({
                   <span className="text-lg font-bold text-green-700">¥{totalRevenue.toLocaleString()}</span>
                 </div>
               </div>
-              <button
-                onClick={handleSaveFinance}
-                disabled={isSavingFinance}
-                className="w-full px-6 py-3 bg-pink-500 text-white text-sm font-medium rounded-xl hover:bg-pink-600 transition-colors whitespace-nowrap cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
-              >
-                {isSavingFinance ? (
-                  <>
-                    <i className="ri-loader-4-line animate-spin"></i>保存中…
-                  </>
-                ) : (
-                  <>
-                    <i className="ri-save-line"></i>保存财务数据
-                  </>
-                )}
-              </button>
+              {renderSectionReviewBlock(
+                'finance',
+                <button
+                  type="button"
+                  onClick={handleSaveFinance}
+                  disabled={isSavingFinance}
+                  className="px-3 py-1.5 text-xs font-medium bg-pink-500 text-white rounded-lg hover:bg-pink-600 cursor-pointer disabled:opacity-50 whitespace-nowrap flex items-center gap-1"
+                >
+                  {isSavingFinance ? <i className="ri-loader-4-line animate-spin" /> : <i className="ri-save-line" />}
+                  {isSavingFinance ? '保存中…' : '保存财务数据'}
+                </button>
+              )}
                 </>
               )}
             </div>

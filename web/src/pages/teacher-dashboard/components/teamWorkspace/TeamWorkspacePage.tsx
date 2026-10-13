@@ -37,7 +37,9 @@ type Props = {
   classId: string;
   teamId: number;
   stage: string;
-  onStageChange: (moduleKey: string) => void;
+  /** 商模子 Tab 深链：swot|marketing|finance|canvas|warroom */
+  bmTab?: string;
+  onStageChange: (moduleKey: string, opts?: { bmTab?: string }) => void;
   onBack: () => void;
   onIntervene: () => void;
 };
@@ -46,6 +48,7 @@ export default function TeamWorkspacePage({
   classId,
   teamId,
   stage,
+  bmTab = '',
   onStageChange,
   onBack,
   onIntervene,
@@ -172,8 +175,8 @@ export default function TeamWorkspacePage({
   const teamName = summary?.team?.name || cockpit?.team?.name || `团队 #${teamId}`;
   const status = summary?.status || 'on-track';
 
-  const pickStage = (key: string) => {
-    onStageChange(key);
+  const pickStage = (key: string, opts?: { bmTab?: string }) => {
+    onStageChange(key, opts);
     setMobileStagePicked(true);
     setOverviewOpen(false);
   };
@@ -351,7 +354,14 @@ export default function TeamWorkspacePage({
       ) : stageLoading ? (
         <div className="text-sm text-gray-400 text-center py-10 md:py-16">加载环节数据…</div>
       ) : (
-        <StagePanels classId={classId} teamId={teamId} moduleKey={activeStage} stage={stageData} />
+        <StagePanels
+          classId={classId}
+          teamId={teamId}
+          moduleKey={activeStage}
+          stage={stageData}
+          bmTab={activeStage === 'business' ? bmTab : ''}
+          onBmTabChange={(next) => onStageChange('business', { bmTab: next })}
+        />
       )}
     </>
   );

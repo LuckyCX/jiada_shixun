@@ -109,6 +109,12 @@ const SCENE_LABELS: Record<string, string> = {
   bmc_save: '商业画布上传',
   bmc_ai_review: '画布 AI 审查',
   bmc: '商业画布',
+  swot_ai_guide: 'SWOT 引导填写',
+  swot_ai_review: 'SWOT AI 审查',
+  marketing_ai_guide: '营销引导填写',
+  marketing_ai_review: '营销 AI 审查',
+  finance_ai_guide: '成本引导填写',
+  finance_ai_review: '成本 AI 审查',
   war_room: '虚拟董事会',
   war_room_turn: '董事会对话',
   hat_studio_turn: '六帽对话',
@@ -117,6 +123,16 @@ const SCENE_LABELS: Record<string, string> = {
   plan_submit: '计划书提交',
   event: '事件',
 };
+
+/** scene → 商模子 Tab（驾驶舱详情深链） */
+export function sceneToBmTab(scene: string): string | undefined {
+  const s = String(scene || '');
+  if (s.startsWith('swot_')) return 'swot';
+  if (s.startsWith('marketing_')) return 'marketing';
+  if (s.startsWith('finance_')) return 'finance';
+  if (s.startsWith('bmc_') || s.startsWith('war_room')) return 'canvas';
+  return undefined;
+}
 
 /** 阶段证据摘要 → 驾驶舱展示文案 */
 function evidenceChips(s: TeacherCockpitStageScore): string[] {
@@ -156,8 +172,12 @@ function evidenceChips(s: TeacherCockpitStageScore): string[] {
     const rev = num('bmcAiReviewCount');
     if (rev != null) {
       const avg = num('bmcAiReviewAvgScore');
-      chips.push(avg != null ? `AI 审查 ${rev} 次（均分 ${avg}）` : `AI 审查 ${rev} 次`);
+      chips.push(avg != null ? `画布审查 ${rev} 次（均分 ${avg}）` : `画布审查 ${rev} 次`);
     }
+    const sec = num('sectionAiReviewTotal');
+    if (sec != null && sec > 0) chips.push(`分节审查 ${sec} 次`);
+    const chats = num('recentChatCount');
+    if (chats != null && chats > 0) chips.push(`近期对话 ${chats}`);
   }
   if (s.key === 'simulation') {
     const runs = num('runCount');
@@ -202,6 +222,11 @@ const SCENE_TOKEN_ZH: Record<string, string> = {
   save: '保存',
   submit: '提交',
   event: '事件',
+  guide: '引导',
+  review: '审查',
+  swot: 'SWOT',
+  marketing: '营销',
+  finance: '成本',
 };
 
 function sceneLabel(scene: string) {
@@ -217,10 +242,12 @@ function sceneLabel(scene: string) {
   return zh || '其他交互';
 }
 
+type OpenStageOpts = { bmTab?: string };
+
 type Props = {
   data: TeacherTeamCockpit | null;
   loading?: boolean;
-  onOpenStage: (moduleKey: string) => void;
+  onOpenStage: (moduleKey: string, opts?: OpenStageOpts) => void;
 };
 
 export default function TeamCockpitPanel({ data, loading, onOpenStage }: Props) {
@@ -759,7 +786,20 @@ export default function TeamCockpitPanel({ data, loading, onOpenStage }: Props) 
                     <span className="mx-1">·</span>
                     {sceneLabel(r.scene)}
                   </span>
-                  <span className="shrink-0 tabular-nums">{formatTime(r.createdAt)}</span>
+                  <span className="shrink-0 flex items-center gap-2">
+                    <span className="tabular-nums">{formatTime(r.createdAt)}</span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onOpenStage(r.moduleKey, {
+                          bmTab: r.moduleKey === 'business' ? sceneToBmTab(r.scene) : undefined,
+                        })
+                      }
+                      className="px-2 py-0.5 rounded-md text-[11px] font-medium text-teal-700 bg-teal-50 hover:bg-teal-100 cursor-pointer whitespace-nowrap"
+                    >
+                      详情
+                    </button>
+                  </span>
                 </div>
                 <p className="text-xs text-gray-600 line-clamp-2">{r.content || '（无摘要）'}</p>
               </li>

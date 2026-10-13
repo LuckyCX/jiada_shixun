@@ -165,9 +165,13 @@ type Props = {
   teamId: number;
   moduleKey: string;
   stage: any;
+  /** 商模子 Tab 深链（仅作初次定位，不持续锁死） */
+  bmTab?: string;
+  /** 用户手动切换商模子 Tab 时回写 URL，避免与深链打架 */
+  onBmTabChange?: (bmTab: string) => void;
 };
 
-export default function StagePanels({ moduleKey, stage }: Props) {
+export default function StagePanels({ moduleKey, stage, bmTab = '', onBmTabChange }: Props) {
   const uploadEnabled = stage?.features?.uploadEnabled !== false;
   const tabs = useMemo(() => {
     const base = SUB_TABS[moduleKey] || [];
@@ -178,18 +182,24 @@ export default function StagePanels({ moduleKey, stage }: Props) {
   }, [moduleKey, uploadEnabled]);
   const [sub, setSub] = useState(tabs[0]?.key || '');
 
+  // 深链 / 换模块：只在 bmTab、moduleKey、tabs 变化时定位，勿把 sub 放进依赖否则会锁死 Tab
   useEffect(() => {
-    const nextTabs = tabs;
-    const first = nextTabs[0]?.key || '';
-    // 仿真已无子 Tab；其它模块若当前 sub 不在列表中则回到第一项
     if (moduleKey === 'simulation') {
-      if (sub) setSub('');
+      setSub('');
       return;
     }
-    if (!nextTabs.some((t) => t.key === sub)) {
-      setSub(first);
+    if (moduleKey === 'business' && bmTab && tabs.some((t) => t.key === bmTab)) {
+      setSub(bmTab);
+      return;
     }
-  }, [moduleKey, sub, tabs]);
+    setSub((prev) => (tabs.some((t) => t.key === prev) ? prev : tabs[0]?.key || ''));
+  }, [moduleKey, tabs, bmTab]);
+
+  const handleSubChange = (key: string) => {
+    setSub(key);
+    // 商模内手动切换：同步清除/更新深链参数，避免 URL 仍指向旧 bmTab 再次拉回
+    if (moduleKey === 'business') onBmTabChange?.(key);
+  };
 
   if (!stage) return <EmptyHint text="加载中或暂无数据" />;
   const team = stage.team || {};
@@ -197,7 +207,7 @@ export default function StagePanels({ moduleKey, stage }: Props) {
 
   return (
     <div>
-      {tabs.length ? <SubTabs tabs={tabs} active={sub} onChange={setSub} /> : null}
+      {tabs.length ? <SubTabs tabs={tabs} active={sub} onChange={handleSubChange} /> : null}
       <Pane>
         {moduleKey === 'team' ? renderTeam(sub, team, members) : null}
         {moduleKey === 'ideation' ? renderIdeation(sub, team, members) : null}
@@ -883,29 +893,77 @@ function renderProduct(sub: string, team: any, members: any[]) {
   );
 }
 
+function renderAiReviewList(reviews: any[], emptyText: string) {
+  if (!reviews.length) return <EmptyHint text={emptyText} />;
+  return (
+    <div className="space-y-3">
+      {reviews.map((item: any) => (
+        <div key={item.id} className="border border-gray-100 rounded-xl p-3 bg-gray-50/60">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500 mb-1.5">
+            <span>{item.submitterName || '同学'}</span>
+            <span className="flex items-center gap-2">
+              {item.aiScore != null ? (
+                <span className="font-semibold text-teal-700">AI 评分 {item.aiScore}</span>
+              ) : null}
+              <span>{item.createdAt || '—'}</span>
+            </span>
+          </div>
+          {item.selfNote ? (
+            <p className="text-xs text-gray-600 mb-1.5 whitespace-pre-wrap break-words">自述：{item.selfNote}</p>
+          ) : (
+            <p className="text-xs text-gray-400 mb-1.5">自述：（无）</p>
+          )}
+          <p className="text-sm text-gray-800 whitespace-pre-wrap break-words">
+            {item.aiResult?.summary || '—'}
+          </p>
+          {Array.isArray(item.aiResult?.suggestions) && item.aiResult.suggestions.length ? (
+            <ul className="mt-2 list-disc pl-5 text-xs text-gray-600 space-y-0.5">
+              {item.aiResult.suggestions.map((s: string) => (
+                <li key={s}>{s}</li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function renderBusiness(sub: string, team: any, members: any[]) {
-  // SWOT / 营销：直接复刻学生端表单布局，不再包一层自定义卡片标题
+  // SWOT / 营销 / 成本：内容 + 分节审查记录
   if (sub === 'swot') {
+    const reviews = Array.isArray(team.swotAiReviews) ? team.swotAiReviews : [];
     return (
-      <div className="space-y-2">
+      <div className="space-y-2 md:space-y-3">
         {team.swotSavedAt ? <p className="text-xs text-pink-600">上次保存：{team.swotSavedAt}</p> : null}
         <SwotView data={team.swot} />
+        <SectionCard title="审查记录" icon="ri-file-list-3-line" empty={reviews.length === 0 ? '暂无 AI 审查记录' : false}>
+          {reviews.length ? renderAiReviewList(reviews, '') : null}
+        </SectionCard>
       </div>
     );
   }
   if (sub === 'marketing') {
+    const reviews = Array.isArray(team.marketingAiReviews) ? team.marketingAiReviews : [];
     return (
-      <div className="space-y-2">
+      <div className="space-y-2 md:space-y-3">
         {team.marketingSavedAt ? <p className="text-xs text-pink-600">上次保存：{team.marketingSavedAt}</p> : null}
         <MarketingView data={team.marketing} />
+        <SectionCard title="审查记录" icon="ri-file-list-3-line" empty={reviews.length === 0 ? '暂无 AI 审查记录' : false}>
+          {reviews.length ? renderAiReviewList(reviews, '') : null}
+        </SectionCard>
       </div>
     );
   }
   if (sub === 'finance') {
+    const reviews = Array.isArray(team.financeAiReviews) ? team.financeAiReviews : [];
     return (
-      <div className="space-y-2">
+      <div className="space-y-2 md:space-y-3">
         {team.financeSavedAt ? <p className="text-xs text-pink-600">上次保存：{team.financeSavedAt}</p> : null}
         <FinanceView data={team.finance} />
+        <SectionCard title="审查记录" icon="ri-file-list-3-line" empty={reviews.length === 0 ? '暂无 AI 审查记录' : false}>
+          {reviews.length ? renderAiReviewList(reviews, '') : null}
+        </SectionCard>
       </div>
     );
   }

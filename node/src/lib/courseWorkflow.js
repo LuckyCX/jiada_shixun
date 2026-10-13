@@ -186,6 +186,18 @@ export async function wipeClassModuleData(client, classId, moduleKey) {
       [classId]
     );
     await client.query(
+      `DELETE FROM teacher_personal_class_team_bm_section_ai_reviews WHERE team_id IN (${teamIdsSql})`,
+      [classId]
+    );
+    await client.query(
+      `DELETE FROM teacher_personal_class_team_bmc_ai_reviews WHERE team_id IN (${teamIdsSql})`,
+      [classId]
+    );
+    await client.query(
+      `DELETE FROM teacher_personal_class_team_bmc_cell_locks WHERE team_id IN (${teamIdsSql})`,
+      [classId]
+    );
+    await client.query(
       `DELETE FROM teacher_personal_class_team_business_model_workspace WHERE team_id IN (${teamIdsSql})`,
       [classId]
     );

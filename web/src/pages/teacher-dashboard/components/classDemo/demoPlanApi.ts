@@ -221,27 +221,28 @@ function buildDemoPlanContextBundle(classId: string) {
   const simulation = readFlow<unknown[]>(classId, 'simulation', []);
   const parts = [
     '【前期实训汇编 · 课堂演示】',
-    ideation.topic ? `【选题】\n${JSON.stringify(ideation.topic).slice(0, 2000)}` : '【选题】（暂无）',
-    market.plan?.goal ? `【调研计划目标】\n${String(market.plan.goal).slice(0, 800)}` : '',
+    ideation.topic ? `【选题】\n${JSON.stringify(ideation.topic).slice(0, 4000)}` : '【选题】（暂无）',
+    market.plan?.goal ? `【调研计划目标】\n${String(market.plan.goal).slice(0, 1500)}` : '',
     market.analysis?.result
-      ? `【市场调研 · AI智能分析报告】\n${JSON.stringify(market.analysis.result).slice(0, 5000)}`
+      ? `【市场调研 · AI智能分析报告】\n${JSON.stringify(market.analysis.result).slice(0, 10000)}`
       : '【市场调研 · AI智能分析报告】\n（暂无）',
     Array.isArray(market.personas) && market.personas.length
-      ? `【市场调研 · 用户画像】\n${JSON.stringify(market.personas.slice(0, 6)).slice(0, 4000)}`
+      ? `【市场调研 · 用户画像】\n${JSON.stringify(market.personas.slice(0, 8)).slice(0, 8000)}`
       : '【市场调研 · 用户画像】\n（暂无）',
-    product.contextText ? `【产品设计背景】\n${String(product.contextText).slice(0, 1500)}` : '',
-    product.suggestions ? `【产品 AI 建议】\n${JSON.stringify(product.suggestions).slice(0, 2000)}` : '',
+    product.contextText ? `【产品设计背景】\n${String(product.contextText).slice(0, 3000)}` : '',
+    product.suggestions ? `【产品 AI 建议】\n${JSON.stringify(product.suggestions).slice(0, 4000)}` : '',
     `【商业模式】\n${JSON.stringify({
       swot: business.swot,
       marketing: business.marketing,
       finance: business.finance,
       bmc: business.bmc,
-    }).slice(0, 4000)}`,
+    }).slice(0, 8000)}`,
     Array.isArray(simulation) && simulation.length
-      ? `【仿真摘要】\n${JSON.stringify(simulation.slice(0, 2)).slice(0, 1500)}`
+      ? `【仿真摘要】\n${JSON.stringify(simulation.slice(0, 3)).slice(0, 3000)}`
       : '',
   ];
-  return parts.filter(Boolean).join('\n\n').slice(0, 18000);
+  // 与后端 demo/ai plan-generate-full 上下文上限对齐，避免前端先截断
+  return parts.filter(Boolean).join('\n\n').slice(0, 80000);
 }
 
 /** 演示端一键填写：非流式，一次生成整本 JSON 后落库（对齐学生端） */
@@ -261,15 +262,16 @@ export async function generateBusinessPlan(
   }
   const contextBundle = buildDemoPlanContextBundle(classId);
   const list = targets.map((s) => ({ key: s.key, title: s.title, guide: s.guide || undefined }));
+  // 章节列表放前面，避免服务端截断上下文时只剩调研摘要、丢了必写章节
   const raw = await generateDemoAi(
     classId,
     'plan-generate-full',
     [
-      contextBundle,
-      '',
-      `【输入章节列表（必须全部生成，共 ${list.length} 章）】`,
+      `【输入章节列表（必须全部生成，共 ${list.length} 章；每章 content 500～800 汉字）】`,
       JSON.stringify(list, null, 2),
-      '请输出完整 JSON：{"sections":[{"key","title","content"},...]}',
+      '请输出完整 JSON：{"sections":[{"key","title","content"},...]}，不得漏章。',
+      '',
+      contextBundle,
     ].join('\n')
   );
   let parsed: { sections?: { key?: string; title?: string; content?: string }[] } | null = null;

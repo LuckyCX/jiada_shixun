@@ -128,7 +128,10 @@ export type BmcAiReviewItem = {
   submittedBy: string;
   submitterName?: string;
   teamName?: string;
+  section?: 'swot' | 'marketing' | 'finance';
 };
+
+export type BmSectionKey = 'swot' | 'marketing' | 'finance';
 
 const base = (classId: string) =>
   `/api/student/personal-classes/${encodeURIComponent(classId)}/business-model`;
@@ -216,6 +219,31 @@ export async function fetchBmcAiReviews(classId: string): Promise<{ reviews: Bmc
   return portalAuthenticatedFetch('student', `${base(classId)}/bmc/ai-reviews`) as Promise<{
     reviews: BmcAiReviewItem[];
   }>;
+}
+
+export async function submitBmSectionAiReview(
+  classId: string,
+  section: BmSectionKey,
+  body: { selfNote: string; swot?: SwotPayload; marketing?: Marketing4pPayload; finance?: { costs: CostItemPayload[]; revenues: RevenueItemPayload[] } }
+): Promise<{ review: BmcAiReviewItem; workspace: BusinessModelWorkspacePayload }> {
+  return portalAuthenticatedFetch(
+    'student',
+    `${base(classId)}/sections/${encodeURIComponent(section)}/ai-review`,
+    {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }
+  ) as Promise<{ review: BmcAiReviewItem; workspace: BusinessModelWorkspacePayload }>;
+}
+
+export async function fetchBmSectionAiReviews(
+  classId: string,
+  section: BmSectionKey
+): Promise<{ reviews: BmcAiReviewItem[] }> {
+  return portalAuthenticatedFetch(
+    'student',
+    `${base(classId)}/sections/${encodeURIComponent(section)}/ai-reviews`
+  ) as Promise<{ reviews: BmcAiReviewItem[] }>;
 }
 
 export async function acquireBmcCellLock(

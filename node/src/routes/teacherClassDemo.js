@@ -74,7 +74,7 @@ users、revenue 均为累计值（大体不减），用平台期（连续多日�
   /** 演示：一次生成整本计划书各章 JSON */
   'plan-generate-full': `你是课堂商业计划书助教。根据用户给出的前期实训资料与章节列表，一次性撰写完整商业计划书各章正文。
 只返回一个 JSON 对象（不要 markdown 代码块），格式：{"sections":[{"key":"与输入一致","title":"标题","content":"充实正文"}]};
-要求：sections 与输入章节一一对应、不得漏章；每章 content 必须 500～800 汉字，可用轻量 Markdown，禁止 HTML；勿编造与资料矛盾的精确数据。`,
+要求：sections 与输入章节一一对应、不得漏章；每章 content 必须 500～800 汉字，可用轻量 Markdown，禁止 HTML；勿编造与资料矛盾的精确数据；禁止输出思考过程。`,
 };
 
 const JSON_MODE_SCENES = new Set([
@@ -187,23 +187,48 @@ function unlinkDemoFile(storedName) {
   }
 }
 
+/** 整本计划书上下文很长，切太短会砍掉章节列表导致「死活生成不出来」 */
+const DEMO_CONTEXT_LIMIT = {
+  'plan-generate-full': 120000,
+  'plan-generate-section': 40000,
+  simulation: 24000,
+};
+const DEMO_DEFAULT_CONTEXT_LIMIT = 24000;
+
 router.post('/teacher/personal-classes/:classId/demo/ai', requireAuth(), requireTeacher(), async (req, res) => {
   try {
     const teacherId = parseId(req.user?.sub);
     const classId = parseId(req.params.classId);
     const scene = String(req.body?.scene || '').trim();
-    const context = String(req.body?.context || '').trim().slice(0, 12000);
+    const limit = DEMO_CONTEXT_LIMIT[scene] || DEMO_DEFAULT_CONTEXT_LIMIT;
+    const context = String(req.body?.context || '').trim().slice(0, limit);
     if (!teacherId || !classId) return bad(req, res, 400, 40001, '无效班级');
     if (!SCENES[scene]) return bad(req, res, 400, 40002, '无效演示场景');
     if (!context) return bad(req, res, 400, 40003, '请先填写演示内容');
     if (!(await ownsPersonalClass(teacherId, classId))) return bad(req, res, 404, 40401, '班级不存在');
 
     const provider = await getEnabledProvider('multimodal');
+    if (!provider) return bad(req, res, 503, 50301, '未配置 AI 服务');
+
+    // 整本计划书：关思考 + 抬高输出上限；超时取配置值（生产已配 600000）且不低于 5 分钟
+    const isPlanFull = scene === 'plan-generate-full';
+    const isPlanSection = scene === 'plan-generate-section';
+    const providerForCall =
+      isPlanFull || isPlanSection
+        ? { ...provider, timeoutMs: Math.max(Number(provider.timeoutMs) || 0, 600_000) }
+        : provider;
+    const extraBody = isPlanFull
+      ? { enable_thinking: false, max_tokens: 32768 }
+      : isPlanSection
+        ? { enable_thinking: false, max_tokens: 4096 }
+        : { enable_thinking: false };
+
     const text = await chatCompletion({
-      provider,
-      system: `你是创新创业实训的课堂演示助教。教师正在演示学生操作，结果只显示在当前页面，不会写入学生成绩或团队档案。请用中文。不要声称已经保存到数据库。${SCENES[scene]}`,
+      provider: providerForCall,
+      system: `你是创新创业实训的课堂演示助教。教师正在演示学生操作，结果只显示在当前页面，不会写入学生成绩或团队档案。请用中文。不要声称已经保存到数据库。禁止输出思考过程。${SCENES[scene]}`,
       user: context,
       jsonMode: JSON_MODE_SCENES.has(scene),
+      extraBody,
     });
     return ok(req, res, { text });
   } catch (e) {

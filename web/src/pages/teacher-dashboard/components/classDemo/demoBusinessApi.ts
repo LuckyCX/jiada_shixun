@@ -27,7 +27,9 @@ import {
 import type { TeacherBmcReviewItem } from '../../../../lib/teacherBmcReviewApi';
 
 export type {
+  BmcAiReviewItem,
   BmcPayload,
+  BmSectionKey,
   BusinessModelTeamMember,
   BusinessModelWorkspacePayload,
   GenerateBusinessModelBmcAiError,
@@ -156,31 +158,95 @@ export async function saveBusinessModelWorkspacePartial(
   return write(classId, ws);
 }
 
+/** 引导填写：写草稿，不刷新 *_saved_at（演示侧用丰富骨架，贴近真实引导质量） */
 export async function generateBusinessModelSwotAi(classId: string) {
-  const text = await generateDemoAi(classId, 'business', '请写 SWOT：优势、劣势、机会、威胁，各一行。');
-  const [strengths, weaknesses, opportunities, threats] = linesOf(text);
-  return saveBusinessModelWorkspacePartial(classId, {
-    swot: { strengths: strengths || text, weaknesses: weaknesses || '', opportunities: opportunities || '', threats: threats || '' },
-  });
+  await generateDemoAi(classId, 'business', '请给 SWOT 四维各写若干引导追问。');
+  const ws = read(classId);
+  ws.swot = {
+    strengths:
+      '• 【切入】结合目标用户与场景，先写「别人不好抄」的能力，而不是空泛的「团队优秀」\n' +
+      '• 请填写：相对 1～2 个直接竞品，你们在供给/体验/信任上的差异点各是什么？\n' +
+      '• 建议证据：团队已有技能、渠道资源、已验证反馈（问卷/访谈原话一句即可）\n' +
+      '• 请补充：若把核心资源换成别的团队，这项优势是否还成立？为什么？\n' +
+      '• 模板：因为具备【资源/能力】，所以能在【场景】比竞品更快/更稳地【结果】',
+    weaknesses:
+      '• 【切入】劣势要写「会拖慢验证或放大成本」的短板，避免只写态度问题\n' +
+      '• 请填写：当前最大短板落在供给、获客、信任、资金、合规中的哪一类？具体表现？\n' +
+      '• 建议证据：失败尝试、未验证假设、关键岗位缺口、依赖外部方的风险点\n' +
+      '• 请补充：哪些假设一旦不成立，商业模式会最先垮？\n' +
+      '• 检验：每条劣势能否对应一条「本学期可做的补强动作」',
+    opportunities:
+      '• 【切入】机会要可在 3～12 个月内抓住，写清窗口来自哪里（渠道/政策/场景/技术）\n' +
+      '• 请填写：最值得先打的细分场景是谁、在什么时间点、靠什么触达？\n' +
+      '• 建议证据：调研中的高频痛点、可复制渠道、政策/校内资源、季节性需求\n' +
+      '• 请补充：若只选一个增长杠杆（渠道/产品/合作），优先哪一个？理由？\n' +
+      '• 模板：在【窗口】下，服务【人群】，用【动作】拿到【可衡量结果】',
+    threats:
+      '• 【切入】威胁写「外部力量可能挤压你们」的竞争/合规/替代方案，勿只写宏观空话\n' +
+      '• 请填写：最可能抢走用户的竞品形态是什么？它的优势对你们杀伤在哪？\n' +
+      '• 建议证据：竞品定价/功能、用户迁移成本、季节波动、合规门槛\n' +
+      '• 请补充：若大平台免费做同类能力，你们的护城河还剩什么？\n' +
+      '• 检验：每条威胁是否对应「监测指标」或「应对预案」一句',
+  };
+  return write(classId, ws);
 }
 
 export async function generateBusinessModelMarketingAi(classId: string) {
-  const text = await generateDemoAi(classId, 'business', '请写营销 4P：产品、价格、渠道、推广，各一行。');
-  const [product, price, place, promotion] = linesOf(text);
-  return saveBusinessModelWorkspacePartial(classId, {
-    marketing: { product: product || text, price: price || '', place: place || '', promotion: promotion || '' },
-  });
+  await generateDemoAi(classId, 'business', '请给 4P 各写若干引导追问。');
+  const ws = read(classId);
+  ws.marketing = {
+    product:
+      '• 【切入】先写「为谁解决什么问题到什么可感知效果」，再写功能清单\n' +
+      '• 请填写：首要用户是谁？其最高频痛点一句话是什么？你们如何可验证地缓解？\n' +
+      '• 建议写清：核心卖点 1～2 条、首版必做/不做边界、与竞品差异点\n' +
+      '• 请补充：用户为什么选你们而不是「凑合用现有方案」？\n' +
+      '• 模板：因为【痛点】，我们提供【方案】，让用户在【场景】获得【可衡量结果】\n' +
+      '• 检验：陌生人看完能否复述「卖给谁、解决啥、凭什么信」',
+    price:
+      '• 【切入】定价要同时回答：谁付费、付多少、多久付一次、值不值\n' +
+      '• 请填写：付费主体是个人/机构？客单价区间与对标竞品大致落在哪一档？\n' +
+      '• 建议写清：定价模式（订阅/单次/抽成/套餐）、免费层与付费层边界、促销规则\n' +
+      '• 请补充：价格敏感点来自调研的哪一句反馈？如何用套餐降低决策成本？\n' +
+      '• 模板：【模式】定价，基础档【价】覆盖【权益】，升级档靠【增值】提升 ARPU\n' +
+      '• 检验：是否写明回本逻辑或「首月可接受的获客成本上限」',
+    place:
+      '• 【切入】渠道按「获客→成交→交付→复购」拆，不要只写「线上+线下」\n' +
+      '• 请填写：冷启动最可行的 1～2 条获客渠道是什么？谁来执行？\n' +
+      '• 建议写清：触达方式、转化承接页/话术、交付与售后触点\n' +
+      '• 请补充：哪条渠道可在 2 周内跑出可复用数据？成功标准是什么？\n' +
+      '• 模板：通过【渠道】触达【人群】，用【动作】完成首次转化，交付走【路径】\n' +
+      '• 检验：每条渠道是否对应负责人与关键转化指标',
+    promotion:
+      '• 【切入】推广写「可执行的冷启动动作+衡量指标」，避免只写品牌口号\n' +
+      '• 请填写：第一周/第一个月各做哪 2～3 个推广动作？预算与人力如何分配？\n' +
+      '• 建议写清：内容主题、投放/社群/地推选择、转化钩子（试用/优惠/社群）\n' +
+      '• 请补充：如何衡量曝光→注册→付费的转化？哪个环节最可能卡住？\n' +
+      '• 模板：用【内容/活动】吸引【人群】，以【钩子】促首单，用【指标】周复盘\n' +
+      '• 检验：是否能回答「下一周具体做什么、谁做、看什么数」',
+  };
+  return write(classId, ws);
 }
 
 export async function generateBusinessModelFinanceItemsAi(classId: string) {
-  const text = await generateDemoAi(classId, 'business', '请给一项固定成本和一项月收入，用中文短句。');
-  const [cost, revenue] = linesOf(text);
-  return saveBusinessModelWorkspacePartial(classId, {
-    finance: {
-      costs: [{ id: 1, category: '固定成本', name: cost || '场地与人员', amount: 1000 }],
-      revenues: [{ id: 1, source: revenue || '产品销售收入', monthly: 2000 }],
-    },
-  });
+  await generateDemoAi(classId, 'business', '请给成本与收入明细引导项。');
+  const ws = read(classId);
+  const base = Date.now();
+  ws.finance = {
+    costs: [
+      { id: base, category: '固定成本', name: '场地/工位租金（假设）', amount: 3000 },
+      { id: base + 1, category: '固定成本', name: '基础研发与运维人力', amount: 8000 },
+      { id: base + 2, category: '固定成本', name: '服务器与 SaaS 订阅', amount: 1200 },
+      { id: base + 3, category: '变动成本', name: '获客投放（按量）', amount: 2500 },
+      { id: base + 4, category: '变动成本', name: '履约/物流与客服', amount: 1500 },
+      { id: base + 5, category: '变动成本', name: '支付通道与售后备用', amount: 600 },
+    ],
+    revenues: [
+      { id: base + 10, source: '核心产品订阅收入', monthly: 12000 },
+      { id: base + 11, source: '增值服务/培训', monthly: 3500 },
+      { id: base + 12, source: '渠道分成/合作分成', monthly: 2000 },
+    ],
+  };
+  return write(classId, ws);
 }
 
 export async function generateBusinessModelBmcAi(classId: string) {
@@ -282,6 +348,56 @@ export async function submitBmcAiReview(classId: string, body: { selfNote: strin
 
 export async function fetchBmcAiReviews(classId: string) {
   const reviews = readFlow<unknown[]>(classId, 'businessBmcReviews', []);
+  return { reviews: Array.isArray(reviews) ? reviews : [] };
+}
+
+type DemoSection = 'swot' | 'marketing' | 'finance';
+
+const SECTION_REVIEW_FLOW: Record<DemoSection, string> = {
+  swot: 'businessSwotReviews',
+  marketing: 'businessMarketingReviews',
+  finance: 'businessFinanceReviews',
+};
+
+export async function submitBmSectionAiReview(
+  classId: string,
+  section: DemoSection,
+  body: {
+    selfNote: string;
+    swot?: SwotPayload;
+    marketing?: Marketing4pPayload;
+    finance?: { costs: CostItemPayload[]; revenues: RevenueItemPayload[] };
+  }
+) {
+  const ws = read(classId);
+  if (section === 'swot' && body.swot) ws.swot = body.swot;
+  if (section === 'marketing' && body.marketing) ws.marketing = body.marketing;
+  if (section === 'finance' && body.finance) ws.finance = body.finance;
+  write(classId, ws);
+  const label = section === 'swot' ? 'SWOT' : section === 'marketing' ? '营销策略' : '成本分析';
+  const review = {
+    id: `demo-${section}-rev-${Date.now()}`,
+    section,
+    selfNote: body.selfNote || '',
+    aiResult: {
+      summary: `演示审查（${label}）：结构可用，建议结合项目前置信息补齐可验证论据。`,
+      score: 70,
+      suggestions: ['补充具体数据或案例', '明确下一步验证动作'],
+    },
+    aiScore: 70,
+    createdAt: nowIso(),
+    submittedBy: 'demo',
+    submitterName: '演示学生',
+    teamName: '演示团队',
+  };
+  const key = SECTION_REVIEW_FLOW[section];
+  const prev = readFlow<typeof review[]>(classId, key, []);
+  writeFlow(classId, key, [review, ...(Array.isArray(prev) ? prev : [])]);
+  return { review, workspace: read(classId) };
+}
+
+export async function fetchBmSectionAiReviews(classId: string, section: DemoSection) {
+  const reviews = readFlow<unknown[]>(classId, SECTION_REVIEW_FLOW[section], []);
   return { reviews: Array.isArray(reviews) ? reviews : [] };
 }
 

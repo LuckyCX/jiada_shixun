@@ -702,6 +702,28 @@ CREATE INDEX idx_bmc_ai_reviews_team_created
 CREATE INDEX idx_bmc_ai_reviews_class_created
   ON teacher_personal_class_team_bmc_ai_reviews (teacher_personal_class_id, created_at DESC);
 
+-- SWOT / 营销 / 成本：多轮 AI 审查（与画布审查表分离）
+CREATE TABLE teacher_personal_class_team_bm_section_ai_reviews (
+  id              bigserial PRIMARY KEY,
+  team_id         bigint NOT NULL REFERENCES teacher_personal_class_teams (id) ON DELETE CASCADE,
+  teacher_personal_class_id bigint NOT NULL REFERENCES teacher_personal_classes (id) ON DELETE CASCADE,
+  section         varchar(32) NOT NULL,
+  submitted_by    bigint NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  self_note       text NOT NULL DEFAULT '',
+  content_snapshot jsonb NOT NULL DEFAULT '{}'::jsonb,
+  ai_result       jsonb NOT NULL DEFAULT '{}'::jsonb,
+  ai_score        numeric(5,2),
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT bm_section_ai_reviews_section_check
+    CHECK (section IN ('swot', 'marketing', 'finance'))
+);
+
+CREATE INDEX idx_bm_section_ai_reviews_team_section_created
+  ON teacher_personal_class_team_bm_section_ai_reviews (team_id, section, created_at DESC);
+
+CREATE INDEX idx_bm_section_ai_reviews_class_created
+  ON teacher_personal_class_team_bm_section_ai_reviews (teacher_personal_class_id, created_at DESC);
+
 -- 虚拟董事会：按组员独立草稿 + 每人最新保存记录
 -- 执行：psql -v ON_ERROR_STOP=1 -f 028_war_room_member.sql
 

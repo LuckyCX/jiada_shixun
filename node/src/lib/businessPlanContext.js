@@ -93,8 +93,8 @@ export async function assembleBusinessPlanBundle(pool, teamId, uploadRoot = UPLO
   // 浓缩市场成果：分析报告 + 用户画像（计划书章节强依赖）
   if (!skipped.has('market')) {
     const [analysisText, personasText] = await Promise.all([
-      loadMarketAnalysisTextForPrompt(pool, teamId, 6000),
-      loadMarketPersonasTextForPrompt(pool, teamId, 5000),
+      loadMarketAnalysisTextForPrompt(pool, teamId, 10000),
+      loadMarketPersonasTextForPrompt(pool, teamId, 8000),
     ]);
     parts.push('\n' + analysisText, '\n' + personasText);
   }
@@ -104,7 +104,8 @@ export async function assembleBusinessPlanBundle(pool, teamId, uploadRoot = UPLO
   if (!skipped.has('simulation')) {
     parts.push('\n【AI 仿真模拟（近期记录）】', await loadRoleSimulationSummary(pool, teamId));
   }
-  return truncateMiddle(parts.join('\n'), 22000);
+  // 整本计划书生成依赖较全的前期资料，放宽截断避免丢章节关键上下文
+  return truncateMiddle(parts.join('\n'), 48000);
 }
 
 export function bundleForAnalyzeVersion(sections, contextBundle) {

@@ -653,11 +653,13 @@ router.put(
   }
 );
 
-async function persistSwot(pool, teamId, studentId, payload) {
+/** @param {{ setSaved?: boolean }} [opts] setSaved=false 时只写草稿 JSON，不刷新 *_saved_at（引导填写） */
+async function persistSwot(pool, teamId, studentId, payload, opts = {}) {
   const row = await loadWorkspaceRow(pool, teamId);
   const marketing = row ? coerceMarketing(row.marketing_json) : defaultMarketing();
   const finance = row ? coerceFinance(row.finance_json) : { costs: [], revenues: [] };
-  const swotSavedAt = new Date();
+  const setSaved = opts.setSaved !== false;
+  const swotSavedAt = setSaved ? new Date() : row?.swot_saved_at || null;
   const marketingSavedAt = row?.marketing_saved_at || null;
   const financeSavedAt = row?.finance_saved_at || null;
 
@@ -688,11 +690,13 @@ async function persistSwot(pool, teamId, studentId, payload) {
   );
 }
 
-async function persistMarketing(pool, teamId, studentId, payload) {
+/** @param {{ setSaved?: boolean }} [opts] */
+async function persistMarketing(pool, teamId, studentId, payload, opts = {}) {
   const row = await loadWorkspaceRow(pool, teamId);
   const swot = row ? coerceSwot(row.swot_json) : defaultSwot();
   const finance = row ? coerceFinance(row.finance_json) : { costs: [], revenues: [] };
-  const marketingSavedAt = new Date();
+  const setSaved = opts.setSaved !== false;
+  const marketingSavedAt = setSaved ? new Date() : row?.marketing_saved_at || null;
   const swotSavedAt = row?.swot_saved_at || null;
   const financeSavedAt = row?.finance_saved_at || null;
 
@@ -723,11 +727,13 @@ async function persistMarketing(pool, teamId, studentId, payload) {
   );
 }
 
-async function persistFinance(pool, teamId, studentId, payload) {
+/** @param {{ setSaved?: boolean }} [opts] */
+async function persistFinance(pool, teamId, studentId, payload, opts = {}) {
   const row = await loadWorkspaceRow(pool, teamId);
   const swot = row ? coerceSwot(row.swot_json) : defaultSwot();
   const marketing = row ? coerceMarketing(row.marketing_json) : defaultMarketing();
-  const financeSavedAt = new Date();
+  const setSaved = opts.setSaved !== false;
+  const financeSavedAt = setSaved ? new Date() : row?.finance_saved_at || null;
   const swotSavedAt = row?.swot_saved_at || null;
   const marketingSavedAt = row?.marketing_saved_at || null;
 
@@ -756,6 +762,24 @@ async function persistFinance(pool, teamId, studentId, payload) {
       studentId,
     ]
   );
+}
+
+async function logBusinessGuideInteraction(ctx, scene, content, meta = {}) {
+  try {
+    const { insertTeamAiInteractionLog } = await import('../lib/teamAiInteractionLog.js');
+    await insertTeamAiInteractionLog({
+      classId: ctx.classId,
+      teamId: ctx.team.id,
+      studentId: ctx.sid,
+      moduleKey: 'business',
+      scene,
+      role: 'event',
+      content: String(content || '').slice(0, 500),
+      meta,
+    });
+  } catch (logErr) {
+    logError(`business guide cockpit hook scene=${scene}`, logErr);
+  }
 }
 
 async function persistBmcFields(pool, teamId, studentId, bmc, opts) {
@@ -841,8 +865,14 @@ router.post(
       const norm = normalizeSwotPayload(parsed, raw);
       if (norm.error) return bad(req, res, 400, 40016, norm.error);
 
-      await persistSwot(ctx.pool, ctx.team.id, ctx.sid, norm.payload);
-      const { rows } = await ctx.pool.query(`${WORKSPACE_SELECT} WHERE team_id = $1`, [ctx.team.id]);
+      // 引导填写：写草稿，不刷新 swot_saved_at
+      await persistSwot(ctx.pool, ctx.team.id, ctx.sid, norm.payload, { setSaved: false });
+      await logBusinessGuideInteraction(
+        ctx,
+        'swot_ai_guide',
+        `SWOT AI 引导填写：${String(norm.payload.strengths || '').slice(0, 120)}`,
+        { kind: 'guide' }
+      );
       return ok(req, res, await buildWorkspaceApi(ctx.pool, ctx.team.id, ctx.sid));
     } catch (e) {
       logError(`POST business-model ai/swot traceId=${req.traceId}`, e);
@@ -872,10 +902,21 @@ router.post(
         parsed = null;
       }
       const norm = normalizeMarketingPayload(parsed, raw);
-      if (norm.error) return bad(req, res, 400, 40016, norm.error);
+      if (norm.error) {
+        // 便于排查模型偶发非字符串字段 / markdown 包裹
+        logError(
+          `POST business-model ai/marketing normalize fail traceId=${req.traceId} err=${norm.error} raw=${String(raw || '').slice(0, 800)}`
+        );
+        return bad(req, res, 400, 40016, norm.error);
+      }
 
-      await persistMarketing(ctx.pool, ctx.team.id, ctx.sid, norm.payload);
-      const { rows } = await ctx.pool.query(`${WORKSPACE_SELECT} WHERE team_id = $1`, [ctx.team.id]);
+      await persistMarketing(ctx.pool, ctx.team.id, ctx.sid, norm.payload, { setSaved: false });
+      await logBusinessGuideInteraction(
+        ctx,
+        'marketing_ai_guide',
+        `营销 AI 引导填写：${String(norm.payload.product || '').slice(0, 120)}`,
+        { kind: 'guide' }
+      );
       return ok(req, res, await buildWorkspaceApi(ctx.pool, ctx.team.id, ctx.sid));
     } catch (e) {
       logError(`POST business-model ai/marketing traceId=${req.traceId}`, e);
@@ -907,8 +948,13 @@ router.post(
       const norm = normalizeFinanceItemsPayload(parsed, raw);
       if (norm.error) return bad(req, res, 400, 40016, norm.error);
 
-      await persistFinance(ctx.pool, ctx.team.id, ctx.sid, norm.payload);
-      const { rows } = await ctx.pool.query(`${WORKSPACE_SELECT} WHERE team_id = $1`, [ctx.team.id]);
+      await persistFinance(ctx.pool, ctx.team.id, ctx.sid, norm.payload, { setSaved: false });
+      await logBusinessGuideInteraction(
+        ctx,
+        'finance_ai_guide',
+        `成本 AI 引导填写：成本 ${norm.payload.costs?.length || 0} 项 / 收入 ${norm.payload.revenues?.length || 0} 项`,
+        { kind: 'guide', costCount: norm.payload.costs?.length || 0, revenueCount: norm.payload.revenues?.length || 0 }
+      );
       return ok(req, res, await buildWorkspaceApi(ctx.pool, ctx.team.id, ctx.sid));
     } catch (e) {
       logError(`POST business-model ai/finance-items traceId=${req.traceId}`, e);
@@ -1217,6 +1263,187 @@ router.get(
       });
     } catch (e) {
       logError(`GET bmc ai-reviews traceId=${req.traceId}`, e);
+      return bad(req, res, 500, 50000, e.message);
+    }
+  }
+);
+
+const BM_SECTION_KEYS = new Set(['swot', 'marketing', 'finance']);
+const BM_SECTION_LABEL = { swot: 'SWOT', marketing: '营销策略', finance: '成本分析' };
+
+const BM_SECTION_AI_REVIEW_SYSTEM = `你是创业实训商业模式分节审查助教。
+根据学生当前填写内容与本轮自述，对照项目前置信息，点评完整性、合理性与可落地性，给出核心建议与 0～100 分。
+输出 JSON：
+{
+  "summary": "总评",
+  "score": 0-100,
+  "suggestions": ["建议1", "建议2"]
+}
+禁止改写学生原文代填；只审查。未填写处须明确指出。`;
+
+function coerceSectionContent(section, body, workspaceRow) {
+  if (section === 'swot') {
+    return coerceSwot(body?.swot || body?.content || workspaceRow?.swot_json);
+  }
+  if (section === 'marketing') {
+    return coerceMarketing(body?.marketing || body?.content || workspaceRow?.marketing_json);
+  }
+  return coerceFinance(body?.finance || body?.content || workspaceRow?.finance_json);
+}
+
+function formatSectionContentForPrompt(section, content) {
+  if (section === 'swot') {
+    return [
+      `- 优势：${String(content.strengths || '').trim() || '未填写'}`,
+      `- 劣势：${String(content.weaknesses || '').trim() || '未填写'}`,
+      `- 机会：${String(content.opportunities || '').trim() || '未填写'}`,
+      `- 威胁：${String(content.threats || '').trim() || '未填写'}`,
+    ].join('\n');
+  }
+  if (section === 'marketing') {
+    return [
+      `- 产品：${String(content.product || '').trim() || '未填写'}`,
+      `- 价格：${String(content.price || '').trim() || '未填写'}`,
+      `- 渠道：${String(content.place || '').trim() || '未填写'}`,
+      `- 推广：${String(content.promotion || '').trim() || '未填写'}`,
+    ].join('\n');
+  }
+  const costs = Array.isArray(content.costs) ? content.costs : [];
+  const revenues = Array.isArray(content.revenues) ? content.revenues : [];
+  const costLines = costs.length
+    ? costs
+        .map(
+          (c) =>
+            `  · [${c.category || ''}] ${c.name || ''}：${Number(c.amount) || 0} 元/月`
+        )
+        .join('\n')
+    : '  （无）';
+  const revLines = revenues.length
+    ? revenues
+        .map((r) => `  · ${r.source || ''}：${Number(r.monthly) || 0} 元/月`)
+        .join('\n')
+    : '  （无）';
+  return `- 成本明细：\n${costLines}\n- 收入来源：\n${revLines}`;
+}
+
+router.post(
+  '/student/personal-classes/:classId/business-model/sections/:section/ai-review',
+  requireAuth(),
+  requireStudent(),
+  async (req, res) => {
+    try {
+      const ctx = await requireTeamContext(req, res);
+      if (!ctx) return;
+      const section = String(req.params.section || '').trim();
+      if (!BM_SECTION_KEYS.has(section)) {
+        return bad(req, res, 400, 40001, 'section 须为 swot|marketing|finance');
+      }
+      const selfNote = String(req.body?.selfNote || '').trim();
+      const wsRow = await loadWorkspaceRow(ctx.pool, ctx.team.id);
+      const content = coerceSectionContent(section, req.body, wsRow);
+      const provider = await getEnabledProvider('multimodal');
+      if (!provider) return bad(req, res, 400, 40011, '未配置已启用的多模态模型');
+      const bundle = await assembleBusinessModelAiBundle(ctx.pool, ctx.team.id, UPLOAD_ROOT);
+      const label = BM_SECTION_LABEL[section] || section;
+      const user = `【前置实训文本】\n${bundle}\n\n【审查分节】${label}\n\n【本轮自述】\n${selfNote || '（未填写）'}\n\n【当前填写】\n${formatSectionContentForPrompt(section, content)}\n\n请审查并输出 JSON。`;
+      const raw = await runJsonLlm(provider, BM_SECTION_AI_REVIEW_SYSTEM, user);
+      let parsed = null;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        parsed = { summary: String(raw || '').slice(0, 2000), score: 60, suggestions: [] };
+      }
+      const score = Number(parsed.score);
+      const aiScore = Number.isFinite(score) ? Math.max(0, Math.min(100, score)) : null;
+      const { rows } = await ctx.pool.query(
+        `INSERT INTO teacher_personal_class_team_bm_section_ai_reviews
+           (team_id, teacher_personal_class_id, section, submitted_by, self_note, content_snapshot, ai_result, ai_score)
+         VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8)
+         RETURNING id, created_at, self_note, ai_result, ai_score, submitted_by, section`,
+        [
+          ctx.team.id,
+          ctx.classId,
+          section,
+          ctx.sid,
+          selfNote,
+          JSON.stringify(content),
+          JSON.stringify(parsed),
+          aiScore,
+        ]
+      );
+      const row = rows[0];
+      // 同步当前填写到草稿（不刷新 saved_at）
+      if (section === 'swot') {
+        await persistSwot(ctx.pool, ctx.team.id, ctx.sid, content, { setSaved: false });
+      } else if (section === 'marketing') {
+        await persistMarketing(ctx.pool, ctx.team.id, ctx.sid, content, { setSaved: false });
+      } else {
+        await persistFinance(ctx.pool, ctx.team.id, ctx.sid, content, { setSaved: false });
+      }
+      await logBusinessGuideInteraction(
+        ctx,
+        `${section}_ai_review`,
+        `${label} AI 审查${aiScore != null ? ` · 评分 ${aiScore}` : ''}：${String(parsed?.summary || selfNote || '').slice(0, 200)}`,
+        { reviewId: row.id, aiScore, section }
+      );
+      return ok(req, res, {
+        review: {
+          id: String(row.id),
+          section,
+          selfNote: row.self_note,
+          aiResult: row.ai_result,
+          aiScore: row.ai_score != null ? Number(row.ai_score) : null,
+          createdAt: new Date(row.created_at).toISOString(),
+          submittedBy: String(row.submitted_by),
+        },
+        workspace: await buildWorkspaceApi(ctx.pool, ctx.team.id, ctx.sid),
+      });
+    } catch (e) {
+      logError(`POST section ai-review traceId=${req.traceId}`, e);
+      return bad(req, res, 500, 50000, friendlyLlmErrorMessage(e));
+    }
+  }
+);
+
+router.get(
+  '/student/personal-classes/:classId/business-model/sections/:section/ai-reviews',
+  requireAuth(),
+  requireStudent(),
+  async (req, res) => {
+    try {
+      const ctx = await requireTeamContext(req, res);
+      if (!ctx) return;
+      const section = String(req.params.section || '').trim();
+      if (!BM_SECTION_KEYS.has(section)) {
+        return bad(req, res, 400, 40001, 'section 须为 swot|marketing|finance');
+      }
+      const { rows } = await ctx.pool.query(
+        `SELECT r.id, r.section, r.self_note, r.ai_result, r.ai_score, r.created_at, r.submitted_by,
+                COALESCE(u.real_name, u.username) AS submitter_name,
+                t.name AS team_name
+         FROM teacher_personal_class_team_bm_section_ai_reviews r
+         JOIN users u ON u.id = r.submitted_by
+         JOIN teacher_personal_class_teams t ON t.id = r.team_id
+         WHERE r.team_id = $1 AND r.section = $2
+         ORDER BY r.created_at DESC
+         LIMIT 50`,
+        [ctx.team.id, section]
+      );
+      return ok(req, res, {
+        reviews: rows.map((r) => ({
+          id: String(r.id),
+          section: r.section,
+          selfNote: r.self_note,
+          aiResult: r.ai_result,
+          aiScore: r.ai_score != null ? Number(r.ai_score) : null,
+          createdAt: new Date(r.created_at).toISOString(),
+          submittedBy: String(r.submitted_by),
+          submitterName: String(r.submitter_name || '').trim() || '同学',
+          teamName: String(r.team_name || ''),
+        })),
+      });
+    } catch (e) {
+      logError(`GET section ai-reviews traceId=${req.traceId}`, e);
       return bad(req, res, 500, 50000, e.message);
     }
   }
