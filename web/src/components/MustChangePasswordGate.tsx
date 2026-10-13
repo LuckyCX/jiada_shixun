@@ -39,7 +39,7 @@ function isProtectedWorkspacePath(pathname: string): boolean {
 }
 
 /**
- * 弱口令强制改密：不可关闭；未绑邮箱时必须绑定邮箱（手机号可选）。
+ * 弱口令强制改密：不可关闭；邮箱与手机均未绑定时须至少绑定一种（二选一）。
  * 离开业务区（如地址栏回到首页）时关闭弹窗并软登出，避免登录页残留弹窗。
  */
 export default function MustChangePasswordGate() {
@@ -50,8 +50,8 @@ export default function MustChangePasswordGate() {
   const [pendingRole, setPendingRole] = useState<PortalRole | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [loadingProfile, setLoadingProfile] = useState(false);
-  /** 当前账号尚无邮箱时，强制改密须一并绑定邮箱 */
-  const [needBindEmail, setNeedBindEmail] = useState(false);
+  /** 邮箱与手机均未绑定 → 本次须至少绑定一种 */
+  const [needBindContact, setNeedBindContact] = useState(false);
   const [error, setError] = useState('');
   const [emailSending, setEmailSending] = useState(false);
   const [phoneSending, setPhoneSending] = useState(false);
@@ -76,10 +76,12 @@ export default function MustChangePasswordGate() {
     setError('');
     try {
       const me = await fetchAuthMe(r);
-      setNeedBindEmail(!String(me.email || '').trim());
+      const hasEmail = Boolean(String(me.email || '').trim());
+      const hasPhone = Boolean(String(me.phone || '').replace(/\D/g, ''));
+      setNeedBindContact(!hasEmail && !hasPhone);
     } catch (e) {
-      // 拉取失败时仍要求绑邮箱，避免跳过
-      setNeedBindEmail(true);
+      // 拉取失败时仍要求绑定联系方式，避免跳过
+      setNeedBindContact(true);
       setError(e instanceof Error ? e.message : '无法读取账号联系方式');
     } finally {
       setLoadingProfile(false);
@@ -107,7 +109,7 @@ export default function MustChangePasswordGate() {
       setOpen(false);
       setRole(null);
       setPendingRole(null);
-      setNeedBindEmail(false);
+      setNeedBindContact(false);
       setError('');
       form.resetFields();
       setEmailCountdown(0);
@@ -229,14 +231,20 @@ export default function MustChangePasswordGate() {
       const phone = String(values.phone || '').replace(/\D/g, '');
       const emailCode = String(values.emailCode || '').trim();
       const phoneCode = String(values.phoneCode || '').trim();
-      // 邮箱必绑：未绑邮箱时必须填写邮箱+验证码；手机号可选
-      if (needBindEmail) {
-        if (!email) {
-          setError('请绑定邮箱');
+      // 邮箱 / 手机二选一：至少完整绑定一种
+      if (needBindContact) {
+        const emailOk = Boolean(email && emailCode);
+        const phoneOk = Boolean(phone && phoneCode);
+        if (!emailOk && !phoneOk) {
+          setError('请至少绑定邮箱或手机号其中一种，并填写对应验证码');
           return;
         }
-        if (!emailCode) {
+        if (email && !emailCode) {
           setError('请填写邮箱验证码');
+          return;
+        }
+        if (emailCode && !email) {
+          setError('请填写邮箱');
           return;
         }
         if (phone && !phoneCode) {
@@ -287,23 +295,28 @@ export default function MustChangePasswordGate() {
       </Typography.Paragraph>
       <Typography.Paragraph type="secondary" className="!text-xs !mb-4">
         以后可通过邮箱、手机号或{idHint}登录；忘记密码时可根据已绑定的邮箱或手机号重置密码。
-        {needBindEmail ? ' 当前账号尚未绑定邮箱，请先绑定邮箱（手机号可选）。' : ''}
+        {needBindContact ? ' 当前尚未绑定联系方式，请至少绑定邮箱或手机号其中一种。' : ''}
       </Typography.Paragraph>
 
-      <Form form={form} layout="vertical" requiredMark onFinish={() => void handleSubmit()}>
-        {needBindEmail && !loadingProfile ? (
+      <Form form={form} layout="vertical" requiredMark={false} onFinish={() => void handleSubmit()}>
+        {needBindContact && !loadingProfile ? (
           <>
-            <Form.Item label="邮箱" required style={{ marginBottom: 8 }}>
+            <Form.Item label="邮箱（与手机号二选一）" style={{ marginBottom: 8 }}>
               <Space.Compact className="w-full">
                 <Form.Item
                   name="email"
                   noStyle
                   rules={[
-                    { required: true, message: '请输入邮箱' },
-                    { type: 'email', message: '邮箱格式不正确' },
+                    {
+                      validator: async (_, v) => {
+                        const s = String(v || '').trim();
+                        if (!s) return;
+                        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s)) throw new Error('邮箱格式不正确');
+                      },
+                    },
                   ]}
                 >
-                  <Input placeholder="请输入邮箱" autoComplete="email" />
+                  <Input placeholder="选填其一：邮箱" autoComplete="email" />
                 </Form.Item>
                 <Button
                   type="default"
@@ -315,14 +328,10 @@ export default function MustChangePasswordGate() {
                 </Button>
               </Space.Compact>
             </Form.Item>
-            <Form.Item
-              label="邮箱验证码"
-              name="emailCode"
-              rules={[{ required: true, message: '请填写邮箱验证码' }]}
-            >
-              <Input placeholder="请填写邮箱验证码" maxLength={6} autoComplete="one-time-code" />
+            <Form.Item label="邮箱验证码" name="emailCode">
+              <Input placeholder="填写邮箱时请一并填写验证码" maxLength={6} autoComplete="one-time-code" />
             </Form.Item>
-            <Form.Item label="手机号（可选）" style={{ marginBottom: 8 }}>
+            <Form.Item label="手机号（与邮箱二选一）" style={{ marginBottom: 8 }}>
               <Space.Compact className="w-full">
                 <Form.Item
                   name="phone"
@@ -337,7 +346,7 @@ export default function MustChangePasswordGate() {
                     },
                   ]}
                 >
-                  <Input placeholder="选填，可稍后在个人中心绑定" autoComplete="tel" maxLength={11} />
+                  <Input placeholder="选填其一：手机号" autoComplete="tel" maxLength={11} />
                 </Form.Item>
                 <Button
                   type="default"
@@ -350,7 +359,7 @@ export default function MustChangePasswordGate() {
               </Space.Compact>
             </Form.Item>
             <Form.Item label="手机验证码" name="phoneCode">
-              <Input placeholder="若填写手机号请一并填写验证码" maxLength={6} autoComplete="one-time-code" />
+              <Input placeholder="填写手机号时请一并填写验证码" maxLength={6} autoComplete="one-time-code" />
             </Form.Item>
           </>
         ) : null}

@@ -65,14 +65,33 @@ async function getSmtpConfig() {
   return parseSmtpConfig(raw);
 }
 
+function isQqSmtpHost(host) {
+  const h = String(host || '').toLowerCase();
+  return h.includes('qq.com') || h.includes('foxmail.com');
+}
+
 /** 与 nanyangAgent 等系统一致：仅 host/port/secure/auth，默认 465 + SSL 便于 QQ 等常见配置 */
 function createSmtpTransporter(cfg) {
-  return nodemailer.createTransport({
+  // QQ/网易等要求 auth.user 为纯邮箱；若后台误填「名称 <邮箱>」则提取邮箱部分
+  const authUser = extractEmail(cfg.user) || String(cfg.user || '').trim();
+  // 授权码偶发带空格/换行，统一去掉空白
+  const authPass = String(cfg.pass || '').replace(/\s+/g, '');
+  let secure = cfg.secure === true;
+  // QQ 官方要求第三方客户端启用 SSL/TLS：465 必须走隐式 SSL，误关时自动纠正
+  // 参见 https://help.mail.qq.com/detail/108/1010
+  if (isQqSmtpHost(cfg.host) && cfg.port === 465) secure = true;
+  /** @type {import('nodemailer').TransportOptions} */
+  const opts = {
     host: cfg.host,
     port: cfg.port,
-    secure: cfg.secure,
-    auth: { user: cfg.user, pass: cfg.pass },
-  });
+    secure,
+    auth: { user: authUser, pass: authPass },
+  };
+  // 587/25：STARTTLS 加密（开关显示为关，但仍强制 TLS，满足 QQ「启用 SSL/TLS」要求）
+  if (!secure && (cfg.port === 587 || cfg.port === 25)) {
+    opts.requireTLS = true;
+  }
+  return nodemailer.createTransport(opts);
 }
 
 /**
@@ -95,9 +114,43 @@ export function humanizeSmtpError(err, ctx = {}) {
     '请确认：已开启邮箱 SMTP、用户名为完整邮箱、密码为「SMTP 授权码」而非网页登录密码、端口与 TLS/SSL 是否与服务商说明一致。';
   if (host.includes('qq.com') || host.includes('foxmail.com')) {
     hint =
-      'QQ / Foxmail：设置中开启 SMTP；密码填「授权码」；465 端口通常开启 TLS/SSL，587 通常关闭 TLS/SSL。详见 https://help.mail.qq.com/detail/108/1023';
+      'QQ/Foxmail：请到邮箱设置重新生成「授权码」并粘贴到后台 SMTP 密码后点「保存 SMTP」再测；用户名须为完整邮箱；个人邮箱 Host 用 smtp.qq.com，企业邮箱用 smtp.exmail.qq.com；465+开 TLS 或 587+关 TLS。若提示账号异常/频率受限，需在 QQ 邮箱安全中心处理。详见 https://help.mail.qq.com/detail/108/1023';
   }
   return `${msg} ${hint}`;
+}
+
+/** 抛出带可读说明的 Error，供各业务路由统一返回给前端 */
+function throwSmtpError(err, cfg) {
+  const e = new Error(humanizeSmtpError(err, { host: cfg?.host }));
+  e.cause = err;
+  e.smtp = true;
+  e.status = 400;
+  e.code = 40002;
+  throw e;
+}
+
+/**
+ * 脱敏诊断信息（不含密码明文），便于排查 535
+ * @param {SmtpConfig} cfg
+ */
+export function describeSmtpConfigSafe(cfg) {
+  const authUser = extractEmail(cfg.user) || String(cfg.user || '').trim();
+  const passLen = String(cfg.pass || '').replace(/\s+/g, '').length;
+  const portOk =
+    (cfg.port === 465 && cfg.secure === true) || (cfg.port === 587 && cfg.secure === false);
+  return {
+    host: cfg.host,
+    port: cfg.port,
+    secure: cfg.secure,
+    authUser,
+    authUserLooksLikeEmail: Boolean(extractEmail(authUser)),
+    passLength: passLen,
+    passLooksTooShort: passLen > 0 && passLen < 6,
+    portTlsPairLooksOdd: !portOk && (cfg.port === 465 || cfg.port === 587),
+    fromNormalized: normalizeFromAddress(cfg),
+    isQqPersonal: /smtp\.qq\.com/i.test(cfg.host),
+    isQqExmail: /exmail\.qq\.com/i.test(cfg.host),
+  };
 }
 
 /**
@@ -121,7 +174,7 @@ export async function sendSmtpMail(to, opts = {}) {
     });
   } catch (err) {
     logError('mailProvider.sendSmtpMail', err);
-    throw err;
+    throwSmtpError(err, cfg);
   }
 }
 
@@ -131,11 +184,28 @@ export async function sendSmtpMail(to, opts = {}) {
 export async function sendSmtpTestMail(to) {
   const safeTo = String(to || '').trim();
   if (!safeTo) throw new Error('请填写测试收件人邮箱');
+  const cfg = await getSmtpConfig();
+  const diag = describeSmtpConfigSafe(cfg);
+  // 先 verify 登录，失败时同样走可读错误（并附诊断字段供管理端展示）
+  try {
+    const transporter = createSmtpTransporter(cfg);
+    await transporter.verify();
+  } catch (err) {
+    logError('mailProvider.sendSmtpTestMail.verify', err);
+    const e = new Error(humanizeSmtpError(err, { host: cfg.host }));
+    e.cause = err;
+    e.smtp = true;
+    e.status = 400;
+    e.code = 40002;
+    e.smtpDiag = diag;
+    throw e;
+  }
   await sendSmtpMail(safeTo, {
     subject: '实训平台 · SMTP 测试邮件',
     text: '这是一封 SMTP 连通性测试邮件。若收到说明配置可用。',
     html: '<p>这是一封 <b>SMTP 连通性测试</b> 邮件。若收到说明配置可用。</p>',
   });
+  return { diag };
 }
 
 /**
@@ -161,6 +231,6 @@ export async function sendEmailVerifyCode(email, code, scene) {
     });
   } catch (err) {
     logError('mailProvider.sendEmailVerifyCode', err);
-    throw err;
+    throwSmtpError(err, cfg);
   }
 }

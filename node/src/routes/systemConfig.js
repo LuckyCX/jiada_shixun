@@ -91,26 +91,33 @@ router.patch('/admin/system-config', requireAuth(), requireAdmin(), async (req, 
 router.post('/admin/system-config/test-smtp', requireAuth(), requireAdmin(), async (req, res) => {
   try {
     const to = req.body?.to;
-    await sendSmtpTestMail(to);
+    const result = await sendSmtpTestMail(to);
     return res.json({
       code: 0,
       message: '测试邮件已发送，请检查收件箱或垃圾箱',
-      data: null,
+      data: result?.diag || null,
       traceId: req.traceId,
     });
   } catch (e) {
     logError(`POST /api/admin/system-config/test-smtp traceId=${req.traceId}`, e);
     let host = '';
+    let diag = e?.smtpDiag || null;
     try {
       const raw = await getConfigValue('smtp_config', false);
       if (raw && typeof raw === 'object') host = String(raw.host || '');
+      if (!diag) {
+        const { parseSmtpConfig, describeSmtpConfigSafe } = await import('../lib/mailProvider.js');
+        diag = describeSmtpConfigSafe(parseSmtpConfig(raw));
+      }
     } catch {
       /* ignore */
     }
+    // 已在 mailProvider 人读化过的错误不再重复拼接
+    const message = e?.smtp ? String(e.message || '') : humanizeSmtpError(e, { host });
     return res.status(400).json({
       code: 40002,
-      message: humanizeSmtpError(e, { host }),
-      data: null,
+      message,
+      data: diag,
       traceId: req.traceId,
     });
   }

@@ -444,7 +444,7 @@ router.post('/secure-code', requireAuth(), bindCodeRateLimit, async (req, res) =
 
 /**
  * 已登录改密（全角色）：
- * - 强制改密（JWT mustChangePassword）：无需旧密码；若未绑邮箱须本次绑定邮箱（手机号可选）
+ * - 强制改密（JWT mustChangePassword）：无需旧密码；若邮箱与手机均未绑定，须本次至少绑定一种
  * - 主动改密：旧密码 + 已绑定邮箱/手机验证码
  */
 router.post('/change-password', requireAuth(), async (req, res) => {
@@ -541,12 +541,15 @@ router.post('/change-password', requireAuth(), async (req, res) => {
       nextPhone = bindPhone;
     }
 
-    // 强制改密：账号尚无邮箱时必须本次绑定邮箱；手机号可选
+    // 强制改密：邮箱与手机均未绑定时，须至少绑定一种（二选一）
     const hadEmail = Boolean(normalizeEmail(u.email));
-    if (forceChange && !hadEmail && !nextEmail) {
+    const hadPhone = Boolean(normalizePhone(u.phone));
+    const willHaveEmail = Boolean(normalizeEmail(nextEmail));
+    const willHavePhone = Boolean(normalizePhone(nextPhone));
+    if (forceChange && !hadEmail && !hadPhone && !willHaveEmail && !willHavePhone) {
       return res.status(400).json({
         code: 40011,
-        message: '请绑定邮箱',
+        message: '请至少绑定邮箱或手机号其中一种',
         data: null,
         traceId: req.traceId,
       });

@@ -634,7 +634,33 @@ export default function SystemConfigPanel() {
       });
       messageApi.success('测试邮件已发送');
     } catch (e) {
-      messageApi.error((e as Error).message);
+      const err = e as Error & {
+        data?: {
+          authUser?: string;
+          port?: number;
+          secure?: boolean;
+          host?: string;
+          passLength?: number;
+          portTlsPairLooksOdd?: boolean;
+          authUserLooksLikeEmail?: boolean;
+        };
+      };
+      const d = err.data;
+      let msg = err.message || '发送失败';
+      if (d && typeof d === 'object') {
+        const bits = [
+          d.host ? `Host=${d.host}` : '',
+          d.port != null ? `Port=${d.port}` : '',
+          d.secure != null ? `TLS=${d.secure ? '开' : '关'}` : '',
+          d.authUser ? `用户=${d.authUser}` : '',
+          d.passLength != null ? `授权码长度=${d.passLength}` : '',
+        ].filter(Boolean);
+        if (bits.length) msg += `（当前库内：${bits.join('，')}）`;
+        if (d.portTlsPairLooksOdd) msg += ' 端口与 TLS 配对异常，请改成 465+开 或 587+关。';
+        if (d.authUserLooksLikeEmail === false) msg += ' 用户名不像邮箱，请填完整邮箱。';
+        if (d.passLength === 0) msg += ' 库内无 SMTP 密码，请重新填写授权码并保存。';
+      }
+      messageApi.error(msg);
     } finally {
       setLoading(false);
     }
@@ -1018,33 +1044,68 @@ export default function SystemConfigPanel() {
                     min={1}
                     max={65535}
                     value={smtp.port}
-                    onChange={(v) => setSmtp((s) => ({ ...s, port: typeof v === 'number' ? v : 465 }))}
+                    onChange={(v) => {
+                      const port = typeof v === 'number' ? v : 465;
+                      // QQ 等常见约定：465 开 SSL，587 关 SSL（走 STARTTLS）
+                      setSmtp((s) => ({
+                        ...s,
+                        port,
+                        secure: port === 465 ? true : port === 587 ? false : s.secure,
+                      }));
+                    }}
                   />
                 </Form.Item>
                 <Form.Item label="TLS/SSL">
                   <Switch checked={smtp.secure} onChange={(v) => setSmtp((s) => ({ ...s, secure: v }))} />
+                  <div className="text-xs text-gray-400 mt-1">
+                    QQ 要求加密连接：推荐 <b>465 + 开启</b>；若用 587 则开关关闭（服务端仍走 STARTTLS）
+                  </div>
                 </Form.Item>
                 <Form.Item label="SMTP 用户名">
                   <Input
                     value={smtp.user}
                     onChange={(e) => setSmtp((s) => ({ ...s, user: e.target.value }))}
-                    placeholder="通常为邮箱账号"
+                    placeholder="完整邮箱，如 name@qq.com"
                   />
                 </Form.Item>
                 <Form.Item label="SMTP 密码">
                   <Input.Password
                     value={smtp.pass}
                     onChange={(e) => setSmtp((s) => ({ ...s, pass: e.target.value }))}
-                    placeholder="邮箱 SMTP 授权码/密码"
+                    placeholder="填 SMTP 授权码，不是 QQ 登录密码"
                   />
                 </Form.Item>
                 <Form.Item label="发件人 From">
                   <Input
                     value={smtp.from}
                     onChange={(e) => setSmtp((s) => ({ ...s, from: e.target.value }))}
-                    placeholder="例如：大学生创业实训平台 <notice@example.com>"
+                    placeholder="例如：大学生创业实训平台 <name@qq.com>"
                   />
                 </Form.Item>
+                <div className="mb-4 rounded-lg border border-amber-100 bg-amber-50/80 px-3 py-2 text-xs text-amber-900/90 leading-relaxed">
+                  按 QQ 官方说明，第三方客户端须启用 SSL/TLS（
+                  <a
+                    href="https://help.mail.qq.com/detail/108/1010"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="underline"
+                  >
+                    启用 SSL/TLS
+                  </a>
+                  ）。推荐配置：Host=<code className="text-[11px]">smtp.qq.com</code>，端口{' '}
+                  <code className="text-[11px]">465</code>，TLS/SSL <b>开启</b>，用户名为完整邮箱，密码为
+                  <a
+                    href="https://help.mail.qq.com/detail/108/1023"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="underline"
+                  >
+                    SMTP 授权码
+                  </a>
+                  （重新生成后须点「保存 SMTP」）。出现{' '}
+                  <code className="text-[11px]">535 Login fail</code>{' '}
+                  时优先检查授权码是否过期、SMTP 是否已开启、账号是否被限制。
+                </div>
               </Form>
             </section>
             <section className="min-w-0">
