@@ -79,6 +79,34 @@ function mergeSkipMasked(base, patch) {
 }
 
 /**
+ * 旧版扁平 smtp_config → accounts[] 首次保存时，掩码密码需从顶层 pass 回填，避免写入字面量 ********
+ * @param {Record<string, unknown>} merged
+ */
+function finalizeSmtpConfigMerge(merged) {
+  if (!merged || typeof merged !== 'object' || Array.isArray(merged)) return merged;
+  const accounts = Array.isArray(merged.accounts) ? merged.accounts : null;
+  if (!accounts?.length) return merged;
+  const legacyPass = typeof merged.pass === 'string' ? merged.pass : '';
+  const legacyUser = typeof merged.user === 'string' ? merged.user : '';
+  for (const raw of accounts) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const a = /** @type {Record<string, unknown>} */ (raw);
+    if (a.pass === '********' && legacyPass && legacyPass !== '********') {
+      if (!a.user || String(a.user) === legacyUser) a.pass = legacyPass;
+    }
+  }
+  // 双源时以 accounts 为准，去掉顶层密钥避免误用旧号
+  const next = { ...merged, accounts };
+  delete next.pass;
+  delete next.host;
+  delete next.port;
+  delete next.secure;
+  delete next.user;
+  delete next.from;
+  return next;
+}
+
+/**
  * Patch multiple top-level keys; merges with existing DB values so masked secrets are not wiped.
  */
 export async function patchConfig(patches, userId) {
@@ -88,7 +116,8 @@ export async function patchConfig(patches, userId) {
     for (const [key, patchObj] of Object.entries(patches)) {
       const cur = await client.query('SELECT config_value FROM system_config WHERE config_key = $1', [key]);
       const prev = cur.rows[0]?.config_value || {};
-      const merged = mergeSkipMasked(typeof prev === 'object' ? prev : {}, patchObj);
+      let merged = mergeSkipMasked(typeof prev === 'object' ? prev : {}, patchObj);
+      if (key === 'smtp_config') merged = finalizeSmtpConfigMerge(merged);
       await client.query(
         `INSERT INTO system_config (config_key, config_value, updated_by)
          VALUES ($1, $2::jsonb, $3)

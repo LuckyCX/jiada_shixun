@@ -49,6 +49,69 @@ type TabValue =
 
 type LlmCategory = 'multimodal' | 'file_processing';
 
+/** 单条 SMTP 账号（支持多备选自动 failover） */
+type SmtpAccount = {
+  id: string;
+  label: string;
+  enabled: boolean;
+  host: string;
+  port: number;
+  secure: boolean;
+  user: string;
+  pass: string;
+  from: string;
+};
+
+function newSmtpAccount(partial?: Partial<SmtpAccount>): SmtpAccount {
+  return {
+    id: `smtp_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    label: '',
+    enabled: true,
+    host: 'smtp.qq.com',
+    port: 465,
+    secure: true,
+    user: '',
+    pass: '',
+    from: '',
+    ...partial,
+  };
+}
+
+function normalizeSmtpAccountsFromApi(v: Record<string, unknown> | undefined): SmtpAccount[] {
+  if (!v || typeof v !== 'object') return [newSmtpAccount()];
+  const list = Array.isArray(v.accounts) ? v.accounts : null;
+  if (list && list.length > 0) {
+    return list.map((raw, idx) => {
+      const a = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+      return newSmtpAccount({
+        id: String(a.id || `smtp_${idx + 1}`),
+        label: String(a.label || ''),
+        enabled: a.enabled !== false,
+        host: String(a.host || 'smtp.qq.com'),
+        port: Number(a.port) > 0 ? Number(a.port) : 465,
+        secure: a.secure !== false,
+        user: String(a.user || ''),
+        pass: String(a.pass || ''),
+        from: String(a.from || ''),
+      });
+    });
+  }
+  // 兼容旧版扁平单账号
+  return [
+    newSmtpAccount({
+      id: 'default',
+      label: '主账号',
+      enabled: true,
+      host: String(v.host || 'smtp.qq.com'),
+      port: Number(v.port) > 0 ? Number(v.port) : 465,
+      secure: v.secure !== false,
+      user: String(v.user || ''),
+      pass: String(v.pass || ''),
+      from: String(v.from || ''),
+    }),
+  ];
+}
+
 type LlmProviderRow = {
   id: string;
   name: string;
@@ -200,8 +263,9 @@ export default function SystemConfigPanel() {
   const [heroBgUploading, setHeroBgUploading] = useState(false);
   const logoFileInputRef = useRef<HTMLInputElement>(null);
   const heroBgFileInputRef = useRef<HTMLInputElement>(null);
-  const [smtp, setSmtp] = useState({ host: '', port: 465, secure: true, user: '', pass: '', from: '' });
+  const [smtpAccounts, setSmtpAccounts] = useState<SmtpAccount[]>([newSmtpAccount({ id: 'default', label: '主账号' })]);
   const [testSmtpTo, setTestSmtpTo] = useState('');
+  const [testSmtpAccountId, setTestSmtpAccountId] = useState<string>('');
   const [testSmsPhone, setTestSmsPhone] = useState('');
   const [testSmsScene, setTestSmsScene] = useState<'login' | 'register' | 'reset'>('login');
 
@@ -274,14 +338,9 @@ export default function SystemConfigPanel() {
       heroDescription: String(s.heroDescription || ''),
     });
     const sm = (data.smtp_config?.value || {}) as Record<string, unknown>;
-    setSmtp({
-      host: String(sm.host ?? ''),
-      port: Number(sm.port ?? 465),
-      secure: Boolean(sm.secure ?? true),
-      user: String(sm.user ?? ''),
-      pass: String(sm.pass ?? ''),
-      from: String(sm.from ?? ''),
-    });
+    const accounts = normalizeSmtpAccountsFromApi(sm);
+    setSmtpAccounts(accounts);
+    setTestSmtpAccountId((prev) => (prev && accounts.some((a) => a.id === prev) ? prev : ''));
     const biz = (data.sms_biz_config?.value || {}) as Record<string, unknown>;
     setSmsBiz({
       enabled: biz.enabled !== false,
@@ -428,28 +487,51 @@ export default function SystemConfigPanel() {
     }
   };
 
+  const updateSmtpAccount = (id: string, patch: Partial<SmtpAccount>) => {
+    setSmtpAccounts((prev) => prev.map((a) => (a.id === id ? { ...a, ...patch } : a)));
+  };
+
   const saveSmtpAllowMaskedPass = () => {
-    const host = smtp.host.trim();
-    const user = smtp.user.trim();
-    const from = smtp.from.trim();
-    const port = Math.floor(Number(smtp.port));
-    if (!host || !user || !from) {
-      messageApi.warning('请填写 SMTP Host、用户名与发件人');
+    if (!smtpAccounts.length) {
+      messageApi.warning('请至少添加一个 SMTP 账号');
       return;
     }
-    if (!Number.isFinite(port) || port <= 0 || port > 65535) {
-      messageApi.warning('SMTP 端口范围应为 1～65535');
-      return;
+    for (let i = 0; i < smtpAccounts.length; i++) {
+      const a = smtpAccounts[i];
+      const host = a.host.trim();
+      const user = a.user.trim();
+      const from = a.from.trim();
+      const port = Math.floor(Number(a.port));
+      if (!host || !user || !from) {
+        messageApi.warning(`第 ${i + 1} 个账号请填写 Host、用户名与发件人`);
+        return;
+      }
+      if (!Number.isFinite(port) || port <= 0 || port > 65535) {
+        messageApi.warning(`第 ${i + 1} 个账号端口范围应为 1～65535`);
+        return;
+      }
+      // 新加且启用的账号必须填授权码；已有账号为 ******** 时由服务端保留原密码
+      if (a.enabled && !a.pass) {
+        messageApi.warning(`第 ${i + 1} 个账号已启用，请填写 SMTP 授权码`);
+        return;
+      }
     }
-    const patch: Record<string, unknown> = {
-      host,
-      port,
-      secure: smtp.secure === true,
-      user,
-      from,
-    };
-    if (smtp.pass && smtp.pass !== '********') patch.pass = smtp.pass;
-    void savePatch({ smtp_config: patch });
+    // 按列表顺序备选；密码为掩码时交给服务端 mergeSkipMasked 保留原值
+    const accounts = smtpAccounts.map((a) => {
+      const row: Record<string, unknown> = {
+        id: a.id,
+        label: a.label.trim() || a.user.trim() || a.host.trim(),
+        enabled: a.enabled !== false,
+        host: a.host.trim(),
+        port: Math.floor(Number(a.port)),
+        secure: a.secure === true,
+        user: a.user.trim(),
+        from: a.from.trim(),
+        pass: a.pass && a.pass !== '********' ? a.pass : '********',
+      };
+      return row;
+    });
+    void savePatch({ smtp_config: { accounts } });
   };
 
   const saveSms = () => {
@@ -627,12 +709,15 @@ export default function SystemConfigPanel() {
     }
     setLoading(true);
     try {
-      await apiFetch('/api/admin/system-config/test-smtp', {
+      const body: Record<string, string> = { to };
+      if (testSmtpAccountId) body.accountId = testSmtpAccountId;
+      const res = (await apiFetch('/api/admin/system-config/test-smtp', {
         method: 'POST',
         token,
-        body: JSON.stringify({ to }),
-      });
-      messageApi.success('测试邮件已发送');
+        body: JSON.stringify(body),
+      })) as { message?: string; data?: { usedAccountLabel?: string; usedAccountId?: string } };
+      const used = res?.data?.usedAccountLabel || res?.data?.usedAccountId || '';
+      messageApi.success(used ? `测试邮件已发送（经 ${used}）` : res?.message || '测试邮件已发送');
     } catch (e) {
       const err = e as Error & {
         data?: {
@@ -643,22 +728,30 @@ export default function SystemConfigPanel() {
           passLength?: number;
           portTlsPairLooksOdd?: boolean;
           authUserLooksLikeEmail?: boolean;
+          failures?: Array<{ label?: string; id?: string; error?: string }>;
+          readyCount?: number;
         };
       };
       const d = err.data;
       let msg = err.message || '发送失败';
       if (d && typeof d === 'object') {
-        const bits = [
-          d.host ? `Host=${d.host}` : '',
-          d.port != null ? `Port=${d.port}` : '',
-          d.secure != null ? `TLS=${d.secure ? '开' : '关'}` : '',
-          d.authUser ? `用户=${d.authUser}` : '',
-          d.passLength != null ? `授权码长度=${d.passLength}` : '',
-        ].filter(Boolean);
-        if (bits.length) msg += `（当前库内：${bits.join('，')}）`;
-        if (d.portTlsPairLooksOdd) msg += ' 端口与 TLS 配对异常，请改成 465+开 或 587+关。';
-        if (d.authUserLooksLikeEmail === false) msg += ' 用户名不像邮箱，请填完整邮箱。';
-        if (d.passLength === 0) msg += ' 库内无 SMTP 密码，请重新填写授权码并保存。';
+        if (Array.isArray(d.failures) && d.failures.length) {
+          msg += `（已尝试：${d.failures
+            .map((x) => `${x.label || x.id}→${String(x.error || '').slice(0, 60)}`)
+            .join('；')}）`;
+        } else {
+          const bits = [
+            d.host ? `Host=${d.host}` : '',
+            d.port != null ? `Port=${d.port}` : '',
+            d.secure != null ? `TLS=${d.secure ? '开' : '关'}` : '',
+            d.authUser ? `用户=${d.authUser}` : '',
+            d.passLength != null ? `授权码长度=${d.passLength}` : '',
+          ].filter(Boolean);
+          if (bits.length) msg += `（当前库内：${bits.join('，')}）`;
+          if (d.portTlsPairLooksOdd) msg += ' 端口与 TLS 配对异常，请改成 465+开 或 587+关。';
+          if (d.authUserLooksLikeEmail === false) msg += ' 用户名不像邮箱，请填完整邮箱。';
+          if (d.passLength === 0) msg += ' 库内无 SMTP 密码，请重新填写授权码并保存。';
+        }
       }
       messageApi.error(msg);
     } finally {
@@ -1028,106 +1121,210 @@ export default function SystemConfigPanel() {
       forceRender: true,
       children: (
         <div className="p-6 w-full max-w-[1280px] min-w-0 min-[1200px]:px-8">
-          <div className="grid grid-cols-1 gap-8 min-[1200px]:grid-cols-2 min-[1200px]:gap-x-10 min-[1200px]:items-start">
-            <section className="min-w-0">
-              <Form {...formItemLayout} layout="vertical" requiredMark={false}>
-                <Form.Item label="SMTP Host">
-                  <Input
-                    value={smtp.host}
-                    onChange={(e) => setSmtp((s) => ({ ...s, host: e.target.value }))}
-                    placeholder="例如 smtp.qq.com"
-                  />
-                </Form.Item>
-                <Form.Item label="SMTP Port">
-                  <InputNumber
-                    className="w-full"
-                    min={1}
-                    max={65535}
-                    value={smtp.port}
-                    onChange={(v) => {
-                      const port = typeof v === 'number' ? v : 465;
-                      // QQ 等常见约定：465 开 SSL，587 关 SSL（走 STARTTLS）
-                      setSmtp((s) => ({
-                        ...s,
-                        port,
-                        secure: port === 465 ? true : port === 587 ? false : s.secure,
-                      }));
-                    }}
-                  />
-                </Form.Item>
-                <Form.Item label="TLS/SSL">
-                  <Switch checked={smtp.secure} onChange={(v) => setSmtp((s) => ({ ...s, secure: v }))} />
-                  <div className="text-xs text-gray-400 mt-1">
-                    QQ 要求加密连接：推荐 <b>465 + 开启</b>；若用 587 则开关关闭（服务端仍走 STARTTLS）
-                  </div>
-                </Form.Item>
-                <Form.Item label="SMTP 用户名">
-                  <Input
-                    value={smtp.user}
-                    onChange={(e) => setSmtp((s) => ({ ...s, user: e.target.value }))}
-                    placeholder="完整邮箱，如 name@qq.com"
-                  />
-                </Form.Item>
-                <Form.Item label="SMTP 密码">
-                  <Input.Password
-                    value={smtp.pass}
-                    onChange={(e) => setSmtp((s) => ({ ...s, pass: e.target.value }))}
-                    placeholder="填 SMTP 授权码，不是 QQ 登录密码"
-                  />
-                </Form.Item>
-                <Form.Item label="发件人 From">
-                  <Input
-                    value={smtp.from}
-                    onChange={(e) => setSmtp((s) => ({ ...s, from: e.target.value }))}
-                    placeholder="例如：大学生创业实训平台 <name@qq.com>"
-                  />
-                </Form.Item>
-                <div className="mb-4 rounded-lg border border-amber-100 bg-amber-50/80 px-3 py-2 text-xs text-amber-900/90 leading-relaxed">
-                  按 QQ 官方说明，第三方客户端须启用 SSL/TLS（
-                  <a
-                    href="https://help.mail.qq.com/detail/108/1010"
-                    target="_blank"
-                    rel="noreferrer"
-                    className="underline"
-                  >
-                    启用 SSL/TLS
-                  </a>
-                  ）。推荐配置：Host=<code className="text-[11px]">smtp.qq.com</code>，端口{' '}
-                  <code className="text-[11px]">465</code>，TLS/SSL <b>开启</b>，用户名为完整邮箱，密码为
-                  <a
-                    href="https://help.mail.qq.com/detail/108/1023"
-                    target="_blank"
-                    rel="noreferrer"
-                    className="underline"
-                  >
-                    SMTP 授权码
-                  </a>
-                  （重新生成后须点「保存 SMTP」）。出现{' '}
-                  <code className="text-[11px]">535 Login fail</code>{' '}
-                  时优先检查授权码是否过期、SMTP 是否已开启、账号是否被限制。
-                </div>
-              </Form>
-            </section>
-            <section className="min-w-0">
-              <Form {...formItemLayout} layout="vertical" requiredMark={false}>
-                <div className="grid grid-cols-1 gap-6 min-[1200px]:grid-cols-2 min-[1200px]:gap-x-10">
-                  <Form.Item label="测试收件人">
-                    <Input
-                      value={testSmtpTo}
-                      onChange={(e) => setTestSmtpTo(e.target.value)}
-                      placeholder="your@email.com"
-                    />
-                  </Form.Item>
-                  <Form.Item label="操作">
-                    <Button onClick={sendTestSmtp} disabled={loading}>
-                      发送测试邮件
-                    </Button>
-                  </Form.Item>
-                </div>
-              </Form>
-            </section>
+          <div className="mb-4 rounded-lg border border-amber-100 bg-amber-50/80 px-3 py-2 text-xs text-amber-900/90 leading-relaxed">
+            支持配置多个发件邮箱：发送失败时按列表顺序<strong>立即切换</strong>下一个备用号。课堂场景（约
+            50 人同时验证）建议配置 2～3 个 QQ/其它 SMTP 备选，降低单号频率限制导致的大面积失败。QQ 官方要求
+            SSL/TLS（
+            <a
+              href="https://help.mail.qq.com/detail/108/1010"
+              target="_blank"
+              rel="noreferrer"
+              className="underline"
+            >
+              启用 SSL/TLS
+            </a>
+            ）：推荐 Host=<code className="text-[11px]">smtp.qq.com</code>、端口{' '}
+            <code className="text-[11px]">465</code>、TLS 开启，密码为
+            <a
+              href="https://help.mail.qq.com/detail/108/1023"
+              target="_blank"
+              rel="noreferrer"
+              className="underline"
+            >
+              SMTP 授权码
+            </a>
+            。
           </div>
+
+          <div className="flex items-center justify-between mb-3">
+            <div className="text-sm text-gray-600">
+              已配置 {smtpAccounts.length} 个账号（启用{' '}
+              {smtpAccounts.filter((a) => a.enabled).length} 个）
+            </div>
+            <Button
+              type="dashed"
+              onClick={() =>
+                setSmtpAccounts((prev) => [
+                  ...prev,
+                  newSmtpAccount({
+                    label: `备用${prev.length}`,
+                    host: 'smtp.qq.com',
+                    port: 465,
+                    secure: true,
+                  }),
+                ])
+              }
+            >
+              添加备用邮箱
+            </Button>
+          </div>
+
+          <div className="space-y-6">
+            {smtpAccounts.map((acc, idx) => (
+              <section
+                key={acc.id}
+                className="min-w-0 rounded-lg border border-gray-100 bg-white p-4 shadow-sm"
+              >
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <Space wrap>
+                    <Tag color={acc.enabled ? 'green' : 'default'}>#{idx + 1}</Tag>
+                    <span className="text-sm font-medium text-gray-800">
+                      {acc.label || acc.user || `账号 ${idx + 1}`}
+                    </span>
+                    <span className="text-xs text-gray-400">启用后参与自动切换</span>
+                  </Space>
+                  <Space wrap>
+                    <span className="text-xs text-gray-500">启用</span>
+                    <Switch
+                      checked={acc.enabled}
+                      onChange={(v) => updateSmtpAccount(acc.id, { enabled: v })}
+                    />
+                    <Button
+                      size="small"
+                      disabled={idx === 0}
+                      onClick={() => {
+                        setSmtpAccounts((prev) => {
+                          const next = [...prev];
+                          [next[idx - 1], next[idx]] = [next[idx], next[idx - 1]];
+                          return next;
+                        });
+                      }}
+                    >
+                      上移
+                    </Button>
+                    <Button
+                      size="small"
+                      disabled={idx >= smtpAccounts.length - 1}
+                      onClick={() => {
+                        setSmtpAccounts((prev) => {
+                          const next = [...prev];
+                          [next[idx], next[idx + 1]] = [next[idx + 1], next[idx]];
+                          return next;
+                        });
+                      }}
+                    >
+                      下移
+                    </Button>
+                    <Popconfirm
+                      title="删除该 SMTP 账号？"
+                      disabled={smtpAccounts.length <= 1}
+                      onConfirm={() =>
+                        setSmtpAccounts((prev) => prev.filter((a) => a.id !== acc.id))
+                      }
+                    >
+                      <Button size="small" danger disabled={smtpAccounts.length <= 1}>
+                        删除
+                      </Button>
+                    </Popconfirm>
+                  </Space>
+                </div>
+                <Form {...formItemLayout} layout="vertical" requiredMark={false}>
+                  <div className="grid grid-cols-1 gap-x-6 min-[900px]:grid-cols-2">
+                    <Form.Item label="备注名">
+                      <Input
+                        value={acc.label}
+                        onChange={(e) => updateSmtpAccount(acc.id, { label: e.target.value })}
+                        placeholder={`例如 主号 / 备用${idx}`}
+                      />
+                    </Form.Item>
+                    <Form.Item label="SMTP Host">
+                      <Input
+                        value={acc.host}
+                        onChange={(e) => updateSmtpAccount(acc.id, { host: e.target.value })}
+                        placeholder="例如 smtp.qq.com"
+                      />
+                    </Form.Item>
+                    <Form.Item label="SMTP Port">
+                      <InputNumber
+                        className="w-full"
+                        min={1}
+                        max={65535}
+                        value={acc.port}
+                        onChange={(v) => {
+                          const port = typeof v === 'number' ? v : 465;
+                          updateSmtpAccount(acc.id, {
+                            port,
+                            secure: port === 465 ? true : port === 587 ? false : acc.secure,
+                          });
+                        }}
+                      />
+                    </Form.Item>
+                    <Form.Item label="TLS/SSL">
+                      <Switch
+                        checked={acc.secure}
+                        onChange={(v) => updateSmtpAccount(acc.id, { secure: v })}
+                      />
+                      <div className="text-xs text-gray-400 mt-1">
+                        QQ 推荐 <b>465 + 开启</b>；587 则关闭（STARTTLS）
+                      </div>
+                    </Form.Item>
+                    <Form.Item label="SMTP 用户名">
+                      <Input
+                        value={acc.user}
+                        onChange={(e) => updateSmtpAccount(acc.id, { user: e.target.value })}
+                        placeholder="完整邮箱，如 name@qq.com"
+                      />
+                    </Form.Item>
+                    <Form.Item label="SMTP 密码">
+                      <Input.Password
+                        value={acc.pass}
+                        onChange={(e) => updateSmtpAccount(acc.id, { pass: e.target.value })}
+                        placeholder="填 SMTP 授权码，不是 QQ 登录密码"
+                      />
+                    </Form.Item>
+                    <Form.Item label="发件人 From" className="min-[900px]:col-span-2">
+                      <Input
+                        value={acc.from}
+                        onChange={(e) => updateSmtpAccount(acc.id, { from: e.target.value })}
+                        placeholder="例如：大学生创业实训平台 <name@qq.com>"
+                      />
+                    </Form.Item>
+                  </div>
+                </Form>
+              </section>
+            ))}
+          </div>
+
           <div className="mt-8 pt-6 border-t border-gray-100">
+            <Form {...formItemLayout} layout="vertical" requiredMark={false}>
+              <div className="grid grid-cols-1 gap-4 min-[900px]:grid-cols-3 min-[900px]:gap-x-6">
+                <Form.Item label="测试收件人">
+                  <Input
+                    value={testSmtpTo}
+                    onChange={(e) => setTestSmtpTo(e.target.value)}
+                    placeholder="your@email.com"
+                  />
+                </Form.Item>
+                <Form.Item label="指定账号（可选）">
+                  <Select
+                    allowClear
+                    className="w-full"
+                    placeholder="不选则按顺序自动切换"
+                    value={testSmtpAccountId || undefined}
+                    onChange={(v) => setTestSmtpAccountId(v || '')}
+                    options={smtpAccounts.map((a, i) => ({
+                      value: a.id,
+                      label: `#${i + 1} ${a.label || a.user || a.id}${a.enabled ? '' : '（已停用）'}`,
+                    }))}
+                  />
+                </Form.Item>
+                <Form.Item label="操作">
+                  <Button onClick={() => void sendTestSmtp()} disabled={loading}>
+                    发送测试邮件
+                  </Button>
+                </Form.Item>
+              </div>
+            </Form>
             <Button type="primary" loading={loading} onClick={saveSmtpAllowMaskedPass}>
               保存 SMTP
             </Button>

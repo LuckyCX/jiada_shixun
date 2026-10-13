@@ -87,14 +87,16 @@ router.patch('/admin/system-config', requireAuth(), requireAdmin(), async (req, 
   }
 });
 
-/** 发送测试邮件（需完整 SMTP 配置，密码以库内为准） */
+/** 发送测试邮件（需完整 SMTP 配置，密码以库内为准；支持多账号 failover / 指定 accountId） */
 router.post('/admin/system-config/test-smtp', requireAuth(), requireAdmin(), async (req, res) => {
   try {
     const to = req.body?.to;
-    const result = await sendSmtpTestMail(to);
+    const accountId = String(req.body?.accountId || '').trim();
+    const result = await sendSmtpTestMail(to, accountId ? { accountId } : {});
+    const used = result?.diag?.usedAccountLabel || result?.diag?.usedAccountId || '';
     return res.json({
       code: 0,
-      message: '测试邮件已发送，请检查收件箱或垃圾箱',
+      message: used ? `测试邮件已发送（经 ${used}），请检查收件箱或垃圾箱` : '测试邮件已发送，请检查收件箱或垃圾箱',
       data: result?.diag || null,
       traceId: req.traceId,
     });
@@ -104,15 +106,22 @@ router.post('/admin/system-config/test-smtp', requireAuth(), requireAdmin(), asy
     let diag = e?.smtpDiag || null;
     try {
       const raw = await getConfigValue('smtp_config', false);
-      if (raw && typeof raw === 'object') host = String(raw.host || '');
-      if (!diag) {
-        const { parseSmtpConfig, describeSmtpConfigSafe } = await import('../lib/mailProvider.js');
-        diag = describeSmtpConfigSafe(parseSmtpConfig(raw));
+      if (raw && typeof raw === 'object') {
+        host = String(raw.host || '');
+        if (!diag) {
+          const { parseSmtpAccounts, describeSmtpConfigSafe, listReadySmtpAccounts } = await import(
+            '../lib/mailProvider.js'
+          );
+          const accounts = parseSmtpAccounts(raw);
+          diag = {
+            accounts: accounts.map(describeSmtpConfigSafe),
+            readyCount: listReadySmtpAccounts(raw).length,
+          };
+        }
       }
     } catch {
       /* ignore */
     }
-    // 已在 mailProvider 人读化过的错误不再重复拼接
     const message = e?.smtp ? String(e.message || '') : humanizeSmtpError(e, { host });
     return res.status(400).json({
       code: 40002,
