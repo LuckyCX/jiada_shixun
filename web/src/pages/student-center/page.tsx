@@ -386,6 +386,8 @@ export default function StudentCenterPage() {
   const [aiTutorOpen, setAiTutorOpen] = useState(false);
   const [enrollments, setEnrollments] = useState<StudentPersonalEnrollment[]>([]);
   const [selectedClassId, setSelectedClassId] = useState<string>('');
+  /** 进入过创新模块后保活，避免侧栏切到组队等卸载导致对话短暂闪空（权威状态仍靠服务端 method-chat） */
+  const [keepIdeationModule, setKeepIdeationModule] = useState(() => getInitialTab() === 'module-ideation');
   const [studentTodoTasks, setStudentTodoTasks] = useState<StudentTodoTask[]>([]);
   const [activeCourseTaskId, setActiveCourseTaskId] = useState<string | null>(null);
   const [activeTrainingTask, setActiveTrainingTask] = useState<{ id: string; moduleId: string } | null>(null);
@@ -448,6 +450,14 @@ export default function StudentCenterPage() {
       })
       .catch(() => setEnrollments([]));
   }, []);
+
+  useEffect(() => {
+    if (activeTab === 'module-ideation') setKeepIdeationModule(true);
+  }, [activeTab]);
+
+  useEffect(() => {
+    setKeepIdeationModule(false);
+  }, [selectedClassId]);
 
   const refreshTrainingStageSnapshot = useCallback(() => {
     if (!selectedClassId) {
@@ -2026,21 +2036,8 @@ export default function StudentCenterPage() {
           />
         );
       case 'module-ideation':
-        return (
-          <IdeationModule
-            key={selectedClassId}
-            classId={selectedClassId}
-            learningResources={ideationLearningResources}
-            isTeamLeader={isCurrentStudentTeamLeader}
-            initialTab={initialIdeationTab}
-            onCheckTeamPrerequisites={checkIdeationTeamPrerequisites}
-            onOpenLearningResource={openIdeationLearningResource}
-            onTaskComplete={() => {
-              setIdeationTopicApproved(true);
-              completeActiveTrainingTask('ideation');
-            }}
-          />
-        );
+        // 由下方 keepIdeationModule 保活渲染，避免 switch 卸载丢对话
+        return null;
       case 'module-market':
         return (
           <MarketResearchModule
@@ -3258,10 +3255,29 @@ export default function StudentCenterPage() {
 
           {/* 实训模块内容 */}
           {activeTab.startsWith('module-') && (
-            <div>
-              {!shouldBlockModule && renderModuleContent()}
-            </div>
+            <div>{!shouldBlockModule && renderModuleContent()}</div>
           )}
+          {/* 创新模块：进入后 hidden 保活（即使切到概览也不卸载；权威状态仍靠 method-chat 落库） */}
+          {keepIdeationModule && !shouldBlockModule ? (
+            <div
+              className={activeTab === 'module-ideation' ? undefined : 'hidden'}
+              aria-hidden={activeTab !== 'module-ideation'}
+            >
+              <IdeationModule
+                key={selectedClassId}
+                classId={selectedClassId}
+                learningResources={ideationLearningResources}
+                isTeamLeader={isCurrentStudentTeamLeader}
+                initialTab={initialIdeationTab}
+                onCheckTeamPrerequisites={checkIdeationTeamPrerequisites}
+                onOpenLearningResource={openIdeationLearningResource}
+                onTaskComplete={() => {
+                  setIdeationTopicApproved(true);
+                  completeActiveTrainingTask('ideation');
+                }}
+              />
+            </div>
+          ) : null}
 
           {/* 消息通知 */}
           {activeTab === 'notifications' && (

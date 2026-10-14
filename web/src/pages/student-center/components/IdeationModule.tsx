@@ -727,6 +727,7 @@ export default function IdeationModule({
               disabled={!teamName}
               method={activeMethod}
               onMethodChange={setActiveMethod}
+              persistThreadsKey={classId ? `student-ideation:${classId}` : undefined}
               onIdeaCreated={(idea) => {
                 setIdeas((prev) => [idea, ...prev.filter((item) => item.id !== idea.id)]);
                 setExpandedAnalysis(idea.id);

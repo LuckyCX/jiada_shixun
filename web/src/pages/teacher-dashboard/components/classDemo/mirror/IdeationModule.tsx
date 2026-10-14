@@ -6,6 +6,7 @@ import { sanitizeRichText } from '../../../../../lib/richText';
 import type { IdeationChatMethodKey } from '../../../../../lib/studentIdeationApi';
 import {
   commitStudentIdeationIdea,
+  fetchIdeationMethodChat,
   fetchStudentIdeationProjectTopic,
   fetchStudentIdeationWorkspace,
   likeStudentIdeationIdea,
@@ -43,6 +44,7 @@ const demoMethodChatApi: IdeationMethodChatApi = {
   midwiferyGenerate,
   previewIdea: previewStudentIdeationIdea,
   commitIdea: commitStudentIdeationIdea,
+  fetchMethodChat: fetchIdeationMethodChat,
 };
 
 /** 演示模块被卸载时保留当前方法 tab，避免切回后回到默认助产并像「丢对话」 */

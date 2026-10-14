@@ -182,6 +182,38 @@ export async function analyzeStudentIdeationIdea(
   ) as Promise<StudentIdeationIdea>;
 }
 
+/** 启思/头脑风暴/AI 对话线程（服务端持久化，供刷新恢复） */
+export type IdeationMethodChatTranscript = {
+  messages: unknown[];
+  roundIndex: number;
+  canGenerate: boolean;
+  bootstrapped: boolean;
+};
+
+export type IdeationMethodChatStored = {
+  threadId: string | null;
+  transcript: IdeationMethodChatTranscript;
+} | null;
+
+export async function fetchIdeationMethodChat(classId: string): Promise<{
+  threads: {
+    midwifery: IdeationMethodChatStored;
+    brainstorm: IdeationMethodChatStored;
+    ai: IdeationMethodChatStored;
+  };
+}> {
+  return portalAuthenticatedFetch(
+    'student',
+    `/api/student/personal-classes/${encodeURIComponent(classId)}/ideation/method-chat`
+  ) as Promise<{
+    threads: {
+      midwifery: IdeationMethodChatStored;
+      brainstorm: IdeationMethodChatStored;
+      ai: IdeationMethodChatStored;
+    };
+  }>;
+}
+
 /** 对话生成创意预览（不入库） */
 export async function previewStudentIdeationIdea(
   classId: string,
@@ -189,6 +221,8 @@ export async function previewStudentIdeationIdea(
     methodKey: IdeationMethodKey;
     formPayload: Record<string, unknown>;
     threadId?: string;
+    /** 当前线程快照（含用户新消息），服务端拼创意卡后落库 */
+    clientTranscript?: IdeationMethodChatTranscript;
   }
 ): Promise<IdeationIdeaPreview> {
   return portalAuthenticatedFetch(
@@ -235,6 +269,7 @@ export async function midwiferyTurn(
     messages: { role: 'user' | 'assistant'; content: string }[];
     roundIndex: number;
     threadId?: string;
+    clientTranscript?: IdeationMethodChatTranscript;
   }
 ): Promise<MidwiferyTurnResult> {
   return portalAuthenticatedFetch(
@@ -249,7 +284,11 @@ export async function midwiferyTurn(
 
 export async function midwiferyGenerate(
   classId: string,
-  body: { messages: { role: 'user' | 'assistant'; content: string }[] }
+  body: {
+    messages: { role: 'user' | 'assistant'; content: string }[];
+    threadId?: string;
+    clientTranscript?: IdeationMethodChatTranscript;
+  }
 ): Promise<IdeationIdeaPreview> {
   return portalAuthenticatedFetch(
     'student',

@@ -374,6 +374,21 @@ CREATE TABLE teacher_personal_class_team_hat_studio_member (
 
 CREATE INDEX idx_tpcths_team ON teacher_personal_class_team_hat_studio_member (team_id);
 
+-- 启思 / 头脑风暴 / AI：按组员 × 方法持久化对话（六帽仍用 hat_studio_member）
+CREATE TABLE teacher_personal_class_team_ideation_method_chat (
+  team_id         bigint NOT NULL REFERENCES teacher_personal_class_teams (id) ON DELETE CASCADE,
+  student_id      bigint NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  method_key      varchar(32) NOT NULL,
+  thread_id       text,
+  transcript_json jsonb NOT NULL DEFAULT '{"messages":[],"roundIndex":0,"canGenerate":false,"bootstrapped":false}'::jsonb,
+  updated_at      timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (team_id, student_id, method_key),
+  CONSTRAINT tpct_imc_method_key_check CHECK (method_key IN ('midwifery', 'brainstorm', 'ai'))
+);
+
+CREATE INDEX idx_tpct_imc_team ON teacher_personal_class_team_ideation_method_chat (team_id);
+CREATE INDEX idx_tpct_imc_student ON teacher_personal_class_team_ideation_method_chat (student_id);
+
 CREATE TABLE teacher_personal_class_team_discussions (
   id         bigserial PRIMARY KEY,
   team_id    bigint NOT NULL REFERENCES teacher_personal_class_teams (id) ON DELETE CASCADE,

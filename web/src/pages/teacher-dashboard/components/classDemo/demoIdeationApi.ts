@@ -368,9 +368,19 @@ export async function analyzeStudentIdeationIdea(
 const DEMO_MIDWIFERY_WELCOME =
   '你好！我是启思智能体。很高兴能陪你一起打磨创业想法。\n\n在开始深入探讨之前，我想先听听你目前的构想。请用自己的话简单描述一下：你想解决什么具体问题？或者你的创业想法雏形是什么？';
 
+export async function fetchIdeationMethodChat(_classId: string) {
+  // 演示端不落库；对话靠 persistThreadsKey / 模块保活
+  return { threads: { midwifery: null, brainstorm: null, ai: null } };
+}
+
 export async function midwiferyTurn(
   classId: string,
-  body: { messages: { role: 'user' | 'assistant'; content: string }[]; roundIndex: number }
+  body: {
+    messages: { role: 'user' | 'assistant'; content: string }[];
+    roundIndex: number;
+    threadId?: string;
+    clientTranscript?: unknown;
+  }
 ) {
   // 开场欢迎：固定文案，不调演示 AI
   const hasUser = body.messages.some((m) => m.role === 'user' && String(m.content || '').trim());
@@ -448,7 +458,11 @@ function resolveDemoMidwiferyCanGenerate(opts: {
 
 export async function midwiferyGenerate(
   classId: string,
-  body: { messages: { role: 'user' | 'assistant'; content: string }[] }
+  body: {
+    messages: { role: 'user' | 'assistant'; content: string }[];
+    threadId?: string;
+    clientTranscript?: unknown;
+  }
 ) {
   if (body.messages.length < 2) throw new Error('请先完成至少一轮对话再生成创意');
   const raw = await generateDemoAi(

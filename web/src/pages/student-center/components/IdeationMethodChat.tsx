@@ -1,6 +1,6 @@
 /**
  * 创新方法工具：豆包式左侧对话（启思智能体 / 头脑风暴 / AI 创意 / 六帽嵌入）
- * 方法 chip 切换保留各线程；离开创新方法菜单卸载后可丢失。
+ * 方法 chip 切换保留各线程；服务端 method-chat + persistThreadsKey 支持刷新/切菜单恢复。
  */
 import {
   cloneElement,
@@ -17,11 +17,13 @@ import MarkdownIt from 'markdown-it';
 import { sanitizeRichText } from '../../../lib/richText';
 import {
   commitStudentIdeationIdea,
+  fetchIdeationMethodChat,
   midwiferyGenerate,
   midwiferyTurn,
   previewStudentIdeationIdea,
   type IdeationChatMethodKey,
   type IdeationIdeaPreview,
+  type IdeationMethodChatTranscript,
   type MidwiferyTurnResult,
   type StudentIdeationAnalysis,
   type StudentIdeationIdea,
@@ -37,11 +39,16 @@ export type IdeationMethodChatApi = {
       messages: { role: 'user' | 'assistant'; content: string }[];
       roundIndex: number;
       threadId?: string;
+      clientTranscript?: IdeationMethodChatTranscript;
     }
   ) => Promise<MidwiferyTurnResult>;
   midwiferyGenerate: (
     classId: string,
-    body: { messages: { role: 'user' | 'assistant'; content: string }[] }
+    body: {
+      messages: { role: 'user' | 'assistant'; content: string }[];
+      threadId?: string;
+      clientTranscript?: IdeationMethodChatTranscript;
+    }
   ) => Promise<IdeationIdeaPreview>;
   previewIdea: (
     classId: string,
@@ -49,6 +56,7 @@ export type IdeationMethodChatApi = {
       methodKey: IdeationMethodKey;
       formPayload: Record<string, unknown>;
       threadId?: string;
+      clientTranscript?: IdeationMethodChatTranscript;
     }
   ) => Promise<IdeationIdeaPreview>;
   commitIdea: (
@@ -61,6 +69,8 @@ export type IdeationMethodChatApi = {
       aiAnalysis: StudentIdeationAnalysis;
     }
   ) => Promise<StudentIdeationIdea>;
+  /** 可选：演示端可 stub；默认走 fetchIdeationMethodChat */
+  fetchMethodChat?: typeof fetchIdeationMethodChat;
 };
 
 function newThreadId(prefix: string) {
@@ -173,6 +183,51 @@ const OPENERS: Record<'brainstorm' | 'ai' | 'midwifery', string> = {
 
 function emptyThread(): ThreadState {
   return { messages: [], roundIndex: 0, canGenerate: false, bootstrapped: false };
+}
+
+function toClientTranscript(state: ThreadState): IdeationMethodChatTranscript {
+  return {
+    messages: state.messages,
+    roundIndex: state.roundIndex,
+    canGenerate: state.canGenerate,
+    bootstrapped: state.bootstrapped,
+  };
+}
+
+/** 服务端 transcript → 本地 ThreadState */
+function hydrateThreadFromStored(raw: unknown): ThreadState | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  const messagesRaw = Array.isArray(o.messages) ? o.messages : [];
+  if (!messagesRaw.length) return null;
+  const messages: ChatMsg[] = [];
+  for (const item of messagesRaw) {
+    if (!item || typeof item !== 'object') continue;
+    const m = item as Record<string, unknown>;
+    if (m.kind === 'idea') {
+      messages.push({
+        kind: 'idea',
+        id: String(m.id || `idea-${messages.length}`),
+        preview: (m.preview && typeof m.preview === 'object' ? m.preview : {}) as IdeationIdeaPreview,
+        joined: Boolean(m.joined),
+      });
+      continue;
+    }
+    messages.push({
+      kind: 'text',
+      id: String(m.id || `t-${messages.length}`),
+      role: m.role === 'user' ? 'user' : 'assistant',
+      content: String(m.content || ''),
+      showGenerate: Boolean(m.showGenerate),
+    });
+  }
+  if (!messages.length) return null;
+  return {
+    messages,
+    roundIndex: Math.max(0, Number(o.roundIndex) || 0),
+    canGenerate: Boolean(o.canGenerate),
+    bootstrapped: true,
+  };
 }
 
 function toApiMessages(msgs: ChatMsg[]): { role: ChatRole; content: string }[] {
@@ -366,11 +421,54 @@ export default function IdeationMethodChat({
   const hatComposerRef = useRef<HatStudioComposerBind | null>(null);
   hatComposerRef.current = hatComposer;
 
-  // 切换班级或首次挂载：从缓存灌回
+  const hydratedRef = useRef(false);
+  const [serverHydrated, setServerHydrated] = useState(false);
+
+  // 切换班级或首次挂载：从模块缓存灌回
   useEffect(() => {
     if (!cacheKey) return;
     setThreads(THREAD_CACHE.get(cacheKey) || {});
   }, [cacheKey]);
+
+  // 从服务端拉持久化线程（刷新/重登）；模块缓存优先覆盖空态
+  useEffect(() => {
+    if (!classId?.trim() || disabled) {
+      setServerHydrated(true);
+      return;
+    }
+    let cancelled = false;
+    hydratedRef.current = false;
+    setServerHydrated(false);
+    const loader = api.fetchMethodChat || fetchIdeationMethodChat;
+    void loader(classId.trim())
+      .then((res) => {
+        if (cancelled) return;
+        const next: Partial<Record<IdeationChatMethodKey, ThreadState>> = {
+          ...(cacheKey ? THREAD_CACHE.get(cacheKey) || {} : {}),
+        };
+        (['midwifery', 'brainstorm', 'ai'] as const).forEach((key) => {
+          const stored = res.threads?.[key];
+          const hydrated = hydrateThreadFromStored(stored?.transcript);
+          if (hydrated) {
+            next[key] = hydrated;
+            if (stored?.threadId) threadIdsRef.current[key] = stored.threadId;
+          }
+        });
+        setThreads(next);
+        if (cacheKey) THREAD_CACHE.set(cacheKey, next);
+        hydratedRef.current = true;
+      })
+      .catch(() => {
+        /* 无团队或网络失败时仍走本地开场 */
+      })
+      .finally(() => {
+        if (!cancelled) setServerHydrated(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [classId, disabled]);
 
   // 对话变更时写回缓存，供卸载后恢复
   useEffect(() => {
@@ -442,14 +540,13 @@ export default function IdeationMethodChat({
     });
   }, [method, thread.messages, thread.canGenerate]);
 
-  // 开场：启思/头脑风暴/AI 均用本地固定引导语（启思欢迎不调 AI）；切换方法不重跑已开场线程
+  // 开场：服务端恢复完成且本地无线程时，才写入固定引导语
   useEffect(() => {
-    if (disabled || method === 'six_hats') return;
+    if (!serverHydrated || disabled || method === 'six_hats') return;
     if (threadsRef.current[method]?.bootstrapped) return;
     if (method !== 'midwifery' && method !== 'brainstorm' && method !== 'ai') return;
 
-    // 确保启思有 threadId（后续真实对话落库用）
-    if (method === 'midwifery') ensureThreadId('midwifery');
+    ensureThreadId(method);
     patchThread(method, () => ({
       messages: [
         {
@@ -463,9 +560,8 @@ export default function IdeationMethodChat({
       canGenerate: false,
       bootstrapped: true,
     }));
-    // 仅在 classId/method/disabled 变化时引导开场
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [classId, method, disabled]);
+  }, [classId, method, disabled, serverHydrated]);
 
   const handleSwitch = (key: IdeationChatMethodKey) => {
     if (key === method) return;
@@ -490,8 +586,13 @@ export default function IdeationMethodChat({
     if (busyMap.midwifery || disabled) return;
     setMethodBusy('midwifery', true);
     try {
-      const apiMsgs = toApiMessages((threadsRef.current.midwifery || emptyThread()).messages);
-      const preview = await api.midwiferyGenerate(classId, { messages: apiMsgs });
+      const cur = threadsRef.current.midwifery || emptyThread();
+      const apiMsgs = toApiMessages(cur.messages);
+      const preview = await api.midwiferyGenerate(classId, {
+        messages: apiMsgs,
+        threadId: ensureThreadId('midwifery'),
+        clientTranscript: toClientTranscript(cur),
+      });
       appendIdeaCard('midwifery', preview);
       message.success('创意已生成，可加入团队创意库');
     } catch (e) {
@@ -537,13 +638,19 @@ export default function IdeationMethodChat({
     if (sendMethod === 'midwifery') {
       const cur = threadsRef.current.midwifery || emptyThread();
       const nextMsgs = [...cur.messages, userMsg];
-      patchThread('midwifery', (prev) => ({ ...prev, messages: nextMsgs }));
+      const pendingTx: ThreadState = {
+        ...cur,
+        messages: nextMsgs,
+        bootstrapped: true,
+      };
+      patchThread('midwifery', () => pendingTx);
       setMethodBusy('midwifery', true);
       try {
         const res = await api.midwiferyTurn(classId, {
           messages: toApiMessages(nextMsgs),
           roundIndex: cur.roundIndex,
           threadId: ensureThreadId('midwifery'),
+          clientTranscript: toClientTranscript(pendingTx),
         });
         // 一旦解锁「生成创意」则保持；正文引导生成时也兜底解锁
         const canGen =
@@ -588,13 +695,19 @@ export default function IdeationMethodChat({
     const methodKey = sendMethod as 'brainstorm' | 'ai';
     const cur = threadsRef.current[methodKey] || emptyThread();
     const nextMsgs = [...cur.messages, userMsg];
-    patchThread(methodKey, (prev) => ({ ...prev, messages: nextMsgs }));
+    const pendingTx: ThreadState = {
+      ...cur,
+      messages: nextMsgs,
+      bootstrapped: true,
+    };
+    patchThread(methodKey, () => pendingTx);
     setMethodBusy(methodKey, true);
     try {
       const preview = await api.previewIdea(classId, {
         methodKey,
         formPayload: buildChatFormPayload(methodKey, nextMsgs),
         threadId: ensureThreadId(methodKey),
+        clientTranscript: toClientTranscript(pendingTx),
       });
       patchThread(methodKey, (prev) => ({
         ...prev,

@@ -510,6 +510,95 @@ async function assertLeaderCanEditTopicDraft(pool, sid, team) {
   return { existing };
 }
 
+/** 可持久化到 method_chat 表的方法（六帽仍用 hat_studio） */
+const METHOD_CHAT_KEYS = new Set(['midwifery', 'brainstorm', 'ai']);
+
+/**
+ * 规范化前端 ThreadState，供 UI 恢复
+ * @param {unknown} raw
+ */
+function coerceMethodChatTranscript(raw) {
+  const o = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  const messages = Array.isArray(o.messages)
+    ? o.messages
+        .filter((m) => m && typeof m === 'object')
+        .map((m) => {
+          if (m.kind === 'idea') {
+            return {
+              kind: 'idea',
+              id: String(m.id || `idea-${Date.now()}`),
+              preview: m.preview && typeof m.preview === 'object' ? m.preview : {},
+              joined: Boolean(m.joined),
+            };
+          }
+          return {
+            kind: 'text',
+            id: String(m.id || `t-${Date.now()}`),
+            role: m.role === 'user' ? 'user' : 'assistant',
+            content: String(m.content || ''),
+            showGenerate: Boolean(m.showGenerate),
+          };
+        })
+    : [];
+  return {
+    messages,
+    roundIndex: Math.max(0, Math.floor(Number(o.roundIndex) || 0)),
+    canGenerate: Boolean(o.canGenerate),
+    bootstrapped: o.bootstrapped !== false && messages.length > 0 ? true : Boolean(o.bootstrapped),
+  };
+}
+
+/** API 文本消息 → UI text bubbles（无 clientTranscript 时的兜底） */
+function textMsgsFromApiMessages(messages) {
+  return (Array.isArray(messages) ? messages : []).map((m, i) => ({
+    kind: 'text',
+    id: `hist-${i}-${m.role}`,
+    role: m.role === 'user' ? 'user' : 'assistant',
+    content: String(m.content || ''),
+  }));
+}
+
+async function upsertMethodChat(pool, teamId, studentId, methodKey, threadId, transcript) {
+  if (!METHOD_CHAT_KEYS.has(methodKey)) return;
+  const tx = coerceMethodChatTranscript(transcript);
+  await pool.query(
+    `INSERT INTO teacher_personal_class_team_ideation_method_chat
+       (team_id, student_id, method_key, thread_id, transcript_json, updated_at)
+     VALUES ($1, $2, $3, $4, $5::jsonb, now())
+     ON CONFLICT (team_id, student_id, method_key) DO UPDATE SET
+       thread_id = COALESCE(EXCLUDED.thread_id, teacher_personal_class_team_ideation_method_chat.thread_id),
+       transcript_json = EXCLUDED.transcript_json,
+       updated_at = now()`,
+    [
+      teamId,
+      studentId,
+      methodKey,
+      threadId ? String(threadId).slice(0, 128) : null,
+      JSON.stringify(tx),
+    ]
+  );
+}
+
+async function loadAllMethodChats(pool, teamId, studentId) {
+  const { rows } = await pool.query(
+    `SELECT method_key, thread_id, transcript_json
+     FROM teacher_personal_class_team_ideation_method_chat
+     WHERE team_id = $1 AND student_id = $2`,
+    [teamId, studentId]
+  );
+  /** @type {Record<string, { threadId: string|null, transcript: ReturnType<typeof coerceMethodChatTranscript> }|null>} */
+  const out = { midwifery: null, brainstorm: null, ai: null };
+  for (const row of rows) {
+    const key = String(row.method_key || '');
+    if (!METHOD_CHAT_KEYS.has(key)) continue;
+    out[key] = {
+      threadId: row.thread_id ? String(row.thread_id) : null,
+      transcript: coerceMethodChatTranscript(row.transcript_json),
+    };
+  }
+  return out;
+}
+
 router.get('/student/personal-classes/:classId/ideation/workspace', requireAuth(), requireStudent(), async (req, res) => {
   try {
     const sid = studentIdFromReq(req);
@@ -531,6 +620,31 @@ router.get('/student/personal-classes/:classId/ideation/workspace', requireAuth(
     return bad(req, res, 500, 50000, e.message);
   }
 });
+
+/** 启思 / 头脑风暴 / AI：拉取当前学生已落库的对话线程（刷新/重登恢复） */
+router.get(
+  '/student/personal-classes/:classId/ideation/method-chat',
+  requireAuth(),
+  requireStudent(),
+  async (req, res) => {
+    try {
+      const sid = studentIdFromReq(req);
+      const classId = parseId(req.params.classId);
+      if (!sid || !classId) return bad(req, res, 400, 40003, '参数无效');
+      const pool = getPool();
+      if (!(await studentEnrolledInClass(pool, sid, classId))) {
+        return bad(req, res, 403, 40301, '未加入该班级');
+      }
+      const team = await getConfirmedTeam(pool, sid, classId);
+      if (!team) return ok(req, res, { threads: { midwifery: null, brainstorm: null, ai: null } });
+      const threads = await loadAllMethodChats(pool, Number(team.id), sid);
+      return ok(req, res, { threads });
+    } catch (e) {
+      logError(`GET ideation method-chat traceId=${req.traceId}`, e);
+      return bad(req, res, 500, 50000, e.message);
+    }
+  }
+);
 
 router.get('/student/personal-classes/:classId/ideation/team-prerequisites', requireAuth(), requireStudent(), async (req, res) => {
   try {
@@ -960,7 +1074,7 @@ router.post('/student/personal-classes/:classId/ideation/ideas/analyze', require
       } catch (logErr) {
         logError('ideation analyze preview log', logErr);
       }
-      return ok(req, res, {
+      const preview = {
         methodKey,
         method: IDEATION_METHOD_LABELS[methodKey],
         title,
@@ -968,7 +1082,32 @@ router.post('/student/personal-classes/:classId/ideation/ideas/analyze', require
         formPayload: storePayload,
         aiAnalysis: analysisScoresPayload(analysis),
         topicFields: pickTopicMappedFields(analysis),
-      });
+      };
+      // 头脑风暴 / AI：预览路径同步落 UI transcript
+      if (methodKey === 'brainstorm' || methodKey === 'ai') {
+        try {
+          const clientTx = coerceMethodChatTranscript(req.body?.clientTranscript);
+          const baseMsgs = clientTx.messages.length > 0 ? clientTx.messages : [];
+          await upsertMethodChat(pool, Number(team.id), sid, methodKey, threadId, {
+            messages: [
+              ...baseMsgs,
+              { kind: 'idea', id: `idea-${Date.now()}`, preview, joined: false },
+              {
+                kind: 'text',
+                id: `tip-${Date.now()}`,
+                role: 'assistant',
+                content: '若不满意，可继续补充说明后再次发送，我会根据完整对话重新生成创意卡片。',
+              },
+            ],
+            roundIndex: Math.max(clientTx.roundIndex, 1),
+            canGenerate: false,
+            bootstrapped: true,
+          });
+        } catch (txErr) {
+          logError('ideation analyze preview method-chat upsert', txErr);
+        }
+      }
+      return ok(req, res, preview);
     }
 
     const { rows } = await pool.query(
@@ -1130,6 +1269,35 @@ ${JSON.stringify(messages, null, 2)}
         logError('midwifery turn interaction log', logErr);
       }
 
+      // UI transcript 持久化（优先用前端 clientTranscript，再拼本轮助手气泡）
+      try {
+        const clientTx = coerceMethodChatTranscript(req.body?.clientTranscript);
+        const baseMsgs =
+          clientTx.messages.length > 0 ? clientTx.messages : textMsgsFromApiMessages(messages);
+        const assistantContent =
+          canGenerate && doneHint ? `${assistantText}\n\n> ${doneHint}` : assistantText;
+        const nextTx = {
+          messages: [
+            ...baseMsgs.map((m) =>
+              m.kind === 'text' && m.role === 'assistant' ? { ...m, showGenerate: false } : m
+            ),
+            {
+              kind: 'text',
+              id: `a-${Date.now()}`,
+              role: 'assistant',
+              content: assistantContent,
+              showGenerate: canGenerate,
+            },
+          ],
+          roundIndex: nextRound,
+          canGenerate,
+          bootstrapped: true,
+        };
+        await upsertMethodChat(pool, Number(team.id), sid, 'midwifery', threadId, nextTx);
+      } catch (txErr) {
+        logError('midwifery turn method-chat upsert', txErr);
+      }
+
       return ok(req, res, {
         assistantText,
         roundIndex: nextRound,
@@ -1182,7 +1350,7 @@ router.post(
         analysis.title,
         analysis.description
       );
-      return ok(req, res, {
+      const preview = {
         methodKey: 'midwifery',
         method: IDEATION_METHOD_LABELS.midwifery,
         title: analysis.title,
@@ -1190,7 +1358,26 @@ router.post(
         formPayload: storePayload,
         aiAnalysis: analysisScoresPayload(analysis),
         topicFields: pickTopicMappedFields(analysis),
-      });
+      };
+      // 生成创意卡写入 transcript，刷新后仍可见
+      try {
+        const threadId = String(req.body?.threadId || '').trim().slice(0, 128) || null;
+        const clientTx = coerceMethodChatTranscript(req.body?.clientTranscript);
+        const baseMsgs =
+          clientTx.messages.length > 0 ? clientTx.messages : textMsgsFromApiMessages(messages);
+        await upsertMethodChat(pool, Number(team.id), sid, 'midwifery', threadId, {
+          messages: [
+            ...baseMsgs,
+            { kind: 'idea', id: `idea-${Date.now()}`, preview, joined: false },
+          ],
+          roundIndex: clientTx.roundIndex,
+          canGenerate: true,
+          bootstrapped: true,
+        });
+      } catch (txErr) {
+        logError('midwifery generate method-chat upsert', txErr);
+      }
+      return ok(req, res, preview);
     } catch (e) {
       logError(`POST ideation midwifery generate traceId=${req.traceId}`, e);
       return bad(req, res, 500, 50000, friendlyLlmErrorMessage(e));
