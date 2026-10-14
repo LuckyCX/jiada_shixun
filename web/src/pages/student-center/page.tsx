@@ -455,9 +455,15 @@ export default function StudentCenterPage() {
     if (activeTab === 'module-ideation') setKeepIdeationModule(true);
   }, [activeTab]);
 
+  // 仅「已有班级 → 另一班级」时重置保活；首次异步写入 classId 不得清掉，否则创新模块白屏
+  const prevSelectedClassIdRef = useRef('');
   useEffect(() => {
-    setKeepIdeationModule(false);
-  }, [selectedClassId]);
+    const prev = prevSelectedClassIdRef.current;
+    prevSelectedClassIdRef.current = selectedClassId;
+    if (prev && selectedClassId && prev !== selectedClassId) {
+      setKeepIdeationModule(activeTab === 'module-ideation');
+    }
+  }, [selectedClassId, activeTab]);
 
   const refreshTrainingStageSnapshot = useCallback(() => {
     if (!selectedClassId) {
@@ -2036,8 +2042,23 @@ export default function StudentCenterPage() {
           />
         );
       case 'module-ideation':
-        // 由下方 keepIdeationModule 保活渲染，避免 switch 卸载丢对话
-        return null;
+        // 优先走下方保活节点；保活未开启时回退直出，防止白屏
+        if (keepIdeationModule) return null;
+        return (
+          <IdeationModule
+            key={selectedClassId}
+            classId={selectedClassId}
+            learningResources={ideationLearningResources}
+            isTeamLeader={isCurrentStudentTeamLeader}
+            initialTab={initialIdeationTab}
+            onCheckTeamPrerequisites={checkIdeationTeamPrerequisites}
+            onOpenLearningResource={openIdeationLearningResource}
+            onTaskComplete={() => {
+              setIdeationTopicApproved(true);
+              completeActiveTrainingTask('ideation');
+            }}
+          />
+        );
       case 'module-market':
         return (
           <MarketResearchModule
