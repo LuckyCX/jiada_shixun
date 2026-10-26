@@ -502,7 +502,7 @@ export default function TeamFormationAssessmentPanel({ classId, onSubmitted, onP
         >
           <div className="font-semibold text-gray-900 mb-1">进入组队池</div>
           <p className="text-xs text-gray-600">
-            加入班级待分组队列，由教师使用 AI 智能组队与其他同学组成 3～6 人创业团队。
+            加入班级待分组队列，由教师使用 AI 智能组队与其他同学组成 3～10 人创业团队。
           </p>
         </button>
         <button

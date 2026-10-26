@@ -20,7 +20,8 @@ import {
 } from '../../../../lib/teamFormationApi';
 
 const MIN_PENDING_FOR_AI = 5;
-const MAX_TEAM_SIZE = 6;
+/** 与后端 teamFormationAiGroup.MAX_TEAM_SIZE 保持一致 */
+const MAX_TEAM_SIZE = 10;
 
 type AbilityProfile = TeamDimensionProfile;
 

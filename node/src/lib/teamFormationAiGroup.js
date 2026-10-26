@@ -3,7 +3,8 @@ import { TEAM_ROLE_LABELS } from './teamFormationConstants.js';
 import { logError } from './logError.js';
 
 const MIN_TEAM_SIZE = 3;
-const MAX_TEAM_SIZE = 6;
+/** 多人队成员上限（含队长）；与教师端拖拽/分配校验一致 */
+const MAX_TEAM_SIZE = 10;
 const MIN_PENDING_FOR_AI = 5;
 
 export { MIN_TEAM_SIZE, MAX_TEAM_SIZE, MIN_PENDING_FOR_AI };
@@ -21,10 +22,10 @@ export const DEFAULT_AI_GROUP_SYSTEM = `你是创业实训平台的组队编排�
 
 #Response#
 硬性规则：
-- 每个小组 3～6 人。
+- 每个小组 ${MIN_TEAM_SIZE}～${MAX_TEAM_SIZE} 人。
 - 必须覆盖输入中每一名学生，且每人恰好属于一个小组。
 - 组内 aiMatchedRole 尽量互不相同；无法消重时允许同角色。
-- 待分组 3～6 人时优先合并为 1 组。
+- 待分组 ${MIN_TEAM_SIZE}～${MAX_TEAM_SIZE} 人时优先合并为 1 组。
 - 只使用提供的角色与分数，不依据姓名猜测。
 - 队名 2～12 字，勿用「团队1」编号式。
 - 只能输出 teams 一个顶层键的 JSON，禁止 markdown，禁止输出平均分等额外字段。`;
@@ -129,7 +130,7 @@ function teamHasRole(team, role, studentById) {
   return team.memberIds.some((id) => roleKeyOf(studentById, id) === role);
 }
 
-/** 将 AI 分组结果修补为合法：每组 3～6 人、全员入组；优先角色不重复，不足时随机并入（允许重复） */
+/** 将 AI 分组结果修补为合法：每组 MIN～MAX 人、全员入组；优先角色不重复，不足时随机并入（允许重复） */
 export function repairAiTeamsToValidShape(teamList, pendingStudents) {
   const allIds = pendingStudents.map((s) => String(s.id));
   const studentById = new Map(pendingStudents.map((s) => [String(s.id), s]));
@@ -430,10 +431,10 @@ export async function runAiTeamGroupingStream(provider, pendingStudents, handler
   const n = pendingStudents.length;
   const incrementalNote = options.incrementalOnly
     ? `\n\n说明：仅为以下 ${n} 名剩余待组队学生新建小组，勿涉及或修改已有团队。` +
-      ` 每人必须且仅能出现一次。每组必须 3～6 人：` +
+      ` 每人必须且仅能出现一次。每组必须 ${MIN_TEAM_SIZE}～${MAX_TEAM_SIZE} 人：` +
       (n <= MAX_TEAM_SIZE
-        ? `当前 ${n} 人请优先输出 1 个小组（memberStudentIds 包含全部 ${n} 人），不要拆成多个不足 3 人的小组。`
-        : `请拆成若干组且每组 3～6 人。`) +
+        ? `当前 ${n} 人请优先输出 1 个小组（memberStudentIds 包含全部 ${n} 人），不要拆成多个不足 ${MIN_TEAM_SIZE} 人的小组。`
+        : `请拆成若干组且每组 ${MIN_TEAM_SIZE}～${MAX_TEAM_SIZE} 人。`) +
       ` 组内角色尽量互不相同；若无法避免重复，也须满足人数规则。`
     : '';
   const user = `${String(tf.ai_group_user_template || '请为以下待组队学生划分小组（JSON 输出）：').trim()}${incrementalNote}\n\n${JSON.stringify({ students: payload, rules: { minPerTeam: MIN_TEAM_SIZE, maxPerTeam: MAX_TEAM_SIZE } }, null, 2)}`;
