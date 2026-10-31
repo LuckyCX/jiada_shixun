@@ -54,11 +54,11 @@ ${Object.values(HAT_ROLE_TEXT).join('\n')}
 ${WAR_ROOM_ASK_SCHEMA}
 
 #Response#
-只能输出 json 对象；禁止 markdown。`;
+只能输出 json 对象；禁止用 markdown 代码块包裹整个 JSON。content 字段正文可用 markdown（**加粗**、有序/无序列表、换行）。`;
 
 export const WAR_ROOM_SINGLE_REPLY_SCHEMA = `{
   "hat": "white|green|yellow|black|red|blue",
-  "content": "回复正文（承接后继续提问引导）"
+  "content": "回复正文（承接后继续提问引导；可用 markdown）"
 }
 固定约束：禁止代填画布、禁止标准答案、禁止直接改写方案。`;
 
@@ -74,7 +74,7 @@ ${Object.values(HAT_ROLE_TEXT).join('\n')}
 ${WAR_ROOM_SINGLE_REPLY_SCHEMA}
 
 #Response#
-只能输出 json 对象；禁止 markdown。严格按【你的角色】发言；承接历史；继续提问引导。`;
+只能输出 json 对象；禁止用 markdown 代码块包裹整个 JSON。content 字段正文可用 markdown（**加粗**、有序/无序列表）。严格按【你的角色】发言；承接历史；继续提问引导。`;
 
 /** 兼容旧名 */
 export const WAR_ROOM_ROUND_SYSTEM_PROMPT = WAR_ROOM_ASK_SYSTEM_PROMPT;

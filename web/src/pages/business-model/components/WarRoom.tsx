@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Popover, message } from 'antd';
 import AppModalPortal from '../../../components/AppModalPortal';
+import { ChatMarkdown } from '../../../components/ChatMarkdown';
 import {
   WAR_ROOM_MODULE_DEFS,
   fetchBusinessModelWorkspace,
@@ -647,9 +648,14 @@ export default function WarRoom({ classId, studentDisplayName = '同学', onReco
                       </span>
                     </div>
                     <div
-                      className={`${meta.color} ${meta.textColor} px-3 py-2 rounded-xl text-sm leading-relaxed whitespace-pre-wrap`}
+                      className={`${meta.color} ${meta.textColor} px-3 py-2 rounded-xl text-sm leading-relaxed`}
                     >
-                      {msg.content}
+                      {/* 帽子回复渲染 Markdown；学生原文按纯文本保留换行 */}
+                      {msg.hat === 'user' ? (
+                        <span className="whitespace-pre-wrap">{msg.content}</span>
+                      ) : (
+                        <ChatMarkdown text={msg.content || ''} />
+                      )}
                     </div>
                   </div>
                 </div>
