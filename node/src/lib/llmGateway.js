@@ -156,64 +156,122 @@ function mergeChatExtraBody(provider, extraBody) {
 }
 
 /**
+ * 通义 DashScope 在 response_format=json_object 时强制要求 messages 含小写词 "json"，
+ * 否则 400 InvalidParameter（机房场景下失败+降级会拖长耗时导致「点发送无响应」）。
+ * 标记串保证幂等，且同时写入 system/user 双保险。
+ */
+export const JSON_OBJECT_HINT_MARKER = '[llmGateway:require_json]';
+const JSON_OBJECT_HINT = `\n\n${JSON_OBJECT_HINT_MARKER} Output a json object only.`;
+
+/** @param {unknown} err */
+export function isJsonObjectParamError(err) {
+  const sm = String(err?.message || err || '');
+  return (
+    /must contain the word ['"]?json/i.test(sm) ||
+    (/response_format|json_object|json mode/i.test(sm) && /InvalidParameter|400|unsupported|not support/i.test(sm)) ||
+    /response_format|json_object|json mode/i.test(sm)
+  );
+}
+
+/**
+ * jsonMode 时确保 messages 含字面量 json（小写），避免通义参数校验失败。
+ * @returns {{ system: string, user: string }}
+ */
+export function ensureJsonKeywordForJsonMode(system, user, jsonMode) {
+  if (!jsonMode) return { system: system || '', user: user || '' };
+  let s = String(system || '');
+  let u = String(user || '');
+  if (!s.includes(JSON_OBJECT_HINT_MARKER) && !u.includes(JSON_OBJECT_HINT_MARKER)) {
+    if (s) s = `${s}${JSON_OBJECT_HINT}`;
+    else u = `${u}${JSON_OBJECT_HINT}`;
+  }
+  // user 侧再钉一小写 json，防止仅 system 被上游截断时仍 400
+  if (!/\bjson\b/.test(u)) {
+    u = `${u}\n\n(format: json)`;
+  }
+  return { system: s, user: u };
+}
+
+/**
  * OpenAI 兼容 Chat Completions
  * @param {AbortSignal} [signal] 外部取消（如客户端断开），与 provider.timeoutMs 一并生效
  */
 export async function chatCompletion({ provider, system, user, jsonMode = false, extraBody, signal }) {
   if (!provider) throw new Error('未配置已启用的 LLM 服务，请在管理后台「系统配置」中配置并启用多模态模型');
   const url = chatCompletionsUrl(provider.baseUrl);
-  const body = {
-    model: provider.modelId,
-    messages: [
-      ...(system ? [{ role: 'system', content: system }] : []),
-      { role: 'user', content: user },
-    ],
-    temperature: 0.3,
-    ...mergeChatExtraBody(provider, extraBody),
-  };
-  if (jsonMode) {
-    body.response_format = { type: 'json_object' };
-  }
-  if (signal?.aborted) {
-    const err = new Error('请求已取消');
-    err.name = 'AbortError';
-    throw err;
-  }
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), provider.timeoutMs);
-  const onExternalAbort = () => controller.abort();
-  if (signal) signal.addEventListener('abort', onExternalAbort, { once: true });
-  const startedAt = Date.now();
-  try {
-    const r = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${provider.apiKey}`,
-      },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok) {
-      const msg = j?.error?.message || j?.message || `LLM HTTP ${r.status}`;
-      throw new Error(msg);
+  const prepared = ensureJsonKeywordForJsonMode(system, user, jsonMode);
+
+  /** 单次请求；recoverable 错误不写 logError，由外层决定是否降级 */
+  const requestOnce = async (sys, usr, useJsonMode) => {
+    const body = {
+      model: provider.modelId,
+      messages: [
+        ...(sys ? [{ role: 'system', content: sys }] : []),
+        { role: 'user', content: usr },
+      ],
+      temperature: 0.3,
+      ...mergeChatExtraBody(provider, extraBody),
+    };
+    if (useJsonMode) {
+      body.response_format = { type: 'json_object' };
     }
-    const text = j?.choices?.[0]?.message?.content;
-    if (!text || typeof text !== 'string') throw new Error('LLM 返回内容为空');
-    const thinkingOff =
-      body.enable_thinking === false ||
-      (body.thinking && typeof body.thinking === 'object' && body.thinking.type === 'disabled');
-    console.log(
-      `[llmGateway] chatCompletion ok model=${provider.modelId} jsonMode=${Boolean(jsonMode)} thinkingOff=${thinkingOff} max_tokens=${body.max_tokens ?? '-'} ${Date.now() - startedAt}ms`
-    );
-    return text.trim();
+    if (signal?.aborted) {
+      const err = new Error('请求已取消');
+      err.name = 'AbortError';
+      throw err;
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), provider.timeoutMs);
+    const onExternalAbort = () => controller.abort();
+    if (signal) signal.addEventListener('abort', onExternalAbort, { once: true });
+    const startedAt = Date.now();
+    try {
+      const r = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${provider.apiKey}`,
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        const msg = j?.error?.message || j?.message || `LLM HTTP ${r.status}`;
+        throw new Error(msg);
+      }
+      const text = j?.choices?.[0]?.message?.content;
+      if (!text || typeof text !== 'string') throw new Error('LLM 返回内容为空');
+      const thinkingOff =
+        body.enable_thinking === false ||
+        (body.thinking && typeof body.thinking === 'object' && body.thinking.type === 'disabled');
+      console.log(
+        `[llmGateway] chatCompletion ok model=${provider.modelId} jsonMode=${Boolean(useJsonMode)} thinkingOff=${thinkingOff} max_tokens=${body.max_tokens ?? '-'} ${Date.now() - startedAt}ms`
+      );
+      return text.trim();
+    } finally {
+      clearTimeout(timer);
+      if (signal) signal.removeEventListener('abort', onExternalAbort);
+    }
+  };
+
+  try {
+    return await requestOnce(prepared.system, prepared.user, jsonMode);
   } catch (e) {
+    // json_object 参数被拒：网关内直接降级，避免业务层再感知/再拖一轮超时
+    if (jsonMode && isJsonObjectParamError(e)) {
+      console.warn(
+        `[llmGateway] jsonMode rejected (${String(e?.message || e).slice(0, 120)}); fallback without response_format`
+      );
+      try {
+        return await requestOnce(prepared.system, prepared.user, false);
+      } catch (e2) {
+        logError('llmGateway.chatCompletion', e2);
+        throw e2;
+      }
+    }
     logError('llmGateway.chatCompletion', e);
     throw e;
-  } finally {
-    clearTimeout(timer);
-    if (signal) signal.removeEventListener('abort', onExternalAbort);
   }
 }
 
@@ -294,6 +352,7 @@ export async function chatCompletionStream({
 }) {
   if (!provider) throw new Error('未配置已启用的 LLM 服务，请在管理后台「系统配置」中配置并启用多模态模型');
   const url = chatCompletionsUrl(provider.baseUrl);
+  ({ system, user } = ensureJsonKeywordForJsonMode(system, user, jsonMode));
   logPromptToConsole(provider, system, user);
 
   const body = {
@@ -317,19 +376,35 @@ export async function chatCompletionStream({
   let fullReasoning = '';
 
   try {
-    const r = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${provider.apiKey}`,
-      },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
+    const doFetch = (reqBody) =>
+      fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${provider.apiKey}`,
+        },
+        body: JSON.stringify(reqBody),
+        signal: controller.signal,
+      });
+
+    let r = await doFetch(body);
     if (!r.ok) {
       const j = await r.json().catch(() => ({}));
       const msg = j?.error?.message || j?.message || `LLM HTTP ${r.status}`;
-      throw new Error(msg);
+      // 流式同样：json_object 被拒则去掉 response_format 重试一次
+      if (jsonMode && isJsonObjectParamError(new Error(msg))) {
+        console.warn(
+          `[llmGateway] stream jsonMode rejected (${msg.slice(0, 120)}); fallback without response_format`
+        );
+        const { response_format: _rf, ...plainBody } = body;
+        r = await doFetch(plainBody);
+        if (!r.ok) {
+          const j2 = await r.json().catch(() => ({}));
+          throw new Error(j2?.error?.message || j2?.message || `LLM HTTP ${r.status}`);
+        }
+      } else {
+        throw new Error(msg);
+      }
     }
     if (!r.body) throw new Error('LLM 流式响应体为空');
 

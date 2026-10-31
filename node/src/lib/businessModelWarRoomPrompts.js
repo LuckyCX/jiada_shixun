@@ -54,7 +54,7 @@ ${Object.values(HAT_ROLE_TEXT).join('\n')}
 ${WAR_ROOM_ASK_SCHEMA}
 
 #Response#
-只能输出 JSON；禁止 markdown。`;
+只能输出 json 对象；禁止 markdown。`;
 
 export const WAR_ROOM_SINGLE_REPLY_SCHEMA = `{
   "hat": "white|green|yellow|black|red|blue",
@@ -74,7 +74,7 @@ ${Object.values(HAT_ROLE_TEXT).join('\n')}
 ${WAR_ROOM_SINGLE_REPLY_SCHEMA}
 
 #Response#
-严格按【你的角色】发言；承接历史；继续提问引导。`;
+只能输出 json 对象；禁止 markdown。严格按【你的角色】发言；承接历史；继续提问引导。`;
 
 /** 兼容旧名 */
 export const WAR_ROOM_ROUND_SYSTEM_PROMPT = WAR_ROOM_ASK_SYSTEM_PROMPT;

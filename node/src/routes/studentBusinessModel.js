@@ -556,13 +556,8 @@ function appendRoundMessages(transcript, roundMessages, roundIndex) {
 async function runJsonLlm(provider, system, user, options = {}) {
   const { extraBody } = options;
   logPromptToConsole(provider, system, user);
-  try {
-    return await chatCompletion({ provider, system, user, jsonMode: true, extraBody });
-  } catch (e) {
-    const sm = String(e?.message || '');
-    if (!/response_format|json_object|json mode/i.test(sm)) throw e;
-    return await chatCompletion({ provider, system, user, jsonMode: false, extraBody });
-  }
+  // chatCompletion 内部已：注入小写 json 关键字 + json_object 被拒时自动降级
+  return await chatCompletion({ provider, system, user, jsonMode: true, extraBody });
 }
 
 router.get(
