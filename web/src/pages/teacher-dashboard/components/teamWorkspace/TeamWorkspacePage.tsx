@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { message } from 'antd';
 import UserAvatar from '../../../../components/UserAvatar';
+import type { PortalRole } from '../../../../lib/authApi';
 import {
   fetchTeacherTeamCockpit,
   fetchTeacherTeamStageWorkspace,
@@ -41,7 +42,11 @@ type Props = {
   bmTab?: string;
   onStageChange: (moduleKey: string, opts?: { bmTab?: string }) => void;
   onBack: () => void;
-  onIntervene: () => void;
+  onIntervene?: () => void;
+  /** 管理端只读下钻：隐藏「发送引导」，接口走 admin 令牌 */
+  readOnly?: boolean;
+  authPortal?: PortalRole;
+  backLabel?: string;
 };
 
 export default function TeamWorkspacePage({
@@ -52,6 +57,9 @@ export default function TeamWorkspacePage({
   onStageChange,
   onBack,
   onIntervene,
+  readOnly = false,
+  authPortal = 'teacher',
+  backLabel = '返回监控',
 }: Props) {
   const [summary, setSummary] = useState<TeacherWorkspaceSummary | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
@@ -87,7 +95,7 @@ export default function TeamWorkspacePage({
     if (!classId || !teamId) return;
     let cancelled = false;
     setSummaryLoading(true);
-    fetchTeacherTeamWorkspaceSummary(classId, teamId)
+    fetchTeacherTeamWorkspaceSummary(classId, teamId, authPortal)
       .then((data) => {
         if (cancelled) return;
         setSummary(data);
@@ -120,7 +128,7 @@ export default function TeamWorkspacePage({
     if (!classId || !teamId) return;
     let cancelled = false;
     setCockpitLoading(true);
-    fetchTeacherTeamCockpit(classId, teamId)
+    fetchTeacherTeamCockpit(classId, teamId, authPortal)
       .then((data) => {
         if (!cancelled) setCockpit(data);
       })
@@ -137,13 +145,13 @@ export default function TeamWorkspacePage({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [classId, teamId]);
+  }, [classId, teamId, authPortal]);
 
   useEffect(() => {
     if (!classId || !teamId || isCockpit || !activeStage) return;
     let cancelled = false;
     setStageLoading(true);
-    fetchTeacherTeamStageWorkspace(classId, teamId, activeStage)
+    fetchTeacherTeamStageWorkspace(classId, teamId, activeStage, authPortal)
       .then((data) => {
         if (!cancelled) setStageData(data.stage);
       })
@@ -361,6 +369,7 @@ export default function TeamWorkspacePage({
           stage={stageData}
           bmTab={activeStage === 'business' ? bmTab : ''}
           onBmTabChange={(next) => onStageChange('business', { bmTab: next })}
+          authPortal={authPortal}
         />
       )}
     </>
@@ -374,10 +383,10 @@ export default function TeamWorkspacePage({
             type="button"
             onClick={onBack}
             className="inline-flex items-center justify-center w-8 h-8 md:w-auto md:h-auto md:gap-1 shrink-0 text-gray-600 hover:text-teal-600 cursor-pointer rounded-lg hover:bg-gray-50"
-            aria-label="返回监控"
+            aria-label={backLabel}
           >
             <i className="ri-arrow-left-line text-lg md:text-base" />
-            <span className="hidden md:inline text-sm">返回监控</span>
+            <span className="hidden md:inline text-sm">{backLabel}</span>
           </button>
           <div className="flex items-center gap-2 min-w-0 flex-1">
             <div className="hidden sm:block shrink-0">
@@ -389,6 +398,11 @@ export default function TeamWorkspacePage({
                 <span className={`shrink-0 px-1.5 py-0.5 text-[10px] md:text-xs font-medium rounded-full ${STATUS_CLS[status]}`}>
                   {STATUS_LABEL[status] || status}
                 </span>
+                {readOnly ? (
+                  <span className="shrink-0 px-1.5 py-0.5 text-[10px] md:text-xs font-medium rounded-full bg-slate-100 text-slate-600">
+                    只读
+                  </span>
+                ) : null}
               </div>
               <div className="text-[11px] md:text-xs text-gray-500 truncate">
                 {summaryLoading
@@ -399,15 +413,17 @@ export default function TeamWorkspacePage({
               </div>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={onIntervene}
-            className="shrink-0 px-2.5 py-1.5 text-[11px] md:text-xs font-medium rounded-lg md:rounded-xl bg-teal-500 text-white hover:bg-teal-600 cursor-pointer whitespace-nowrap"
-          >
-            <i className="ri-compass-3-line md:mr-1" />
-            <span className="hidden md:inline">发送引导</span>
-            <span className="md:hidden">引导</span>
-          </button>
+          {!readOnly && onIntervene ? (
+            <button
+              type="button"
+              onClick={onIntervene}
+              className="shrink-0 px-2.5 py-1.5 text-[11px] md:text-xs font-medium rounded-lg md:rounded-xl bg-teal-500 text-white hover:bg-teal-600 cursor-pointer whitespace-nowrap"
+            >
+              <i className="ri-compass-3-line md:mr-1" />
+              <span className="hidden md:inline">发送引导</span>
+              <span className="md:hidden">引导</span>
+            </button>
+          ) : null}
         </div>
       </div>
 

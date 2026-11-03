@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   Button,
+  Checkbox,
   ConfigProvider,
   Form,
   Input,
@@ -25,6 +26,8 @@ import {
   portalAuthenticatedFetch,
   setPortalToken,
 } from '../../../../lib/authApi';
+import { SUB_ADMIN_OPTIONAL_MENUS } from '../../../../lib/adminMenuPerms';
+import { PASSWORD_POLICY_HINT, validatePasswordStrength } from '../../../../lib/passwordPolicy';
 import { notifySiteBrandUpdated, SITE_HERO_DEFAULTS } from '../../../../lib/publicSite';
 import { resizeImageFileTo128Png } from '../../../../lib/resizeLogoTo128';
 import { resizeImageFileForHeroBackground } from '../../../../lib/resizeHeroBackground';
@@ -45,8 +48,23 @@ type TabValue =
   | 'smtp'
   | 'sms'
   | 'llm'
+  | 'sub-admins'
   | 'password'
   | (typeof SHOW_RTC_TAB extends true ? 'rtc' : never);
+
+type SubAdminRow = {
+  id: string;
+  username: string;
+  realName: string;
+  status: string;
+  adminMenuPerms: string[];
+  createdAt?: string | null;
+};
+
+const SUB_ADMIN_PERM_LABEL: Record<string, string> = {
+  'college-management': '学院管理',
+  'class-management': '班级管理',
+};
 
 type LlmCategory = 'multimodal' | 'file_processing';
 
@@ -319,6 +337,19 @@ export default function SystemConfigPanel() {
 
   const [rtc, setRtc] = useState('{}');
 
+  /** 超管：子管理员账号 */
+  const [subAdminList, setSubAdminList] = useState<SubAdminRow[]>([]);
+  const [subAdminLoading, setSubAdminLoading] = useState(false);
+  const [subAdminModalOpen, setSubAdminModalOpen] = useState(false);
+  const [subAdminSaving, setSubAdminSaving] = useState(false);
+  const [subAdminForm, setSubAdminForm] = useState({
+    username: '',
+    password: '',
+    realName: '',
+    adminMenuPerms: [] as string[],
+  });
+  const [editingSubAdmin, setEditingSubAdmin] = useState<SubAdminRow | null>(null);
+
   useEffect(() => {
     const hit = ALIYUN_SMS_REGION_OPTIONS.find(
       (o) => o.regionId === aliyunSms.regionId.trim() && o.endpoint === aliyunSms.endpoint.trim()
@@ -403,6 +434,114 @@ export default function SystemConfigPanel() {
   useEffect(() => {
     if (token) void loadConfig();
   }, [token, loadConfig]);
+
+  const isSuperAdmin = parseJwtPayload(token)?.role === 'admin';
+
+  const loadSubAdmins = useCallback(async () => {
+    if (!token || !isSuperAdmin) return;
+    setSubAdminLoading(true);
+    try {
+      const j = await apiFetch('/api/admin/sub-admins', { token });
+      const payload = j.data as { list?: SubAdminRow[] } | null;
+      setSubAdminList(Array.isArray(payload?.list) ? payload!.list : []);
+    } catch (e) {
+      messageApi.error((e as Error).message || '加载子管理员失败');
+    } finally {
+      setSubAdminLoading(false);
+    }
+  }, [token, isSuperAdmin, messageApi]);
+
+  useEffect(() => {
+    if (token && isSuperAdmin && activeTab === 'sub-admins') void loadSubAdmins();
+  }, [token, isSuperAdmin, activeTab, loadSubAdmins]);
+
+  const openCreateSubAdmin = () => {
+    setEditingSubAdmin(null);
+    setSubAdminForm({ username: '', password: '', realName: '', adminMenuPerms: [] });
+    setSubAdminModalOpen(true);
+  };
+
+  const openEditSubAdmin = (row: SubAdminRow) => {
+    setEditingSubAdmin(row);
+    setSubAdminForm({
+      username: row.username,
+      password: '',
+      realName: row.realName || '',
+      adminMenuPerms: [...(row.adminMenuPerms || [])],
+    });
+    setSubAdminModalOpen(true);
+  };
+
+  const saveSubAdmin = async () => {
+    if (!token) return;
+    if (editingSubAdmin) {
+      setSubAdminSaving(true);
+      try {
+        await apiFetch(`/api/admin/sub-admins/${editingSubAdmin.id}`, {
+          method: 'PATCH',
+          token,
+          body: JSON.stringify({
+            realName: subAdminForm.realName.trim(),
+            adminMenuPerms: subAdminForm.adminMenuPerms,
+          }),
+        });
+        messageApi.success('已更新子管理员');
+        setSubAdminModalOpen(false);
+        await loadSubAdmins();
+      } catch (e) {
+        messageApi.error((e as Error).message || '更新失败');
+      } finally {
+        setSubAdminSaving(false);
+      }
+      return;
+    }
+    const username = subAdminForm.username.trim();
+    if (!username) {
+      messageApi.warning('请输入用户名');
+      return;
+    }
+    const strength = validatePasswordStrength(subAdminForm.password);
+    if (!strength.ok) {
+      messageApi.warning(PASSWORD_POLICY_HINT);
+      return;
+    }
+    setSubAdminSaving(true);
+    try {
+      await apiFetch('/api/admin/sub-admins', {
+        method: 'POST',
+        token,
+        body: JSON.stringify({
+          username,
+          password: subAdminForm.password,
+          realName: subAdminForm.realName.trim(),
+          adminMenuPerms: subAdminForm.adminMenuPerms,
+        }),
+      });
+      messageApi.success('已创建子管理员');
+      setSubAdminModalOpen(false);
+      await loadSubAdmins();
+    } catch (e) {
+      messageApi.error((e as Error).message || '创建失败');
+    } finally {
+      setSubAdminSaving(false);
+    }
+  };
+
+  const toggleSubAdminStatus = async (row: SubAdminRow) => {
+    if (!token) return;
+    const next = row.status === 'active' ? 'disabled' : 'active';
+    try {
+      await apiFetch(`/api/admin/sub-admins/${row.id}`, {
+        method: 'PATCH',
+        token,
+        body: JSON.stringify({ status: next }),
+      });
+      messageApi.success(next === 'active' ? '已启用' : '已停用');
+      await loadSubAdmins();
+    } catch (e) {
+      messageApi.error((e as Error).message || '操作失败');
+    }
+  };
 
   const handleLogin = async () => {
     try {
@@ -1622,6 +1761,145 @@ export default function SystemConfigPanel() {
       ),
     },
     {
+      key: 'sub-admins',
+      label: '子管理员',
+      forceRender: true,
+      children: (
+        <div className="p-6 space-y-4">
+          <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+            <div>
+              <p className="text-sm font-medium text-gray-800 mb-0.5">子管理员账号</p>
+              <p className="text-xs text-gray-500">
+                默认可见：数据概览、系统配置、操作日志。可额外勾选学院管理 / 班级管理。系统配置内仅开放站点品牌与改密。
+              </p>
+            </div>
+            <Button type="primary" onClick={openCreateSubAdmin}>
+              新建子管理员
+            </Button>
+          </div>
+          <Table
+            rowKey="id"
+            loading={subAdminLoading}
+            dataSource={subAdminList}
+            pagination={false}
+            size="middle"
+            columns={[
+              { title: '用户名', dataIndex: 'username', key: 'username' },
+              {
+                title: '姓名',
+                dataIndex: 'realName',
+                key: 'realName',
+                render: (v: string) => v || '—',
+              },
+              {
+                title: '额外菜单',
+                dataIndex: 'adminMenuPerms',
+                key: 'adminMenuPerms',
+                render: (perms: string[]) =>
+                  perms?.length ? (
+                    <Space size={[4, 4]} wrap>
+                      {perms.map((p) => (
+                        <Tag key={p} color="cyan">
+                          {SUB_ADMIN_PERM_LABEL[p] || p}
+                        </Tag>
+                      ))}
+                    </Space>
+                  ) : (
+                    <span className="text-gray-400 text-xs">仅默认菜单</span>
+                  ),
+              },
+              {
+                title: '状态',
+                dataIndex: 'status',
+                key: 'status',
+                width: 90,
+                render: (s: string) =>
+                  s === 'active' ? <Tag color="success">启用</Tag> : <Tag>停用</Tag>,
+              },
+              {
+                title: '操作',
+                key: 'actions',
+                width: 180,
+                render: (_: unknown, row: SubAdminRow) => (
+                  <Space size="small">
+                    <Button type="link" size="small" onClick={() => openEditSubAdmin(row)}>
+                      编辑
+                    </Button>
+                    <Popconfirm
+                      title={row.status === 'active' ? '确认停用该账号？' : '确认重新启用？'}
+                      onConfirm={() => void toggleSubAdminStatus(row)}
+                    >
+                      <Button type="link" size="small" danger={row.status === 'active'}>
+                        {row.status === 'active' ? '停用' : '启用'}
+                      </Button>
+                    </Popconfirm>
+                  </Space>
+                ),
+              },
+            ] satisfies TableColumnsType<SubAdminRow>}
+          />
+          <Modal
+            title={editingSubAdmin ? '编辑子管理员' : '新建子管理员'}
+            open={subAdminModalOpen}
+            onCancel={() => setSubAdminModalOpen(false)}
+            onOk={() => void saveSubAdmin()}
+            confirmLoading={subAdminSaving}
+            destroyOnClose
+            okText={editingSubAdmin ? '保存' : '创建'}
+          >
+            <Form layout="vertical" requiredMark={false} className="mt-2">
+              <Form.Item label="用户名" required>
+                <Input
+                  value={subAdminForm.username}
+                  disabled={Boolean(editingSubAdmin)}
+                  onChange={(e) => setSubAdminForm((f) => ({ ...f, username: e.target.value }))}
+                  placeholder="登录用户名"
+                  autoComplete="off"
+                />
+              </Form.Item>
+              {!editingSubAdmin ? (
+                <Form.Item label="初始密码" required extra={PASSWORD_POLICY_HINT}>
+                  <Input.Password
+                    value={subAdminForm.password}
+                    onChange={(e) => setSubAdminForm((f) => ({ ...f, password: e.target.value }))}
+                    placeholder="初始登录密码"
+                    autoComplete="new-password"
+                  />
+                </Form.Item>
+              ) : null}
+              <Form.Item label="姓名">
+                <Input
+                  value={subAdminForm.realName}
+                  onChange={(e) => setSubAdminForm((f) => ({ ...f, realName: e.target.value }))}
+                  placeholder="可选"
+                />
+              </Form.Item>
+              <Form.Item
+                label="额外菜单权限"
+                extra="不勾选时仅：数据概览 / 系统配置 / 操作日志"
+              >
+                <Checkbox.Group
+                  value={subAdminForm.adminMenuPerms}
+                  onChange={(vals) =>
+                    setSubAdminForm((f) => ({
+                      ...f,
+                      adminMenuPerms: vals.map(String).filter((x) =>
+                        (SUB_ADMIN_OPTIONAL_MENUS as readonly string[]).includes(x)
+                      ),
+                    }))
+                  }
+                  options={SUB_ADMIN_OPTIONAL_MENUS.map((key) => ({
+                    label: SUB_ADMIN_PERM_LABEL[key] || key,
+                    value: key,
+                  }))}
+                />
+              </Form.Item>
+            </Form>
+          </Modal>
+        </div>
+      ),
+    },
+    {
       key: 'password',
       label: '安全与密码',
       forceRender: true,
@@ -1722,11 +2000,11 @@ export default function SystemConfigPanel() {
       : []),
   ] satisfies NonNullable<TabsProps['items']>;
 
-  // 子管理员：仅站点品牌 + 修改自己的登录密码
+  // 子管理员：仅站点品牌 + 修改自己的登录密码；「子管理员」页签仅超管可见
   const isSubAdmin = parseJwtPayload(token)?.role === 'sub_admin';
   const visibleTabItems = isSubAdmin
     ? tabItems.filter((item) => item.key === 'site' || item.key === 'password')
-    : tabItems;
+    : tabItems.filter((item) => item.key !== 'sub-admins' || isSuperAdmin);
 
   const adminTheme = {
     token: {

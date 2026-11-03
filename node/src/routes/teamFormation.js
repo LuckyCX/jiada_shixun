@@ -6,7 +6,7 @@ import { randomUUID } from 'crypto';
 import multer from 'multer';
 import { getPool } from '../lib/db.js';
 import { logError } from '../lib/logError.js';
-import { requireAuth, requireTeacher, requireStudent } from '../middleware/auth.js';
+import { requireAuth, requireTeacher, requireTeacherOrAdmin, requireStudent } from '../middleware/auth.js';
 import {
   getEnabledProvider,
   chatCompletionStream,
@@ -1038,15 +1038,17 @@ router.get('/student/team-formation/video', requireAuth(), requireStudent(), asy
 router.get(
   '/teacher/personal-classes/:classId/team-formation/students/:studentId/intro-video',
   requireAuth(),
-  requireTeacher(),
+  requireTeacherOrAdmin(),
   async (req, res) => {
     try {
       const tid = teacherIdFromReq(req);
       const classId = parseClassId(req.params.classId);
       const studentId = parseClassId(req.params.studentId);
-      if (!tid || !classId || !studentId) return bad(req, res, 400, 40003, '参数无效');
+      if (!classId || !studentId) return bad(req, res, 400, 40003, '参数无效');
       const pool = getPool();
-      if (!(await ownsPersonalClass(pool, tid, classId))) {
+      const role = req.user?.role;
+      const isAdmin = role === 'admin' || role === 'sub_admin';
+      if (!isAdmin && !(tid && (await ownsPersonalClass(pool, tid, classId)))) {
         return bad(req, res, 404, 40402, '班级不存在或无权操作');
       }
       const { rows } = await pool.query(

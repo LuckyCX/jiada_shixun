@@ -111,6 +111,17 @@ export function requireTeacher() {
   };
 }
 
+/** 教师本人，或管理端超管/子管理员（只读下钻教学详情） */
+export function requireTeacherOrAdmin() {
+  return (req, res, next) => {
+    const role = req.user?.role;
+    if (!req.user || (role !== 'teacher' && role !== 'admin' && role !== 'sub_admin')) {
+      return res.status(403).json({ code: 40302, message: '需要教师或管理员权限', data: null, traceId: req.traceId });
+    }
+    next();
+  };
+}
+
 export function requireStudent() {
   return (req, res, next) => {
     if (!req.user || req.user.role !== 'student') {

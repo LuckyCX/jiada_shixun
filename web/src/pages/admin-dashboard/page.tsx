@@ -63,6 +63,8 @@ export default function AdminDashboard() {
   const [collegeTeachersHint, setCollegeTeachersHint] = useState('');
   const [adminRole, setAdminRole] = useState<string>('admin');
   const [adminMenuPerms, setAdminMenuPerms] = useState<string[]>([]);
+  /** 教学下钻进入队伍详情时隐藏概览，避免二级页被挤在下面 */
+  const [teachingDrillDetail, setTeachingDrillDetail] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -182,6 +184,7 @@ export default function AdminDashboard() {
 
   const handleTabChange = (tab: TabType) => {
     setActiveTab(tab);
+    if (tab !== 'overview') setTeachingDrillDetail(false);
     navigate(`/admin-dashboard?tab=${tab}`);
   };
 
@@ -370,11 +373,11 @@ export default function AdminDashboard() {
         <main className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-6">
           {activeTab === 'overview' &&
             (adminRole === 'sub_admin' ? (
-              <TeachingDrillPanel />
+              <TeachingDrillPanel onDetailModeChange={setTeachingDrillDetail} />
             ) : (
               <div className="space-y-8">
-                <Overview />
-                <TeachingDrillPanel />
+                {!teachingDrillDetail ? <Overview /> : null}
+                <TeachingDrillPanel onDetailModeChange={setTeachingDrillDetail} />
               </div>
             ))}
           {activeTab === 'college-management' && <CollegeManagement />}

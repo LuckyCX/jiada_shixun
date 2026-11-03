@@ -1,7 +1,12 @@
-import { portalAuthenticatedFetch } from './authApi';
+import { portalAuthenticatedFetch, type PortalRole } from './authApi';
+
+/** 默认教师端；管理端下钻传 'admin' 走同一套监控只读接口 */
+function monitorFetch(path: string, opts: RequestInit = {}, portal: PortalRole = 'teacher') {
+  return portalAuthenticatedFetch(portal, path, opts);
+}
 
 function teacherFetch(path: string, opts: RequestInit = {}) {
-  return portalAuthenticatedFetch('teacher', path, opts);
+  return monitorFetch(path, opts, 'teacher');
 }
 
 export type TeacherMonitorTeam = {
@@ -167,10 +172,13 @@ export type TeacherWorkspaceSummary = {
 
 export async function fetchTeacherTeamWorkspaceSummary(
   classId: string,
-  teamId: number | string
+  teamId: number | string,
+  portal: PortalRole = 'teacher'
 ): Promise<TeacherWorkspaceSummary> {
-  return teacherFetch(
-    `/api/teacher/personal-classes/${encodeURIComponent(classId)}/monitor/teams/${teamId}/workspace-summary`
+  return monitorFetch(
+    `/api/teacher/personal-classes/${encodeURIComponent(classId)}/monitor/teams/${teamId}/workspace-summary`,
+    {},
+    portal
   ) as Promise<TeacherWorkspaceSummary>;
 }
 
@@ -189,10 +197,13 @@ export type TeacherStageWorkspace = {
 export async function fetchTeacherTeamStageWorkspace(
   classId: string,
   teamId: number | string,
-  moduleKey: string
+  moduleKey: string,
+  portal: PortalRole = 'teacher'
 ): Promise<TeacherStageWorkspace> {
-  return teacherFetch(
-    `/api/teacher/personal-classes/${encodeURIComponent(classId)}/monitor/teams/${teamId}/stages/${encodeURIComponent(moduleKey)}`
+  return monitorFetch(
+    `/api/teacher/personal-classes/${encodeURIComponent(classId)}/monitor/teams/${teamId}/stages/${encodeURIComponent(moduleKey)}`,
+    {},
+    portal
   ) as Promise<TeacherStageWorkspace>;
 }
 
@@ -263,10 +274,13 @@ export type TeacherTeamCockpit = {
 
 export async function fetchTeacherTeamCockpit(
   classId: string,
-  teamId: number | string
+  teamId: number | string,
+  portal: PortalRole = 'teacher'
 ): Promise<TeacherTeamCockpit> {
-  return teacherFetch(
-    `/api/teacher/personal-classes/${encodeURIComponent(classId)}/monitor/teams/${teamId}/cockpit`
+  return monitorFetch(
+    `/api/teacher/personal-classes/${encodeURIComponent(classId)}/monitor/teams/${teamId}/cockpit`,
+    {},
+    portal
   ) as Promise<TeacherTeamCockpit>;
 }
 

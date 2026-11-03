@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Modal } from 'antd';
+import type { PortalRole } from '../../../../lib/authApi';
 import { ensurePlanEditorHtml } from '../../../../lib/planEditorHtml';
 import { sanitizeRichText } from '../../../../lib/richText';
 import {
@@ -169,9 +170,17 @@ type Props = {
   bmTab?: string;
   /** 用户手动切换商模子 Tab 时回写 URL，避免与深链打架 */
   onBmTabChange?: (bmTab: string) => void;
+  /** 管理端下钻传 admin，附件下载走管理令牌 */
+  authPortal?: PortalRole;
 };
 
-export default function StagePanels({ moduleKey, stage, bmTab = '', onBmTabChange }: Props) {
+export default function StagePanels({
+  moduleKey,
+  stage,
+  bmTab = '',
+  onBmTabChange,
+  authPortal = 'teacher',
+}: Props) {
   const uploadEnabled = stage?.features?.uploadEnabled !== false;
   const tabs = useMemo(() => {
     const base = SUB_TABS[moduleKey] || [];
@@ -714,7 +723,7 @@ function renderMarket(sub: string, team: any, members: any[]) {
               <button
                 type="button"
                 className="shrink-0 text-xs text-teal-600 hover:underline cursor-pointer"
-                onClick={() => downloadWithAuth(u.downloadUrl, u.fileName)}
+                onClick={() => downloadWithAuth(u.downloadUrl, u.fileName, authPortal)}
               >
                 下载
               </button>
@@ -855,7 +864,7 @@ function renderProduct(sub: string, team: any, members: any[]) {
               <button
                 type="button"
                 className="text-xs text-teal-600 hover:underline cursor-pointer"
-                onClick={() => downloadWithAuth(team.prototype.downloadUrl, team.prototype.fileName)}
+                onClick={() => downloadWithAuth(team.prototype.downloadUrl, team.prototype.fileName, authPortal)}
               >
                 下载
               </button>
@@ -1196,7 +1205,7 @@ function renderPlan(sub: string, team: any) {
                       <button
                         type="button"
                         className="shrink-0 text-xs text-teal-600 hover:underline cursor-pointer"
-                        onClick={() => downloadWithAuth(a.downloadUrl, a.fileName)}
+                        onClick={() => downloadWithAuth(a.downloadUrl, a.fileName, authPortal)}
                       >
                         下载
                       </button>

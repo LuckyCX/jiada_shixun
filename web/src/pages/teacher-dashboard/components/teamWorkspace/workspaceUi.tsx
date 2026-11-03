@@ -1,10 +1,14 @@
 import { useState, type ReactNode } from 'react';
 import { message } from 'antd';
-import { getPortalToken } from '../../../../lib/authApi';
+import { getPortalToken, type PortalRole } from '../../../../lib/authApi';
 
-/** 带教师鉴权的附件下载 */
-export async function downloadWithAuth(downloadUrl: string, filename: string) {
-  const token = getPortalToken('teacher');
+/** 带门户鉴权的附件下载（教师端 / 管理端下钻） */
+export async function downloadWithAuth(
+  downloadUrl: string,
+  filename: string,
+  portal: PortalRole = 'teacher'
+) {
+  const token = getPortalToken(portal) || getPortalToken('teacher') || getPortalToken('admin');
   if (!token) {
     message.error('未登录');
     return;

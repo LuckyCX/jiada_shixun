@@ -20,7 +20,7 @@ router.get('/admin/teaching/teachers', requireAuth(), requireAdmin(), async (req
   try {
     const { rows } = await getPool().query(
       `SELECT u.id, u.username, u.real_name AS "realName", u.employee_no AS "employeeNo",
-              u.department, u.last_login_at AS "lastLoginAt",
+              u.phone, u.department, u.last_login_at AS "lastLoginAt",
               (SELECT COUNT(*)::int FROM teacher_personal_classes c
                WHERE c.teacher_id = u.id AND COALESCE(c.purpose, 'normal') <> 'prep') AS "classCount"
        FROM users u
@@ -36,6 +36,7 @@ router.get('/admin/teaching/teachers', requireAuth(), requireAdmin(), async (req
         username: r.username,
         realName: r.realName || '',
         employeeNo: r.employeeNo || '',
+        phone: r.phone || '',
         department: r.department || '',
         lastLoginAt: r.lastLoginAt ? new Date(r.lastLoginAt).toISOString() : '',
         classCount: r.classCount ?? 0,

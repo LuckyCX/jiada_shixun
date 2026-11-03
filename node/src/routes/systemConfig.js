@@ -238,6 +238,103 @@ router.get('/admin/me', requireAuth(), requireAdmin(), async (req, res) => {
   }
 });
 
+const SUB_ADMIN_OPTIONAL_PERMS = new Set(['college-management', 'class-management']);
+
+function normalizeSubAdminPerms(raw) {
+  const list = Array.isArray(raw) ? raw : [];
+  return [...new Set(list.map(String).filter((x) => SUB_ADMIN_OPTIONAL_PERMS.has(x)))];
+}
+
+function mapSubAdminRow(r) {
+  const perms = Array.isArray(r.adminMenuPerms) ? r.adminMenuPerms.map(String) : [];
+  return {
+    id: String(r.id),
+    username: r.username,
+    realName: r.realName || '',
+    role: r.role,
+    status: r.status || 'active',
+    adminMenuPerms: perms.filter((x) => SUB_ADMIN_OPTIONAL_PERMS.has(x)),
+    createdAt: r.createdAt || null,
+  };
+}
+
+/** 超管：子管理员列表 */
+router.get('/admin/sub-admins', requireAuth(), requireSuperAdmin(), async (req, res) => {
+  try {
+    const { rows } = await getPool().query(
+      `SELECT id, username, real_name AS "realName", role, status,
+              admin_menu_perms AS "adminMenuPerms", created_at AS "createdAt"
+       FROM users
+       WHERE role = 'sub_admin'
+       ORDER BY id ASC`
+    );
+    return res.json({
+      code: 0,
+      message: 'OK',
+      data: { list: rows.map(mapSubAdminRow) },
+      traceId: req.traceId,
+    });
+  } catch (e) {
+    logError(`GET /api/admin/sub-admins traceId=${req.traceId}`, e);
+    return res.status(500).json({ code: 50000, message: e.message, data: null, traceId: req.traceId });
+  }
+});
+
+/**
+ * 超管更新子管理员：菜单权限 / 姓名 / 启停。
+ * body: realName?, adminMenuPerms?, status? ('active'|'disabled')
+ */
+router.patch('/admin/sub-admins/:id', requireAuth(), requireSuperAdmin(), async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id) || id <= 0) {
+      return res.status(400).json({ code: 40001, message: '无效账号', data: null, traceId: req.traceId });
+    }
+    const { rows: found } = await getPool().query(
+      `SELECT id, username, real_name AS "realName", role, status, admin_menu_perms AS "adminMenuPerms"
+       FROM users WHERE id = $1 AND role = 'sub_admin'`,
+      [id]
+    );
+    if (!found.length) {
+      return res.status(404).json({ code: 40401, message: '子管理员不存在', data: null, traceId: req.traceId });
+    }
+    const cur = found[0];
+    const realName =
+      req.body?.realName !== undefined ? String(req.body.realName || '').trim() : cur.realName || '';
+    const adminMenuPerms =
+      req.body?.adminMenuPerms !== undefined
+        ? normalizeSubAdminPerms(req.body.adminMenuPerms)
+        : normalizeSubAdminPerms(cur.adminMenuPerms);
+    let status = cur.status || 'active';
+    if (req.body?.status !== undefined) {
+      const s = String(req.body.status || '').trim();
+      if (s !== 'active' && s !== 'disabled') {
+        return res.status(400).json({ code: 40002, message: 'status 仅支持 active / disabled', data: null, traceId: req.traceId });
+      }
+      status = s;
+    }
+    const { rows } = await getPool().query(
+      `UPDATE users
+       SET real_name = $1, admin_menu_perms = $2::jsonb, status = $3, updated_at = now()
+       WHERE id = $4 AND role = 'sub_admin'
+       RETURNING id, username, real_name AS "realName", role, status,
+                 admin_menu_perms AS "adminMenuPerms", created_at AS "createdAt"`,
+      [realName || null, JSON.stringify(adminMenuPerms), status, id]
+    );
+    await insertAdminOperationLog({
+      operatorId: Number(req.user.sub),
+      module: 'sub_admin',
+      action: 'update',
+      detailText: `更新子管理员 ${cur.username}`,
+      detailJson: { id, adminMenuPerms, status, realName },
+    });
+    return res.json({ code: 0, message: '已更新', data: mapSubAdminRow(rows[0]), traceId: req.traceId });
+  } catch (e) {
+    logError(`PATCH /api/admin/sub-admins/:id traceId=${req.traceId}`, e);
+    return res.status(500).json({ code: 50000, message: e.message, data: null, traceId: req.traceId });
+  }
+});
+
 /**
  * 超管创建子管理员。
  * body: username, password, realName?, adminMenuPerms?: string[]
@@ -247,9 +344,7 @@ router.post('/admin/sub-admins', requireAuth(), requireSuperAdmin(), async (req,
     const username = String(req.body?.username || '').trim();
     const password = String(req.body?.password || '');
     const realName = String(req.body?.realName || '').trim();
-    const rawPerms = Array.isArray(req.body?.adminMenuPerms) ? req.body.adminMenuPerms : [];
-    const allowed = new Set(['college-management', 'class-management']);
-    const adminMenuPerms = [...new Set(rawPerms.map(String).filter((x) => allowed.has(x)))];
+    const adminMenuPerms = normalizeSubAdminPerms(req.body?.adminMenuPerms);
     if (!username) {
       return res.status(400).json({ code: 40001, message: '请输入用户名', data: null, traceId: req.traceId });
     }
@@ -261,7 +356,8 @@ router.post('/admin/sub-admins', requireAuth(), requireSuperAdmin(), async (req,
     const { rows } = await getPool().query(
       `INSERT INTO users (username, password_hash, real_name, role, status, admin_menu_perms)
        VALUES ($1, $2, $3, 'sub_admin', 'active', $4::jsonb)
-       RETURNING id, username, real_name AS "realName", role, admin_menu_perms AS "adminMenuPerms"`,
+       RETURNING id, username, real_name AS "realName", role, status,
+                 admin_menu_perms AS "adminMenuPerms", created_at AS "createdAt"`,
       [username, password_hash, realName || null, JSON.stringify(adminMenuPerms)]
     );
     const r = rows[0];
@@ -275,13 +371,7 @@ router.post('/admin/sub-admins', requireAuth(), requireSuperAdmin(), async (req,
     return res.json({
       code: 0,
       message: '已创建子管理员',
-      data: {
-        id: String(r.id),
-        username: r.username,
-        realName: r.realName || '',
-        role: r.role,
-        adminMenuPerms: Array.isArray(r.adminMenuPerms) ? r.adminMenuPerms : adminMenuPerms,
-      },
+      data: mapSubAdminRow(r),
       traceId: req.traceId,
     });
   } catch (e) {

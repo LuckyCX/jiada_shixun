@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 import { getPool } from '../lib/db.js';
 import { logError } from '../lib/logError.js';
 import { normalizeUploadFileName } from '../lib/uploadFileName.js';
-import { requireAuth, requireTeacher } from '../middleware/auth.js';
+import { requireAuth, requireTeacher, requireTeacherOrAdmin } from '../middleware/auth.js';
 import { coerceCover, coerceSections, sectionsToFullText } from '../lib/businessPlanSections.js';
 import { BUSINESS_PLAN_RUBRIC_DIMENSIONS, normalizeRubricScores } from '../lib/businessPlanRubric.js';
 
@@ -35,6 +35,11 @@ function parseId(val) {
 
 function teacherIdFromReq(req) {
   return parseId(req.user?.sub);
+}
+
+function isAdminViewer(req) {
+  const role = req.user?.role;
+  return role === 'admin' || role === 'sub_admin';
 }
 
 async function ownsPersonalClass(pool, teacherId, classId) {
@@ -169,18 +174,22 @@ router.get(
   '/teacher/personal-classes/:classId/business-plan/submissions/:submissionId/attachments/:attachmentId/download',
   bearerFromQuery,
   requireAuth(),
-  requireTeacher(),
+  requireTeacherOrAdmin(),
   async (req, res) => {
     try {
       const teacherId = teacherIdFromReq(req);
       const classId = parseId(req.params.classId);
       const submissionId = parseId(req.params.submissionId);
       const attachmentId = parseId(req.params.attachmentId);
-      if (!teacherId || !classId || !submissionId || !attachmentId) {
+      if (!classId || !submissionId || !attachmentId) {
         return bad(req, res, 400, 40001, '参数无效');
       }
       const pool = getPool();
-      if (!(await ownsPersonalClass(pool, teacherId, classId))) {
+      // 管理端只读下钻可下附件；教师须拥有该班
+      const allowed = isAdminViewer(req)
+        ? true
+        : Boolean(teacherId && (await ownsPersonalClass(pool, teacherId, classId)));
+      if (!allowed) {
         return bad(req, res, 404, 40401, '班级不存在');
       }
       const { rows } = await pool.query(

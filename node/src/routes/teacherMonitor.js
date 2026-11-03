@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 import { getPool } from '../lib/db.js';
 import { logError } from '../lib/logError.js';
 import { normalizeUploadFileName } from '../lib/uploadFileName.js';
-import { requireAuth, requireTeacher } from '../middleware/auth.js';
+import { requireAuth, requireTeacher, requireTeacherOrAdmin } from '../middleware/auth.js';
 import { coerceSections, sectionsToFullText } from '../lib/businessPlanSections.js';
 import { loadSurveyQuestions, mapSurveyRow } from '../lib/marketResearchSurveyDb.js';
 import { loadSkippedModuleKeys } from '../lib/courseWorkflow.js';
@@ -55,6 +55,19 @@ async function teamInPersonalClass(pool, classId, teamId) {
     [teamId, classId]
   );
   return rows.length > 0;
+}
+
+function isAdminViewer(req) {
+  const role = req.user?.role;
+  return role === 'admin' || role === 'sub_admin';
+}
+
+/** 教师须拥有班级；管理端可只读任意正式班 */
+async function ensureClassAccess(req, pool, classId) {
+  if (isAdminViewer(req)) return true;
+  const tid = teacherIdFromReq(req);
+  if (!tid) return false;
+  return ownsPersonalClass(pool, tid, classId);
 }
 
 function displayRespondentToken(row) {
@@ -741,15 +754,14 @@ router.get(
 router.get(
   '/teacher/personal-classes/:classId/monitor/teams/:teamId/market-report-preview',
   requireAuth(),
-  requireTeacher(),
+  requireTeacherOrAdmin(),
   async (req, res) => {
     try {
-      const tid = teacherIdFromReq(req);
       const classId = parseId(req.params.classId);
       const teamId = parseId(req.params.teamId);
-      if (!tid || !classId || !teamId) return bad(req, res, 400, 40003, '参数无效');
+      if (!classId || !teamId) return bad(req, res, 400, 40003, '参数无效');
       const pool = getPool();
-      if (!(await ownsPersonalClass(pool, tid, classId))) {
+      if (!(await ensureClassAccess(req, pool, classId))) {
         return bad(req, res, 404, 40402, '班级不存在或无权操作');
       }
       if (!(await teamInPersonalClass(pool, classId, teamId))) {
@@ -842,15 +854,14 @@ router.get(
 router.get(
   '/teacher/personal-classes/:classId/monitor/teams/:teamId/product-prototype/download',
   requireAuth(),
-  requireTeacher(),
+  requireTeacherOrAdmin(),
   async (req, res) => {
     try {
-      const tid = teacherIdFromReq(req);
       const classId = parseId(req.params.classId);
       const teamId = parseId(req.params.teamId);
-      if (!tid || !classId || !teamId) return bad(req, res, 400, 40003, '参数无效');
+      if (!classId || !teamId) return bad(req, res, 400, 40003, '参数无效');
       const pool = getPool();
-      if (!(await ownsPersonalClass(pool, tid, classId))) {
+      if (!(await ensureClassAccess(req, pool, classId))) {
         return bad(req, res, 404, 40402, '班级不存在或无权操作');
       }
       const { rows } = await pool.query(
@@ -875,15 +886,14 @@ router.get(
 router.get(
   '/teacher/personal-classes/:classId/monitor/teams/:teamId/workspace-summary',
   requireAuth(),
-  requireTeacher(),
+  requireTeacherOrAdmin(),
   async (req, res) => {
     try {
-      const tid = teacherIdFromReq(req);
       const classId = parseId(req.params.classId);
       const teamId = parseId(req.params.teamId);
-      if (!tid || !classId || !teamId) return bad(req, res, 400, 40003, '参数无效');
+      if (!classId || !teamId) return bad(req, res, 400, 40003, '参数无效');
       const pool = getPool();
-      if (!(await ownsPersonalClass(pool, tid, classId))) {
+      if (!(await ensureClassAccess(req, pool, classId))) {
         return bad(req, res, 404, 40402, '班级不存在或无权操作');
       }
       const base = await loadTeamMembers(pool, classId, teamId);
@@ -931,15 +941,14 @@ router.get(
 router.get(
   '/teacher/personal-classes/:classId/monitor/teams/:teamId/cockpit',
   requireAuth(),
-  requireTeacher(),
+  requireTeacherOrAdmin(),
   async (req, res) => {
     try {
-      const tid = teacherIdFromReq(req);
       const classId = parseId(req.params.classId);
       const teamId = parseId(req.params.teamId);
-      if (!tid || !classId || !teamId) return bad(req, res, 400, 40003, '参数无效');
+      if (!classId || !teamId) return bad(req, res, 400, 40003, '参数无效');
       const pool = getPool();
-      if (!(await ownsPersonalClass(pool, tid, classId))) {
+      if (!(await ensureClassAccess(req, pool, classId))) {
         return bad(req, res, 404, 40402, '班级不存在或无权操作');
       }
       const data = await loadTeamCockpit(pool, classId, teamId);
@@ -956,16 +965,15 @@ router.get(
 router.get(
   '/teacher/personal-classes/:classId/monitor/teams/:teamId/stages/:moduleKey',
   requireAuth(),
-  requireTeacher(),
+  requireTeacherOrAdmin(),
   async (req, res) => {
     try {
-      const tid = teacherIdFromReq(req);
       const classId = parseId(req.params.classId);
       const teamId = parseId(req.params.teamId);
       const moduleKey = String(req.params.moduleKey || '').trim();
-      if (!tid || !classId || !teamId || !moduleKey) return bad(req, res, 400, 40003, '参数无效');
+      if (!classId || !teamId || !moduleKey) return bad(req, res, 400, 40003, '参数无效');
       const pool = getPool();
-      if (!(await ownsPersonalClass(pool, tid, classId))) {
+      if (!(await ensureClassAccess(req, pool, classId))) {
         return bad(req, res, 404, 40402, '班级不存在或无权操作');
       }
       if (!(await teamInPersonalClass(pool, classId, teamId))) {
@@ -994,16 +1002,15 @@ router.get(
 router.get(
   '/teacher/personal-classes/:classId/monitor/teams/:teamId/market-uploads/:uploadId/download',
   requireAuth(),
-  requireTeacher(),
+  requireTeacherOrAdmin(),
   async (req, res) => {
     try {
-      const tid = teacherIdFromReq(req);
       const classId = parseId(req.params.classId);
       const teamId = parseId(req.params.teamId);
       const uploadId = parseId(req.params.uploadId);
-      if (!tid || !classId || !teamId || !uploadId) return bad(req, res, 400, 40003, '参数无效');
+      if (!classId || !teamId || !uploadId) return bad(req, res, 400, 40003, '参数无效');
       const pool = getPool();
-      if (!(await ownsPersonalClass(pool, tid, classId))) {
+      if (!(await ensureClassAccess(req, pool, classId))) {
         return bad(req, res, 404, 40402, '班级不存在或无权操作');
       }
       if (!(await teamInPersonalClass(pool, classId, teamId))) {
