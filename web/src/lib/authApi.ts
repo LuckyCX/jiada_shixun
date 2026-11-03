@@ -375,6 +375,7 @@ export async function ensurePortalAccessToken(role: PortalRole): Promise<boolean
   const token = getPortalToken(role);
   if (token && isJwtLikelyValid(token)) {
     const p = parseJwtPayload(token);
+    if (role === 'admin') return Boolean(p && (p.role === 'admin' || p.role === 'sub_admin'));
     return Boolean(p && p.role === role);
   }
   return refreshPortalAccessToken(role);

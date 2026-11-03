@@ -37,6 +37,7 @@ import publicMarketSurveyRoutes from './routes/publicMarketSurvey.js';
 import courseSettingsRoutes from './routes/courseSettings.js';
 import aiTutorRoutes from './routes/aiTutor.js';
 import teacherClassDemoRoutes from './routes/teacherClassDemo.js';
+import adminTeachingMonitorRoutes from './routes/adminTeachingMonitor.js';
 import { startCourseSettingReminderJob } from './jobs/courseSettingReminderJob.js';
 import { httpMethodOverride } from './middleware/httpMethodOverride.js';
 import { securityHardening } from './middleware/securityHardening.js';
@@ -112,6 +113,7 @@ app.use('/api', publicMarketSurveyRoutes);
 app.use('/api', courseSettingsRoutes);
 app.use('/api', aiTutorRoutes);
 app.use('/api', teacherClassDemoRoutes);
+app.use('/api', adminTeachingMonitorRoutes);
 
 app.use((err, req, res, _next) => {
   logError(`express errorHandler traceId=${req.traceId}`, err);

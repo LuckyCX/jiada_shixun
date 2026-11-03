@@ -1,8 +1,13 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import AiTutorPanel from '../../components/AiTutorPanel';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Dropdown, Drawer, Upload, message as antdMessage, Button } from 'antd';
+import { Dropdown, Drawer, Upload, message as antdMessage, Button, Modal } from 'antd';
 import { clearPortalToken, getPortalToken, parseJwtPayload } from '../../lib/authApi';
+import {
+  activateTeacherPrepSession,
+  clearTeacherPrepLocalData,
+  teacherPrepHasLocalData,
+} from '../../lib/teacherPrepMode';
 import ProfileContactPanels from '../../components/ProfileContactPanels';
 import { useSiteBrand } from '../../lib/publicSite';
 import TeamCard, { TeamProject } from './components/TeamCard';
@@ -29,6 +34,7 @@ import { usePublicDictOptions } from '../admin-dashboard/components/classManagem
 import {
   getTeacherProfile,
   listTeacherPersonalClasses,
+  teacherFetch,
   updateTeacherProfile,
   uploadTeacherAvatar,
   type TeacherPersonalClassRow,
@@ -259,6 +265,10 @@ export default function TeacherDashboard() {
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [teacherProfile, setTeacherProfile] = useState<TeacherProfile | null>(null);
   const [profileModalOpen, setProfileModalOpen] = useState(false);
+  const [prepEnterOpen, setPrepEnterOpen] = useState(false);
+  const [prepEnterLoading, setPrepEnterLoading] = useState(false);
+  /** 清除备课数据按钮：打开弹窗后倒计时 3 秒才可点 */
+  const [prepClearCountdown, setPrepClearCountdown] = useState(0);
   const [personalClasses, setPersonalClasses] = useState<TeacherPersonalClassRow[]>([]);
   const [selectedPersonalClass, setSelectedPersonalClass] = useState<TeacherPersonalClassRow | null>(null);
   const [monitorTeams, setMonitorTeams] = useState<TeamProject[]>([]);
@@ -349,15 +359,70 @@ export default function TeacherDashboard() {
     [searchParams, selectedPersonalClass?.id, syncClassToUrl]
   );
 
-  const { teacherDisplayName, teacherAvatarChar } = useMemo(() => {
+  const { teacherDisplayName, teacherAvatarChar, teacherId } = useMemo(() => {
     const token = getPortalToken('teacher');
     const p = token ? parseJwtPayload(token) : null;
     const username = (p?.username && String(p.username).trim()) || '';
     const real = (teacherProfile?.realName && String(teacherProfile.realName).trim()) || '';
     const displayName = real || username || '教师';
     const first = [...displayName][0] || '师';
-    return { teacherDisplayName: displayName, teacherAvatarChar: first };
+    return {
+      teacherDisplayName: displayName,
+      teacherAvatarChar: first,
+      teacherId: String(p?.sub || teacherProfile?.id || '').trim(),
+    };
   }, [teacherProfile]);
+
+  /** 进入学生端备课：可选清除本机进度；进度按教师账号存 localStorage */
+  const enterPrepStudentPortal = useCallback(
+    async (clearLocal: boolean) => {
+      if (!teacherId) {
+        antdMessage.error('无法识别教师账号');
+        return;
+      }
+      setPrepEnterLoading(true);
+      try {
+        if (clearLocal) clearTeacherPrepLocalData(teacherId);
+        const data = (await teacherFetch('/api/teacher/prep-student-portal/ensure', {
+          method: 'POST',
+          body: '{}',
+        })) as { prepClassId?: string; className?: string };
+        const prepClassId = String(data?.prepClassId || '').trim();
+        if (!prepClassId) throw new Error('备课班级准备失败');
+        activateTeacherPrepSession({
+          teacherId,
+          prepClassId,
+          className: String(data?.className || '备课·学生端'),
+        });
+        setPrepEnterOpen(false);
+        navigate('/student-center');
+      } catch (e) {
+        antdMessage.error(e instanceof Error ? e.message : '进入学生端失败');
+      } finally {
+        setPrepEnterLoading(false);
+      }
+    },
+    [navigate, teacherId]
+  );
+
+  const onClickEnterStudentPortal = useCallback(() => {
+    if (!teacherId) {
+      antdMessage.error('无法识别教师账号');
+      return;
+    }
+    if (teacherPrepHasLocalData(teacherId)) {
+      setPrepClearCountdown(3);
+      setPrepEnterOpen(true);
+      return;
+    }
+    void enterPrepStudentPortal(false);
+  }, [enterPrepStudentPortal, teacherId]);
+
+  useEffect(() => {
+    if (!prepEnterOpen || prepClearCountdown <= 0) return;
+    const timer = window.setTimeout(() => setPrepClearCountdown((n) => Math.max(0, n - 1)), 1000);
+    return () => window.clearTimeout(timer);
+  }, [prepEnterOpen, prepClearCountdown]);
 
   useEffect(() => {
     getTeacherProfile()
@@ -934,6 +999,15 @@ export default function TeacherDashboard() {
             )}
             <button
               type="button"
+              onClick={() => void onClickEnterStudentPortal()}
+              className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1.5 text-sm font-medium text-teal-700 bg-teal-50 border border-teal-200 rounded-lg hover:bg-teal-100 cursor-pointer !whitespace-nowrap"
+              title="进入学生端备课（数据仅保存在本机）"
+            >
+              <i className="ri-user-follow-line" />
+              进入学生端
+            </button>
+            <button
+              type="button"
               onClick={() => setAiTutorOpen((v) => !v)}
               className={`w-8 h-8 flex items-center justify-center rounded-lg transition-colors cursor-pointer ${
                 aiTutorOpen ? 'text-teal-700 bg-teal-50' : 'text-teal-600 hover:bg-teal-50'
@@ -952,6 +1026,49 @@ export default function TeacherDashboard() {
             </button>
           </div>
         </header>
+
+        <Modal
+          title="继续备课还是重新开始？"
+          open={prepEnterOpen}
+          onCancel={() => {
+            if (prepEnterLoading) return;
+            setPrepEnterOpen(false);
+            setPrepClearCountdown(0);
+          }}
+          footer={null}
+          destroyOnClose
+          centered
+          afterOpenChange={(open) => {
+            if (open) setPrepClearCountdown(3);
+          }}
+        >
+          <p className="text-sm text-gray-600 mb-4">
+            检测到本机已有该账号的学生端备课进度（不落库，仅浏览器本地）。请选择：
+          </p>
+          <div className="flex flex-col gap-3">
+            <Button
+              type="primary"
+              size="large"
+              loading={prepEnterLoading}
+              className="!h-auto !py-3 !bg-teal-600 hover:!bg-teal-500"
+              onClick={() => void enterPrepStudentPortal(false)}
+            >
+              不清除，继续上次进度（推荐）
+            </Button>
+            <Button
+              danger
+              size="large"
+              loading={prepEnterLoading}
+              disabled={prepClearCountdown > 0 || prepEnterLoading}
+              className="!h-auto !py-3 !bg-red-50 !border-red-300 !text-red-700 hover:!bg-red-100 disabled:!opacity-60"
+              onClick={() => void enterPrepStudentPortal(true)}
+            >
+              {prepClearCountdown > 0
+                ? `清除数据并重新开始（${prepClearCountdown}s）`
+                : '清除数据并重新开始'}
+            </Button>
+          </div>
+        </Modal>
 
         <Drawer
           open={profileModalOpen}

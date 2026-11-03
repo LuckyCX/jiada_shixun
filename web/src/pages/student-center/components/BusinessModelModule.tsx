@@ -978,7 +978,8 @@ export default function BusinessModelModule({
           ))}
         </div>
 
-        <div className="p-4 xl:p-8">
+        {/* 虚拟董事会自带满高聊天框，去掉大 padding；其它 Tab 紧凑内边距 */}
+        <div className={activeTab === 'warroom' ? '' : 'p-3 md:p-4'}>
           {activeTab === 'canvas' && (
             <div className="space-y-6">
               <div className="space-y-4">

@@ -21,6 +21,7 @@ import {
 import {
   getPortalToken,
   loginWithApi,
+  parseJwtPayload,
   portalAuthenticatedFetch,
   setPortalToken,
 } from '../../../../lib/authApi';
@@ -1721,6 +1722,12 @@ export default function SystemConfigPanel() {
       : []),
   ] satisfies NonNullable<TabsProps['items']>;
 
+  // 子管理员：仅站点品牌 + 修改自己的登录密码
+  const isSubAdmin = parseJwtPayload(token)?.role === 'sub_admin';
+  const visibleTabItems = isSubAdmin
+    ? tabItems.filter((item) => item.key === 'site' || item.key === 'password')
+    : tabItems;
+
   const adminTheme = {
     token: {
       colorPrimary: '#0d9488',
@@ -1763,9 +1770,11 @@ export default function SystemConfigPanel() {
           <Spin spinning={loading} tip="加载中…">
             <Tabs
               type="card"
-              activeKey={activeTab}
+              activeKey={
+                visibleTabItems.some((i) => i.key === activeTab) ? activeTab : (visibleTabItems[0]?.key as TabValue) || 'site'
+              }
               onChange={(k) => setActiveTab(k as TabValue)}
-              items={tabItems}
+              items={visibleTabItems}
             />
           </Spin>
         </div>

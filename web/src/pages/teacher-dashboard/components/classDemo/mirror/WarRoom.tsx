@@ -542,7 +542,7 @@ export default function WarRoom({ classId, studentDisplayName = '同学', onReco
       className={
         canvasFocus
           ? 'fixed inset-0 z-[200] flex bg-gray-100'
-          : 'h-[calc(100dvh-11rem)] min-h-[420px] max-h-[900px] flex bg-gray-50 rounded-xl border border-gray-100 overflow-hidden'
+          : 'h-[calc(100dvh-13rem)] min-h-[420px] max-h-[900px] flex bg-gray-50 rounded-xl border border-gray-100 overflow-hidden'
       }
     >
       <div

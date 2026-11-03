@@ -10,11 +10,14 @@ CREATE TABLE teacher_personal_classes (
   name           varchar(128) NOT NULL,
   academic_year  varchar(32),
   semester       varchar(32),
+  -- normal=正式班；prep=备课班壳（仅 AI/上传，学生进度在浏览器本地）
+  purpose        varchar(32) NOT NULL DEFAULT 'normal',
   created_at     timestamptz NOT NULL DEFAULT now(),
   updated_at     timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE INDEX idx_teacher_personal_classes_teacher_id ON teacher_personal_classes (teacher_id);
+CREATE INDEX idx_tpc_teacher_purpose ON teacher_personal_classes (teacher_id, purpose);
 
 CREATE TRIGGER trg_teacher_personal_classes_updated_at BEFORE UPDATE ON teacher_personal_classes
   FOR EACH ROW EXECUTE PROCEDURE trg_set_updated_at();

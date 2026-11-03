@@ -1,4 +1,5 @@
 import { getPortalToken, portalAuthenticatedFetch } from '../../../../lib/authApi';
+import { resolvePrepApiClassId } from '../../../../lib/teacherPrepMode';
 import type { DemoFile } from './demoStore';
 
 export type DemoAiScene =
@@ -23,21 +24,23 @@ export type DemoAiScene =
   | 'plan-generate-section'
   | 'plan-generate-full';
 
-/** 演示 AI：只取返回文本，由页面写入 sessionStorage。 */
+/** 演示 AI：只取返回文本，由页面写入本地存储（备课为 localStorage）。 */
 export async function generateDemoAi(classId: string, scene: DemoAiScene, context: string): Promise<string> {
-  const data = (await portalAuthenticatedFetch('teacher', `/api/teacher/personal-classes/${classId}/demo/ai`, {
+  const apiClassId = resolvePrepApiClassId(classId);
+  const data = (await portalAuthenticatedFetch('teacher', `/api/teacher/personal-classes/${apiClassId}/demo/ai`, {
     method: 'POST',
     body: JSON.stringify({ scene, context }),
   })) as { text?: string };
   return String(data?.text || '').trim();
 }
 
-/** 演示文件上传。返回的地址只应记在 session，不进入团队提交。 */
+/** 演示文件上传。返回的地址只应记在本地，不进入团队提交。 */
 export async function uploadDemoFile(classId: string, file: File): Promise<DemoFile> {
+  const apiClassId = resolvePrepApiClassId(classId);
   const token = getPortalToken('teacher') || '';
   const form = new FormData();
   form.append('file', file);
-  const r = await fetch(`/api/teacher/personal-classes/${classId}/demo/files`, {
+  const r = await fetch(`/api/teacher/personal-classes/${apiClassId}/demo/files`, {
     method: 'POST',
     headers: token ? { Authorization: `Bearer ${token}` } : {},
     body: form,

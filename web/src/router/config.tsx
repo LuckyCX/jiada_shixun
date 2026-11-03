@@ -2,7 +2,7 @@ import { lazy } from 'react';
 import { RouteObject } from 'react-router-dom';
 import { USER_GUIDE_PATH } from '../lib/appPaths';
 import RequireRole from './RequireRole';
-import RequireStudentPersonalClass from './RequireStudentPersonalClass';
+import StudentCenterGate from './StudentCenterGate';
 
 const HomePage = lazy(() => import('../pages/home/page'));
 const TeamFormationPage = lazy(() => import('../pages/team-formation/page'));
@@ -18,7 +18,6 @@ const KnowledgeSystemPage = lazy(() => import('../pages/knowledge-system/page'))
 const FullStackToolsPage = lazy(() => import('../pages/full-stack-tools/page'));
 const IterationOptimizationPage = lazy(() => import('../pages/iteration-optimization/page'));
 const AIValidationPage = lazy(() => import('../pages/ai-validation/page'));
-const StudentCenterPage = lazy(() => import('../pages/student-center/page'));
 const AdminDashboardPage = lazy(() => import('../pages/admin-dashboard/page'));
 const AdminLoginPage = lazy(() => import('../pages/admin-login/page'));
 const NotFoundPage = lazy(() => import('../pages/NotFound'));
@@ -92,13 +91,7 @@ const routes: RouteObject[] = [
   },
   {
     path: '/student-center',
-    element: (
-      <RequireRole role="student">
-        <RequireStudentPersonalClass>
-          <StudentCenterPage />
-        </RequireStudentPersonalClass>
-      </RequireRole>
-    ),
+    element: <StudentCenterGate />,
   },
   {
     path: '/admin-dashboard',

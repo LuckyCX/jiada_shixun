@@ -81,10 +81,22 @@ export function requireAuth() {
   };
 }
 
+/** 超管或子管理员均可进入管理端（细粒度菜单在业务层再拦） */
 export function requireAdmin() {
   return (req, res, next) => {
-    if (!req.user || req.user.role !== 'admin') {
+    const role = req.user?.role;
+    if (!req.user || (role !== 'admin' && role !== 'sub_admin')) {
       return res.status(403).json({ code: 40301, message: '需要管理员权限', data: null, traceId: req.traceId });
+    }
+    next();
+  };
+}
+
+/** 仅平台超管（创建子管理员、改全局敏感配置等） */
+export function requireSuperAdmin() {
+  return (req, res, next) => {
+    if (!req.user || req.user.role !== 'admin') {
+      return res.status(403).json({ code: 40301, message: '需要超级管理员权限', data: null, traceId: req.traceId });
     }
     next();
   };

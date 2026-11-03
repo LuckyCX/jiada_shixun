@@ -40,6 +40,8 @@ CREATE TABLE users (
   employee_no     varchar(64),
   department      varchar(128),
   avatar_url      varchar(500),
+  -- 子管理员额外菜单权限 JSON 数组，如 ["college-management","class-management"]
+  admin_menu_perms jsonb NOT NULL DEFAULT '[]'::jsonb,
   last_login_at   timestamptz,
   created_at      timestamptz NOT NULL DEFAULT now(),
   updated_at      timestamptz NOT NULL DEFAULT now()

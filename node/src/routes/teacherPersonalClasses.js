@@ -326,6 +326,7 @@ router.get('/teacher/personal-classes', requireAuth(), requireTeacher(), async (
                WHERE s.teacher_personal_class_id = t.id) AS "studentCount"
        FROM teacher_personal_classes t
        WHERE t.teacher_id = $1
+         AND COALESCE(t.purpose, 'normal') <> 'prep'
        ORDER BY t.created_at ASC, t.id ASC
        LIMIT 500`,
       [tid]
@@ -348,6 +349,53 @@ router.get('/teacher/personal-classes', requireAuth(), requireTeacher(), async (
   }
 });
 
+/**
+ * 确保教师有一节「备课班壳」：只用于演示 AI/文件鉴权，学生端进度仍在浏览器本地。
+ */
+router.post('/teacher/prep-student-portal/ensure', requireAuth(), requireTeacher(), async (req, res) => {
+  try {
+    const tid = teacherIdFromReq(req);
+    if (!tid) return bad(req, res, 400, 40001, '无效用户');
+    const pool = getPool();
+    const { rows: existing } = await pool.query(
+      `SELECT id, name FROM teacher_personal_classes
+       WHERE teacher_id = $1 AND purpose = 'prep'
+       ORDER BY id ASC LIMIT 1`,
+      [tid]
+    );
+    if (existing.length) {
+      return ok(req, res, {
+        prepClassId: String(existing[0].id),
+        className: existing[0].name || '备课·学生端',
+      });
+    }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query(
+        `INSERT INTO teacher_personal_classes (teacher_id, name, purpose)
+         VALUES ($1, $2, 'prep')
+         RETURNING id, name`,
+        [tid, '备课·学生端']
+      );
+      await seedDefaultTeamFormationQuestions(client, rows[0].id);
+      await client.query('COMMIT');
+      return ok(req, res, {
+        prepClassId: String(rows[0].id),
+        className: rows[0].name || '备课·学生端',
+      });
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+  } catch (e) {
+    logError(`POST /api/teacher/prep-student-portal/ensure traceId=${req.traceId}`, e);
+    return bad(req, res, 500, 50000, e.message);
+  }
+});
+
 router.post('/teacher/personal-classes', requireAuth(), requireTeacher(), async (req, res) => {
   try {
     const tid = teacherIdFromReq(req);
@@ -366,8 +414,8 @@ router.post('/teacher/personal-classes', requireAuth(), requireTeacher(), async 
     try {
       await client.query('BEGIN');
       const { rows } = await client.query(
-        `INSERT INTO teacher_personal_classes (teacher_id, name, academic_year, semester)
-         VALUES ($1, $2, $3, $4)
+        `INSERT INTO teacher_personal_classes (teacher_id, name, academic_year, semester, purpose)
+         VALUES ($1, $2, $3, $4, 'normal')
          RETURNING id, name, academic_year AS "academicYear", semester, created_at AS "createdAt"`,
         [tid, name, academicYear, semester]
       );

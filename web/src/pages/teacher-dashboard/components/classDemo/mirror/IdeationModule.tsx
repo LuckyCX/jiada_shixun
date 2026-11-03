@@ -85,6 +85,8 @@ type IdeationModuleProps = {
   onCheckTeamPrerequisites?: () => Promise<StudentIdeationPrerequisiteMember[]>;
   onOpenLearningResource?: (resource: IdeationLearningResource) => void;
   onTaskComplete?: () => void;
+  /** 备课顶栏额外占高时，下调对话框视口高度 */
+  chatFrameHeightClass?: string;
 };
 
 const DEFAULT_CATEGORY_COLOR = '#8b5cf6';
@@ -209,6 +211,7 @@ export default function IdeationModule({
   onCheckTeamPrerequisites,
   onOpenLearningResource,
   onTaskComplete,
+  chatFrameHeightClass,
 }: IdeationModuleProps) {
   const [topicForm] = Form.useForm<IdeationTopicFormValues>();
   const [activeTab, setActiveTab] = useState<IdeationModuleTab>(initialTab || 'methods');
@@ -775,6 +778,7 @@ export default function IdeationModule({
               onMethodChange={setActiveMethod}
               api={demoMethodChatApi}
               persistThreadsKey={`class-demo:${classId}`}
+              frameHeightClass={chatFrameHeightClass}
               onIdeaCreated={(idea) => {
                 setIdeas((prev) => [idea, ...prev.filter((item) => item.id !== idea.id)]);
                 setExpandedAnalysis(idea.id);

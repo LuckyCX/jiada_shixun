@@ -6,7 +6,7 @@ import { logError } from '../lib/logError.js';
 import { humanizeSmtpError, sendSmtpTestMail } from '../lib/mailProvider.js';
 import { sendSmsCode } from '../lib/smsProvider.js';
 import { friendlyLlmErrorMessage, testLlmConnectivity } from '../lib/llmGateway.js';
-import { requireAuth, requireAdmin } from '../middleware/auth.js';
+import { requireAuth, requireAdmin, requireSuperAdmin } from '../middleware/auth.js';
 import { insertAdminOperationLog } from '../lib/adminOperationLog.js';
 import { validatePasswordStrength } from '../lib/passwordPolicy.js';
 import { signAccessToken, signRefreshToken } from '../lib/authTokens.js';
@@ -56,6 +56,15 @@ router.get('/admin/system-config', requireAuth(), requireAdmin(), async (req, re
   try {
     const all = await getAllConfigRaw();
     const masked = maskConfigForAdmin(all);
+    // 子管理员仅可见站点品牌配置
+    if (req.user?.role === 'sub_admin') {
+      return res.json({
+        code: 0,
+        message: 'OK',
+        data: { site: masked.site },
+        traceId: req.traceId,
+      });
+    }
     return res.json({ code: 0, message: 'OK', data: masked, traceId: req.traceId });
   } catch (e) {
     logError(`GET /api/admin/system-config traceId=${req.traceId}`, e);
@@ -68,6 +77,18 @@ router.patch('/admin/system-config', requireAuth(), requireAdmin(), async (req, 
     const patches = req.body?.patches;
     if (!patches || typeof patches !== 'object') {
       return res.status(400).json({ code: 40001, message: 'patches 必须为对象', data: null, traceId: req.traceId });
+    }
+    // 子管理员只允许改站点品牌
+    if (req.user?.role === 'sub_admin') {
+      const keys = Object.keys(patches);
+      if (keys.length !== 1 || keys[0] !== 'site') {
+        return res.status(403).json({
+          code: 40301,
+          message: '子管理员仅可修改站点品牌配置',
+          data: null,
+          traceId: req.traceId,
+        });
+      }
     }
     const userId = Number(req.user.sub);
     await patchConfig(patches, userId);
@@ -182,6 +203,96 @@ router.post('/admin/system-config/test-llm-file-processing', requireAuth(), requ
   return handleTestLlm(req, res, 'file_processing');
 });
 
+/** 当前登录管理端账号资料（含子管理员菜单权限） */
+router.get('/admin/me', requireAuth(), requireAdmin(), async (req, res) => {
+  try {
+    const adminId = Number(req.user?.sub);
+    if (!Number.isFinite(adminId) || adminId <= 0) {
+      return res.status(400).json({ code: 40001, message: '无效管理员', data: null, traceId: req.traceId });
+    }
+    const { rows } = await getPool().query(
+      `SELECT id, username, real_name AS "realName", role, admin_menu_perms AS "adminMenuPerms"
+       FROM users WHERE id = $1 AND role IN ('admin', 'sub_admin')`,
+      [adminId]
+    );
+    if (!rows.length) {
+      return res.status(404).json({ code: 40401, message: '账号不存在', data: null, traceId: req.traceId });
+    }
+    const r = rows[0];
+    const perms = Array.isArray(r.adminMenuPerms) ? r.adminMenuPerms.map(String) : [];
+    return res.json({
+      code: 0,
+      message: 'OK',
+      data: {
+        id: String(r.id),
+        username: r.username,
+        realName: r.realName || '',
+        role: r.role,
+        adminMenuPerms: perms,
+      },
+      traceId: req.traceId,
+    });
+  } catch (e) {
+    logError(`GET /api/admin/me traceId=${req.traceId}`, e);
+    return res.status(500).json({ code: 50000, message: e.message, data: null, traceId: req.traceId });
+  }
+});
+
+/**
+ * 超管创建子管理员。
+ * body: username, password, realName?, adminMenuPerms?: string[]
+ */
+router.post('/admin/sub-admins', requireAuth(), requireSuperAdmin(), async (req, res) => {
+  try {
+    const username = String(req.body?.username || '').trim();
+    const password = String(req.body?.password || '');
+    const realName = String(req.body?.realName || '').trim();
+    const rawPerms = Array.isArray(req.body?.adminMenuPerms) ? req.body.adminMenuPerms : [];
+    const allowed = new Set(['college-management', 'class-management']);
+    const adminMenuPerms = [...new Set(rawPerms.map(String).filter((x) => allowed.has(x)))];
+    if (!username) {
+      return res.status(400).json({ code: 40001, message: '请输入用户名', data: null, traceId: req.traceId });
+    }
+    const strength = validatePasswordStrength(password);
+    if (!strength.ok) {
+      return res.status(400).json({ code: 40020, message: strength.message, data: null, traceId: req.traceId });
+    }
+    const password_hash = await bcrypt.hash(password, 10);
+    const { rows } = await getPool().query(
+      `INSERT INTO users (username, password_hash, real_name, role, status, admin_menu_perms)
+       VALUES ($1, $2, $3, 'sub_admin', 'active', $4::jsonb)
+       RETURNING id, username, real_name AS "realName", role, admin_menu_perms AS "adminMenuPerms"`,
+      [username, password_hash, realName || null, JSON.stringify(adminMenuPerms)]
+    );
+    const r = rows[0];
+    await insertAdminOperationLog({
+      operatorId: Number(req.user.sub),
+      module: 'sub_admin',
+      action: 'create',
+      detailText: `创建子管理员 ${username}`,
+      detailJson: { id: r.id, adminMenuPerms },
+    });
+    return res.json({
+      code: 0,
+      message: '已创建子管理员',
+      data: {
+        id: String(r.id),
+        username: r.username,
+        realName: r.realName || '',
+        role: r.role,
+        adminMenuPerms: Array.isArray(r.adminMenuPerms) ? r.adminMenuPerms : adminMenuPerms,
+      },
+      traceId: req.traceId,
+    });
+  } catch (e) {
+    if (String(e?.code) === '23505') {
+      return res.status(400).json({ code: 40009, message: '用户名已存在', data: null, traceId: req.traceId });
+    }
+    logError(`POST /api/admin/sub-admins traceId=${req.traceId}`, e);
+    return res.status(500).json({ code: 50000, message: e.message, data: null, traceId: req.traceId });
+  }
+});
+
 /**
  * 当前管理员修改自己的登录密码：须校验旧密码，并确认两次新密码一致。
  */
@@ -212,7 +323,7 @@ router.post('/admin/me/password', requireAuth(), requireAdmin(), async (req, res
     }
 
     const { rows } = await getPool().query(
-      `SELECT id, username, role, password_hash FROM users WHERE id = $1 AND role = 'admin'`,
+      `SELECT id, username, role, password_hash FROM users WHERE id = $1 AND role IN ('admin', 'sub_admin')`,
       [adminId]
     );
     if (!rows.length) {
@@ -224,10 +335,10 @@ router.post('/admin/me/password', requireAuth(), requireAdmin(), async (req, res
     }
 
     const password_hash = await bcrypt.hash(newPassword, 10);
-    await getPool().query(`UPDATE users SET password_hash = $1, updated_at = now() WHERE id = $2 AND role = 'admin'`, [
-      password_hash,
-      adminId,
-    ]);
+    await getPool().query(
+      `UPDATE users SET password_hash = $1, updated_at = now() WHERE id = $2 AND role IN ('admin', 'sub_admin')`,
+      [password_hash, adminId]
+    );
     await insertAdminOperationLog({
       operatorId: adminId,
       module: 'admin_account',

@@ -118,8 +118,8 @@ function toLearningResource(file: CourseResourceFile, classId: string): Learning
   };
 }
 
-/** 看板完成状态只看本次演示缓存，不读学生成绩。 */
-function stageDone(state: DemoState, key: string) {
+/** 看板/侧栏完成状态只看本次演示缓存，不读学生成绩。 */
+export function stageDone(state: DemoState, key: string) {
   const flows = state.flows || {};
   if (key === 'team') return state.team.confirmed || state.teamSession.status === 'grouped';
   const ideation = flows.ideation as { topic?: { status?: string } | null } | undefined;
@@ -156,6 +156,60 @@ export function DemoOverview({
   const overall = Math.round((completedCount / Math.max(stages.length, 1)) * 100);
   const currentLabel = stages[currentIndex >= 0 ? currentIndex : stages.length - 1]?.name || '—';
   const [panel, setPanel] = useState<'notifications' | 'tasks'>('notifications');
+  // 备课进度看板：通知用假数据展示样式；团队读本地 demo 状态
+  const fakeNotices = useMemo(
+    () => [
+      {
+        id: 'prep-notice-1',
+        title: '备课模式提示',
+        content: '当前为教师备课学生端，操作数据仅保存在本机浏览器，不会写入正式学生库。',
+        timestamp: '刚刚',
+        isRead: false,
+        category: '系统',
+      },
+      {
+        id: 'prep-notice-2',
+        title: '实训任务提醒',
+        content: '请按侧栏顺序体验各实训模块；完成后侧栏会显示 ✅，便于核对备课路径。',
+        timestamp: '今天 09:00',
+        isRead: false,
+        category: '任务',
+      },
+      {
+        id: 'prep-notice-3',
+        title: '组队与审核',
+        content: '可在「组队建设」完成单人公司后，到侧栏「任务与审核」自查选题/BMC/计划提交效果。',
+        timestamp: '昨天 18:30',
+        isRead: true,
+        category: '团队',
+      },
+    ],
+    []
+  );
+  const fakeTasks = useMemo(
+    () => [
+      {
+        id: 'prep-task-1',
+        title: '完成创新思维选题确认',
+        module: '创新思维',
+        priority: 'high' as const,
+        completed: false,
+      },
+      {
+        id: 'prep-task-2',
+        title: '体验虚拟董事会一轮讨论',
+        module: '商业模式',
+        priority: 'normal' as const,
+        completed: Boolean(state.business?.warroom),
+      },
+    ],
+    [state.business?.warroom]
+  );
+  const teamConfirmed = Boolean(state.team?.confirmed || state.team?.name || state.teamSession?.teamName);
+  const teamDisplayName = state.team?.name || state.teamSession?.teamName || '备课单人公司';
+  const teamMembers = state.team?.members?.length
+    ? state.team.members
+    : [{ id: 'demo-student', name: '演示学员', role: '负责人' }];
 
   const renderStep = (stage: CourseSettingStage, index: number, mobile: boolean) => {
     const isCompleted = doneFlags[index];
@@ -277,23 +331,136 @@ export function DemoOverview({
         <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <h3 className="text-base font-bold text-gray-900 flex items-center gap-2"><i className="ri-todo-line text-teal-600"></i>通知•待办任务</h3>
           <div className="grid grid-cols-2 gap-1 bg-gray-100 rounded-xl p-1 md:flex">
-            <button type="button" onClick={() => setPanel('notifications')} className={`px-3 py-2 md:py-1.5 text-xs font-medium rounded-lg cursor-pointer ${panel === 'notifications' ? 'bg-white text-teal-600 shadow-sm' : 'text-gray-500'}`}>通知</button>
-            <button type="button" onClick={() => setPanel('tasks')} className={`px-3 py-2 md:py-1.5 text-xs font-medium rounded-lg cursor-pointer ${panel === 'tasks' ? 'bg-white text-teal-600 shadow-sm' : 'text-gray-500'}`}>任务 0</button>
+            <button type="button" onClick={() => setPanel('notifications')} className={`px-3 py-2 md:py-1.5 text-xs font-medium rounded-lg cursor-pointer ${panel === 'notifications' ? 'bg-white text-teal-600 shadow-sm' : 'text-gray-500'}`}>通知 {fakeNotices.filter((n) => !n.isRead).length || ''}</button>
+            <button type="button" onClick={() => setPanel('tasks')} className={`px-3 py-2 md:py-1.5 text-xs font-medium rounded-lg cursor-pointer ${panel === 'tasks' ? 'bg-white text-teal-600 shadow-sm' : 'text-gray-500'}`}>任务 {fakeTasks.filter((t) => !t.completed).length}</button>
           </div>
         </div>
         {panel === 'notifications' ? (
-          <div className="py-8 text-center">
-            <div className="w-14 h-14 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-3">
-              <i className="ri-notification-line text-2xl text-gray-400"></i>
-            </div>
-            <p className="text-sm font-medium text-gray-700">暂无系统通知</p>
+          <div className="space-y-2.5">
+            {fakeNotices.map((notice) => (
+              <div
+                key={notice.id}
+                className={`flex flex-wrap items-start gap-3 p-3.5 rounded-xl border transition-all md:flex-nowrap ${
+                  notice.isRead ? 'border-gray-100 bg-gray-50/50' : 'border-teal-200 bg-teal-50/50'
+                }`}
+              >
+                <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-teal-500 to-cyan-600 flex items-center justify-center flex-shrink-0">
+                  <i className="ri-notification-3-line text-white text-sm"></i>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-0.5 flex-wrap">
+                    <span className="font-semibold text-gray-900 text-sm truncate">{notice.title}</span>
+                    <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-teal-50 text-teal-700">{notice.category}</span>
+                    {!notice.isRead ? (
+                      <span className="px-1.5 py-0.5 bg-red-100 text-red-600 rounded text-xs font-bold">未读</span>
+                    ) : null}
+                  </div>
+                  <p className="text-xs text-gray-500 line-clamp-2">{notice.content}</p>
+                  <div className="text-xs text-gray-400 mt-1">{notice.timestamp}</div>
+                </div>
+              </div>
+            ))}
+            <p className="text-[11px] text-gray-400 pt-1">以上为备课演示假数据，正式学生端展示真实通知</p>
           </div>
         ) : (
-          <div className="py-8 text-center">
-            <div className="w-14 h-14 bg-green-50 rounded-full flex items-center justify-center mx-auto mb-3">
-              <i className="ri-checkbox-circle-line text-2xl text-green-500"></i>
+          <div className="space-y-2.5">
+            {fakeTasks.map((task) => {
+              const urgent = task.priority === 'high';
+              if (task.completed) {
+                return (
+                  <div key={task.id} className="flex items-center gap-3 p-3.5 rounded-xl border border-gray-100 bg-gray-50/70 opacity-70">
+                    <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 bg-gray-200 text-gray-500">
+                      <i className="ri-task-line text-sm"></i>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-0.5 flex-wrap">
+                        <span className="font-semibold text-gray-600 text-sm truncate">{task.title}</span>
+                        <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-500">已完成</span>
+                      </div>
+                      <div className="text-xs text-gray-400"><i className="ri-folder-line mr-1"></i>{task.module}</div>
+                    </div>
+                  </div>
+                );
+              }
+              return (
+                <div
+                  key={task.id}
+                  className={`flex flex-wrap items-center gap-3 p-3.5 rounded-xl border transition-all md:flex-nowrap ${
+                    urgent ? 'border-red-200 bg-red-50/40' : 'border-gray-100 bg-gray-50/50'
+                  }`}
+                >
+                  <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${urgent ? 'bg-red-100 text-red-600' : 'bg-teal-100 text-teal-600'}`}>
+                    <i className="ri-task-line text-sm"></i>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-0.5 flex-wrap">
+                      <span className="font-semibold text-gray-900 text-sm truncate">{task.title}</span>
+                      {urgent ? (
+                        <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-red-100 text-red-600">紧急</span>
+                      ) : null}
+                    </div>
+                    <div className="text-xs text-gray-400"><i className="ri-folder-line mr-1"></i>{task.module}</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onOpenStage(task.module === '商业模式' ? 'business' : 'ideation')}
+                    className="px-2.5 py-1.5 bg-teal-500 text-white text-xs rounded-lg hover:bg-teal-600 cursor-pointer"
+                  >
+                    去完成
+                  </button>
+                </div>
+              );
+            })}
+            <p className="text-[11px] text-gray-400 pt-1">以上为备课演示假数据，正式学生端展示教师发布任务</p>
+          </div>
+        )}
+      </div>
+
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 md:p-6">
+        <h3 className="text-base font-bold text-gray-900 mb-4 flex items-center gap-2">
+          <i className="ri-team-line text-teal-600"></i>我的团队
+        </h3>
+        {teamConfirmed ? (
+          <div className="bg-gradient-to-br from-teal-500 to-cyan-600 rounded-xl p-4 md:p-5 text-white">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center backdrop-blur-sm flex-shrink-0">
+                  <i className="ri-team-line text-xl"></i>
+                </div>
+                <div className="min-w-0">
+                  <h4 className="font-bold truncate">{teamDisplayName}</h4>
+                  <p className="text-teal-100 text-xs">{teamMembers.length} 名成员 · 备课本地数据</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => onOpenStage('team')}
+                className="w-full md:w-auto px-3 py-2 md:py-1.5 bg-white/20 hover:bg-white/30 text-white rounded-lg text-sm font-medium transition-all cursor-pointer text-center"
+              >
+                <i className="ri-arrow-right-line mr-1"></i>进入团队管理
+              </button>
             </div>
-            <p className="text-sm font-medium text-gray-700">暂无任务</p>
+            <div className="mt-4 grid grid-cols-2 gap-3 max-w-md">
+              <div className="bg-white/10 rounded-lg p-3 text-center">
+                <div className="text-lg font-bold mb-0.5">{teamMembers.length}</div>
+                <div className="text-xs text-teal-100">团队成员</div>
+              </div>
+              <div className="bg-white/10 rounded-lg p-3 text-center">
+                <div className="text-lg font-bold mb-0.5">{state.team.mode === 'solo' ? '单人' : '组队'}</div>
+                <div className="text-xs text-teal-100">组队模式</div>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-xl border border-dashed border-gray-200 py-10 px-4 text-center">
+            <p className="text-sm text-gray-500 mb-3">完成组队后将在此显示团队信息</p>
+            <button
+              type="button"
+              onClick={() => onOpenStage('team')}
+              className="px-4 py-2 bg-teal-600 text-white text-sm rounded-lg hover:bg-teal-700 cursor-pointer"
+            >
+              前往组队与团队管理
+            </button>
           </div>
         )}
       </div>

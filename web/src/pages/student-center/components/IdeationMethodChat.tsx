@@ -388,6 +388,11 @@ type Props = {
    * 演示端务必传入（如 `class-demo:${classId}`）。
    */
   persistThreadsKey?: string;
+  /**
+   * 外层多了一截顶栏（如教师备课学生端）时覆盖高度，避免对话框超出视口。
+   * 默认按学生中心顶栏测算：h-[calc(100dvh-9rem)]
+   */
+  frameHeightClass?: string;
 };
 
 export default function IdeationMethodChat({
@@ -399,6 +404,7 @@ export default function IdeationMethodChat({
   api = defaultApi,
   hatStudioSlot,
   persistThreadsKey,
+  frameHeightClass = 'h-[calc(100dvh-9rem)]',
 }: Props) {
   const cacheKey = persistThreadsKey?.trim() || '';
   const [threads, setThreads] = useState<Partial<Record<IdeationChatMethodKey, ThreadState>>>(() =>
@@ -867,7 +873,7 @@ export default function IdeationMethodChat({
       : hatStudioSlot;
 
   return (
-    <div className="ideation-method-chat w-full bg-white rounded-2xl shadow-sm border border-gray-100 flex flex-col min-h-0 h-[calc(100dvh-9rem)] min-h-[360px] select-text ">
+    <div className={`ideation-method-chat w-full bg-white rounded-2xl shadow-sm border border-gray-100 flex flex-col min-h-0 min-h-[360px] select-text ${frameHeightClass}`}>
       {/* 六帽：整卡高度给双栏，输入收进左侧；其它方法：消息区 + 底栏 */}
       {hatSlot ? (
         <div className={`flex-1 min-h-0 overflow-hidden px-3 py-2 ${isSixHats ? 'flex flex-col' : 'hidden'}`}>

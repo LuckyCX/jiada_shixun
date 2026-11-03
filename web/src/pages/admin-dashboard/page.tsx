@@ -1,9 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { message, Modal } from 'antd';
 import AppModalPortal from '../../components/AppModalPortal';
 import { useSiteBrand } from '../../lib/publicSite';
 import Overview from './components/overview';
+import TeachingDrillPanel from './components/teachingDrill';
 import ClassManagement from './components/classManagement';
 import CollegeManagement from './components/collegeManagement';
 import OperationLog from './components/operationLog';
@@ -16,7 +17,8 @@ import AiTutorAdmin from './components/aiTutor/AiTutorAdmin';
 import DictItemManage from './components/dictionary/DictItemManage';
 import AdminUsersPanel from './components/userManagement/AdminUsersPanel';
 import ClassDemoFiles from './components/classDemoFiles';
-import { clearAdminToken, getPortalToken, redirectAdminSessionExpired } from '../../lib/authApi';
+import { clearAdminToken, getPortalToken, parseJwtPayload, portalAuthenticatedFetch, redirectAdminSessionExpired } from '../../lib/authApi';
+import { resolveAdminVisibleMenus } from '../../lib/adminMenuPerms';
 
 type TabType =
   | 'overview'
@@ -59,6 +61,31 @@ export default function AdminDashboard() {
 
   const [dictItemTypeName, setDictItemTypeName] = useState('');
   const [collegeTeachersHint, setCollegeTeachersHint] = useState('');
+  const [adminRole, setAdminRole] = useState<string>('admin');
+  const [adminMenuPerms, setAdminMenuPerms] = useState<string[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void portalAuthenticatedFetch('admin', '/api/admin/me')
+      .then((data: { role?: string; adminMenuPerms?: string[] }) => {
+        if (cancelled) return;
+        setAdminRole(String(data?.role || parseJwtPayload(getPortalToken('admin') || '')?.role || 'admin'));
+        setAdminMenuPerms(Array.isArray(data?.adminMenuPerms) ? data.adminMenuPerms.map(String) : []);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        const r = parseJwtPayload(getPortalToken('admin') || '')?.role || 'admin';
+        setAdminRole(String(r));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const visibleMenus = useMemo(
+    () => resolveAdminVisibleMenus(adminRole, adminMenuPerms),
+    [adminRole, adminMenuPerms]
+  );
 
   useEffect(() => {
     const raw = searchParams.get('tab');
@@ -158,16 +185,24 @@ export default function AdminDashboard() {
     navigate(`/admin-dashboard?tab=${tab}`);
   };
 
-  const menuItems = [
-    { id: 'overview' as TabType, label: '数据概览', icon: 'ri-dashboard-line' },
-    { id: 'college-management' as TabType, label: '学院管理', icon: 'ri-building-4-line' },
-    { id: 'class-management' as TabType, label: '班级管理', icon: 'ri-team-line' },
-    { id: 'dictionary' as TabType, label: '字典管理', icon: 'ri-booklet-line' },
-    { id: 'system-config' as TabType, label: '系统配置', icon: 'ri-settings-3-line' },
-    { id: 'ai-model' as TabType, label: 'AI 模型', icon: 'ri-robot-2-line' },
-    { id: 'operation-log' as TabType, label: '操作日志', icon: 'ri-history-line' },
-    { id: 'class-demo-files' as TabType, label: '演示记录', icon: 'ri-folder-upload-line' },
-  ];
+  const menuItems = (
+    [
+      { id: 'overview' as TabType, label: '数据概览', icon: 'ri-dashboard-line' },
+      { id: 'college-management' as TabType, label: '学院管理', icon: 'ri-building-4-line' },
+      { id: 'class-management' as TabType, label: '班级管理', icon: 'ri-team-line' },
+      { id: 'dictionary' as TabType, label: '字典管理', icon: 'ri-booklet-line' },
+      { id: 'system-config' as TabType, label: '系统配置', icon: 'ri-settings-3-line' },
+      { id: 'ai-model' as TabType, label: 'AI 模型', icon: 'ri-robot-2-line' },
+      { id: 'operation-log' as TabType, label: '操作日志', icon: 'ri-history-line' },
+      { id: 'class-demo-files' as TabType, label: '演示记录', icon: 'ri-folder-upload-line' },
+    ] as const
+  ).filter((m) => visibleMenus.has(m.id));
+
+  useEffect(() => {
+    if (!visibleMenus.has(activeTab) && !['college-teachers', 'class-students', 'dictionary-items', 'course-resource'].includes(activeTab)) {
+      navigate('/admin-dashboard?tab=overview', { replace: true });
+    }
+  }, [activeTab, visibleMenus, navigate]);
 
   const getBreadcrumb = () => {
     if (activeTab === 'dictionary-items') {
@@ -333,7 +368,15 @@ export default function AdminDashboard() {
 
         {/* 内容区域 */}
         <main className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-6">
-          {activeTab === 'overview' && <Overview />}
+          {activeTab === 'overview' &&
+            (adminRole === 'sub_admin' ? (
+              <TeachingDrillPanel />
+            ) : (
+              <div className="space-y-8">
+                <Overview />
+                <TeachingDrillPanel />
+              </div>
+            ))}
           {activeTab === 'college-management' && <CollegeManagement />}
           {activeTab === 'class-management' && <ClassManagement />}
           {activeTab === 'college-teachers' && /^\d+$/.test(collegeTeachersId) && (

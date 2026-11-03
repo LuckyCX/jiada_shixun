@@ -209,8 +209,43 @@ export function emptyDemoState(): DemoState {
   };
 }
 
+/** 与 teacherPrepMode 同源，避免循环依赖 */
+const PREP_SESSION_KEY = 'jiada_teacher_prep_active_v1';
+
+/**
+ * 备课态下页面传入的是真实 prepClassId（给 API 用），
+ * 本地进度仍落到 teacher-prep-{teacherId}，按教师账号隔离。
+ */
+function resolveStorageClassId(classId: string): string {
+  const id = String(classId || '');
+  if (id.startsWith('teacher-prep-')) return id;
+  if (typeof window === 'undefined') return id;
+  try {
+    const raw = sessionStorage.getItem(PREP_SESSION_KEY);
+    if (!raw) return id;
+    const j = JSON.parse(raw) as { teacherId?: string; prepClassId?: string };
+    if (j?.prepClassId && String(j.prepClassId) === id && j.teacherId) {
+      return `teacher-prep-${String(j.teacherId)}`;
+    }
+  } catch {
+    /* ignore */
+  }
+  return id;
+}
+
 function storageKey(classId: string) {
-  return `teacher-class-demo:v1:${classId}`;
+  const sid = resolveStorageClassId(classId);
+  if (sid.startsWith('teacher-prep-')) {
+    return `teacher-prep-student:v1:${sid}`;
+  }
+  return `teacher-class-demo:v1:${sid}`;
+}
+
+function storageFor(classId: string): Storage {
+  if (typeof window === 'undefined') {
+    throw new Error('demoStore 仅可在浏览器使用');
+  }
+  return resolveStorageClassId(classId).startsWith('teacher-prep-') ? localStorage : sessionStorage;
 }
 
 /** sessionStorage 大约 5MB，超长 AI 文本截断，避免整页保存失败。 */
@@ -268,10 +303,19 @@ export function updateDemoState(classId: string, updater: (prev: DemoState) => D
   return next;
 }
 
+export function hasDemoState(classId: string): boolean {
+  if (!classId || typeof window === 'undefined') return false;
+  try {
+    return Boolean(storageFor(classId).getItem(storageKey(classId)));
+  } catch {
+    return false;
+  }
+}
+
 export function loadDemoState(classId: string): DemoState {
   if (!classId) return emptyDemoState();
   try {
-    const raw = sessionStorage.getItem(storageKey(classId));
+    const raw = storageFor(classId).getItem(storageKey(classId));
     if (!raw) return emptyDemoState();
     const parsed = JSON.parse(raw) as { v?: number; state?: DemoState };
     if (!parsed?.state) return emptyDemoState();
@@ -290,13 +334,17 @@ export function saveDemoState(classId: string, state: DemoState) {
     text = JSON.stringify({ v: 1, state: next });
   }
   try {
-    sessionStorage.setItem(storageKey(classId), text);
+    storageFor(classId).setItem(storageKey(classId), text);
   } catch (e) {
-    console.error('[classDemo] 写入 sessionStorage 失败', e);
+    console.error('[classDemo] 写入本地存储失败', e);
     throw new Error('演示数据过大，浏览器无法保存。请缩短文本后再试。');
   }
 }
 
 export function clearDemoState(classId: string) {
-  sessionStorage.removeItem(storageKey(classId));
+  try {
+    storageFor(classId).removeItem(storageKey(classId));
+  } catch {
+    /* ignore */
+  }
 }
