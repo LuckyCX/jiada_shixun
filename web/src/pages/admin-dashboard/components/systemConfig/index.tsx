@@ -349,6 +349,10 @@ export default function SystemConfigPanel() {
     adminMenuPerms: [] as string[],
   });
   const [editingSubAdmin, setEditingSubAdmin] = useState<SubAdminRow | null>(null);
+  const [resetPwdTarget, setResetPwdTarget] = useState<SubAdminRow | null>(null);
+  const [resetPwdValue, setResetPwdValue] = useState('');
+  const [resetPwdConfirm, setResetPwdConfirm] = useState('');
+  const [resetPwdSaving, setResetPwdSaving] = useState(false);
 
   useEffect(() => {
     const hit = ALIYUN_SMS_REGION_OPTIONS.find(
@@ -540,6 +544,41 @@ export default function SystemConfigPanel() {
       await loadSubAdmins();
     } catch (e) {
       messageApi.error((e as Error).message || '操作失败');
+    }
+  };
+
+  const openResetSubAdminPassword = (row: SubAdminRow) => {
+    setResetPwdTarget(row);
+    setResetPwdValue('');
+    setResetPwdConfirm('');
+  };
+
+  const submitResetSubAdminPassword = async () => {
+    if (!token || !resetPwdTarget) return;
+    const strength = validatePasswordStrength(resetPwdValue);
+    if (!strength.ok) {
+      messageApi.warning(PASSWORD_POLICY_HINT);
+      return;
+    }
+    if (resetPwdValue !== resetPwdConfirm) {
+      messageApi.warning('两次输入的新密码不一致');
+      return;
+    }
+    setResetPwdSaving(true);
+    try {
+      await apiFetch(`/api/admin/sub-admins/${resetPwdTarget.id}/reset-password`, {
+        method: 'POST',
+        token,
+        body: JSON.stringify({ password: resetPwdValue }),
+      });
+      messageApi.success(`已重置「${resetPwdTarget.username}」的密码`);
+      setResetPwdTarget(null);
+      setResetPwdValue('');
+      setResetPwdConfirm('');
+    } catch (e) {
+      messageApi.error((e as Error).message || '重置失败');
+    } finally {
+      setResetPwdSaving(false);
     }
   };
 
@@ -1819,11 +1858,14 @@ export default function SystemConfigPanel() {
               {
                 title: '操作',
                 key: 'actions',
-                width: 180,
+                width: 240,
                 render: (_: unknown, row: SubAdminRow) => (
-                  <Space size="small">
+                  <Space size="small" wrap>
                     <Button type="link" size="small" onClick={() => openEditSubAdmin(row)}>
                       编辑
+                    </Button>
+                    <Button type="link" size="small" onClick={() => openResetSubAdminPassword(row)}>
+                      重置密码
                     </Button>
                     <Popconfirm
                       title={row.status === 'active' ? '确认停用该账号？' : '确认重新启用？'}
@@ -1838,6 +1880,38 @@ export default function SystemConfigPanel() {
               },
             ] satisfies TableColumnsType<SubAdminRow>}
           />
+          <Modal
+            title={resetPwdTarget ? `重置密码 · ${resetPwdTarget.username}` : '重置密码'}
+            open={Boolean(resetPwdTarget)}
+            onCancel={() => {
+              setResetPwdTarget(null);
+              setResetPwdValue('');
+              setResetPwdConfirm('');
+            }}
+            onOk={() => void submitResetSubAdminPassword()}
+            confirmLoading={resetPwdSaving}
+            destroyOnClose
+            okText="确认重置"
+          >
+            <Form layout="vertical" requiredMark={false} className="mt-2">
+              <Form.Item label="新密码" required extra={PASSWORD_POLICY_HINT}>
+                <Input.Password
+                  value={resetPwdValue}
+                  onChange={(e) => setResetPwdValue(e.target.value)}
+                  placeholder="输入新密码"
+                  autoComplete="new-password"
+                />
+              </Form.Item>
+              <Form.Item label="确认新密码" required>
+                <Input.Password
+                  value={resetPwdConfirm}
+                  onChange={(e) => setResetPwdConfirm(e.target.value)}
+                  placeholder="再次输入新密码"
+                  autoComplete="new-password"
+                />
+              </Form.Item>
+            </Form>
+          </Modal>
           <Modal
             title={editingSubAdmin ? '编辑子管理员' : '新建子管理员'}
             open={subAdminModalOpen}

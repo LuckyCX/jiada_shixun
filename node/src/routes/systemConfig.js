@@ -336,6 +336,47 @@ router.patch('/admin/sub-admins/:id', requireAuth(), requireSuperAdmin(), async 
 });
 
 /**
+ * 超管重置子管理员密码。
+ * body: password
+ */
+router.post('/admin/sub-admins/:id/reset-password', requireAuth(), requireSuperAdmin(), async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id) || id <= 0) {
+      return res.status(400).json({ code: 40001, message: '无效账号', data: null, traceId: req.traceId });
+    }
+    const password = String(req.body?.password || '');
+    const strength = validatePasswordStrength(password);
+    if (!strength.ok) {
+      return res.status(400).json({ code: 40020, message: strength.message, data: null, traceId: req.traceId });
+    }
+    const { rows: found } = await getPool().query(
+      `SELECT id, username FROM users WHERE id = $1 AND role = 'sub_admin'`,
+      [id]
+    );
+    if (!found.length) {
+      return res.status(404).json({ code: 40401, message: '子管理员不存在', data: null, traceId: req.traceId });
+    }
+    const password_hash = await bcrypt.hash(password, 10);
+    await getPool().query(
+      `UPDATE users SET password_hash = $1, updated_at = now() WHERE id = $2 AND role = 'sub_admin'`,
+      [password_hash, id]
+    );
+    await insertAdminOperationLog({
+      operatorId: Number(req.user.sub),
+      module: 'sub_admin',
+      action: 'reset_password',
+      detailText: `重置子管理员密码 ${found[0].username}`,
+      detailJson: { id },
+    });
+    return res.json({ code: 0, message: '密码已重置', data: { id: String(id) }, traceId: req.traceId });
+  } catch (e) {
+    logError(`POST /api/admin/sub-admins/:id/reset-password traceId=${req.traceId}`, e);
+    return res.status(500).json({ code: 50000, message: e.message, data: null, traceId: req.traceId });
+  }
+});
+
+/**
  * 超管创建子管理员。
  * body: username, password, realName?, adminMenuPerms?: string[]
  */

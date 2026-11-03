@@ -1,7 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { message, Modal } from 'antd';
-import AppModalPortal from '../../components/AppModalPortal';
 import { useSiteBrand } from '../../lib/publicSite';
 import Overview from './components/overview';
 import TeachingDrillPanel from './components/teachingDrill';
@@ -56,33 +55,57 @@ export default function AdminDashboard() {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<TabType>('overview');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [showNotifications, setShowNotifications] = useState(false);
   const [logoutModalOpen, setLogoutModalOpen] = useState(false);
 
   const [dictItemTypeName, setDictItemTypeName] = useState('');
   const [collegeTeachersHint, setCollegeTeachersHint] = useState('');
   const [adminRole, setAdminRole] = useState<string>('admin');
   const [adminMenuPerms, setAdminMenuPerms] = useState<string[]>([]);
+  const [adminProfile, setAdminProfile] = useState<{ username: string; realName: string }>({
+    username: '',
+    realName: '',
+  });
   /** 教学下钻进入队伍详情时隐藏概览，避免二级页被挤在下面 */
   const [teachingDrillDetail, setTeachingDrillDetail] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     void portalAuthenticatedFetch('admin', '/api/admin/me')
-      .then((data: { role?: string; adminMenuPerms?: string[] }) => {
+      .then((data: { role?: string; adminMenuPerms?: string[]; username?: string; realName?: string }) => {
         if (cancelled) return;
         setAdminRole(String(data?.role || parseJwtPayload(getPortalToken('admin') || '')?.role || 'admin'));
         setAdminMenuPerms(Array.isArray(data?.adminMenuPerms) ? data.adminMenuPerms.map(String) : []);
+        setAdminProfile({
+          username: String(data?.username || '').trim(),
+          realName: String(data?.realName || '').trim(),
+        });
       })
       .catch(() => {
         if (cancelled) return;
-        const r = parseJwtPayload(getPortalToken('admin') || '')?.role || 'admin';
+        const payload = parseJwtPayload(getPortalToken('admin') || '');
+        const r = payload?.role || 'admin';
         setAdminRole(String(r));
+        setAdminProfile({
+          username: String(payload?.username || '').trim(),
+          realName: '',
+        });
       });
     return () => {
       cancelled = true;
     };
   }, []);
+
+  const adminDisplayName =
+    adminProfile.realName ||
+    adminProfile.username ||
+    (adminRole === 'sub_admin' ? '子管理员' : '管理员');
+  const adminDisplaySub =
+    adminProfile.realName && adminProfile.username
+      ? `@${adminProfile.username}`
+      : adminRole === 'sub_admin'
+        ? '子管理员'
+        : '超级管理员';
+  const adminAvatarText = adminDisplayName.slice(0, 1) || '管';
 
   const visibleMenus = useMemo(
     () => resolveAdminVisibleMenus(adminRole, adminMenuPerms),
@@ -286,16 +309,20 @@ export default function AdminDashboard() {
           ))}
         </nav>
 
-        {/* 底部用户信息 */}
+        {/* 底部用户信息：展示当前登录超管/子管理员真实姓名与账号 */}
         <div className="p-4 border-t border-gray-200 shrink-0">
           <div className={`flex items-center gap-2.5 ${sidebarCollapsed ? 'justify-center' : ''}`}>
             <div className="w-10 h-10 bg-gradient-to-br from-purple-500 to-pink-500 rounded-full flex items-center justify-center flex-shrink-0">
-              <span className="text-white font-semibold text-sm">管</span>
+              <span className="text-white font-semibold text-sm">{adminAvatarText}</span>
             </div>
             {!sidebarCollapsed && (
               <div className="flex-1 min-w-0">
-                <div className="text-sm font-medium text-gray-900 truncate">管理员</div>
-                <div className="text-xs text-gray-500 truncate">admin@system.com</div>
+                <div className="text-sm font-medium text-gray-900 truncate" title={adminDisplayName}>
+                  {adminDisplayName}
+                </div>
+                <div className="text-xs text-gray-500 truncate" title={adminDisplaySub}>
+                  {adminDisplaySub}
+                </div>
               </div>
             )}
             <button
@@ -319,53 +346,10 @@ export default function AdminDashboard() {
             <span>/</span>
             <span className="text-gray-900 font-medium">{getBreadcrumb()}</span>
           </div>
-
-          <div className="flex items-center gap-4">
-            {/* 通知按钮 */}
-            <div className="relative">
-              <button
-                onClick={() => setShowNotifications(!showNotifications)}
-                className="w-10 h-10 flex items-center justify-center hover:bg-gray-100 rounded-lg transition-colors relative"
-              >
-                <i className="ri-notification-3-line text-gray-600 text-xl"></i>
-                <span className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full"></span>
-              </button>
-
-              {showNotifications && (
-                <>
-                  <AppModalPortal
-                    open={showNotifications}
-                    onMaskClick={() => setShowNotifications(false)}
-                    mask={false}
-                    zIndex={40}
-                    className="p-0"
-                  >
-                    {null}
-                  </AppModalPortal>
-                  <div className="absolute right-0 top-12 w-80 bg-white rounded-lg shadow-lg border border-gray-200 z-50">
-                    <div className="p-4 border-b border-gray-200">
-                      <h3 className="font-semibold text-gray-900">系统通知</h3>
-                    </div>
-                    <div className="max-h-96 overflow-y-auto">
-                      <div className="p-4 hover:bg-gray-50 cursor-pointer border-b border-gray-100">
-                        <div className="text-sm text-gray-900 mb-1">新增 50 个学生账号待激活</div>
-                        <div className="text-xs text-gray-500">5分钟前</div>
-                      </div>
-                      <div className="p-4 hover:bg-gray-50 cursor-pointer border-b border-gray-100">
-                        <div className="text-sm text-gray-900 mb-1">课程内容已更新，3 个小节已发布</div>
-                        <div className="text-xs text-gray-500">1小时前</div>
-                      </div>
-                      <div className="p-4 hover:bg-gray-50 cursor-pointer">
-                        <div className="text-sm text-gray-900 mb-1">系统将于今晚进行维护</div>
-                        <div className="text-xs text-gray-500">3小时前</div>
-                      </div>
-                    </div>
-                  </div>
-                </>
-              )}
-            </div>
-
-            {/* 返回首页 */}
+          <div className="flex items-center gap-3 text-xs text-gray-500">
+            <span className="hidden sm:inline truncate max-w-[200px]" title={adminDisplayName}>
+              {adminDisplayName}
+            </span>
           </div>
         </header>
 
