@@ -1146,9 +1146,18 @@ export default function IdeationModule({
                   <Form.Item name="projectName" label="项目名称" rules={[{ required: true, message: '请输入项目名称' }, { min: 5, message: '项目名称至少需要5个字' }]}>
                     <Input placeholder="为你的项目起一个响亮的名字" />
                   </Form.Item>
-                  <Form.Item name="projectDirection" label="项目方向" rules={[{ required: true, message: '请选择项目方向' }]}>
+                  <Form.Item
+                    name="projectDirection"
+                    label="项目方向"
+                    rules={[{ required: true, message: '请选择项目方向' }]}
+                    extra={
+                      !examplesLoading && projectDirectionOptions.length === 0
+                        ? '暂无可选方向。需任课教师先在「课程设置 → 创新思维」的实例库中新增方向后，这里才能选择。'
+                        : '选项来自教师在课程设置中维护的实例库方向'
+                    }
+                  >
                     <Select
-                      placeholder="请选择项目方向"
+                      placeholder={projectDirectionOptions.length === 0 ? '教师尚未维护项目方向' : '请选择项目方向'}
                       options={projectDirectionOptions}
                       loading={examplesLoading}
                       disabled={examplesLoading || projectDirectionOptions.length === 0}

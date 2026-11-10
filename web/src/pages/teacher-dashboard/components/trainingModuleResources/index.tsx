@@ -431,7 +431,9 @@ export default function TrainingModuleResources({ selectedModule: selectedModule
                 </>
               ) : (
                 <div className="flex-1 rounded-xl border border-dashed border-gray-200 p-12 text-center text-sm text-gray-500">
-                  {isPrototypeLibrary ? '请先新增案例分类' : '请先新增实例库方向'}
+                  {isPrototypeLibrary
+                    ? '请先新增案例分类'
+                    : '请先新增实例库方向。方向名称会成为学生「确定项目选题」里的项目方向，未维护则学生无法选择。'}
                 </div>
               )}
             </div>
