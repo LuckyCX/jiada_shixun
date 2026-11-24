@@ -32,6 +32,7 @@ import StudentClassSwitcher from './components/StudentClassSwitcher';
 import AiTutorPanel from '../../components/AiTutorPanel';
 import { appAlert } from '../../lib/appDialog';
 import { UserGuideContent } from '../user-guide/UserGuideContent';
+import PitchTemplateLibrary from '../pitch-templates/PitchTemplateLibrary';
 import TeamFormationModule from './components/TeamFormationModule';
 import IdeationModule, { type IdeationLearningResource, type IdeationModuleTab } from './components/IdeationModule';
 import MarketResearchModule from './components/MarketResearchModule';
@@ -128,6 +129,7 @@ type TabType =
   | 'archive'
   | 'knowledge'
   | 'guide'
+  | 'pitchTemplates'
   | 'notifications'
   | 'module-team'
   | 'module-ideation'
@@ -1258,6 +1260,7 @@ export default function StudentCenterPage() {
     // { key: 'ability' as TabType, label: '能力点管理', icon: 'ri-medal-line' },
     { key: 'archive' as TabType, label: '学习档案', icon: 'ri-folder-line' },
     { key: 'guide' as TabType, label: '实训指南', icon: 'ri-book-open-line' },
+    { key: 'pitchTemplates' as TabType, label: '创业路演模板库', icon: 'ri-slideshow-line' },
     // { key: 'notifications' as TabType, label: '消息通知', icon: 'ri-notification-line' },
   ];
 
@@ -2159,13 +2162,13 @@ export default function StudentCenterPage() {
           onClick={() => setMobileNavOpen(false)}
         />
       ) : null}
-      {/* 左侧侧边栏：手机为抽屉；桌面仍可按原宽度停靠 */}
+      {/* 左侧侧边栏：手机为抽屉；桌面为固定栏，撑满视口高度（对齐 teacher-dashboard 主布局） */}
       <aside
         className={`flex-shrink-0 bg-white border-r border-gray-100 shadow-sm flex-col transition-all duration-300 ${
           mobileNavOpen
             ? 'fixed inset-y-0 left-0 z-50 flex w-72 max-w-[85vw]'
-            : 'hidden'
-        } md:sticky md:top-0 md:z-30 md:flex md:h-screen md:max-h-screen md:self-start ${sidebarCollapsed ? 'md:w-16' : 'md:w-60'}`}
+            : 'hidden md:flex'
+        } ${sidebarCollapsed ? 'md:w-16' : 'md:w-60'}`}
       >
         <div className={`flex items-center gap-3 px-4 py-5 border-b border-gray-100 ${sidebarCollapsed ? 'justify-center' : ''}`}>
           {logoUrl ? (
@@ -2985,7 +2988,6 @@ export default function StudentCenterPage() {
                         <Tree
                           treeData={knowledgeChapterData.treeData}
                           selectedKeys={activeChapterId ? [activeChapterId] : []}
-                          defaultExpandAll
                           onSelect={(keys) => setSelectedChapterId(String(keys[0] || ''))}
                         />
                       ) : (
@@ -3209,6 +3211,12 @@ export default function StudentCenterPage() {
           {activeTab === 'guide' && (
             <div className="max-h-[calc(100vh-10rem)] overflow-y-auto rounded-2xl border border-slate-100 bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 px-4 py-3">
               <UserGuideContent embedded onNavigateStudentTab={(tab) => changeActiveTab(tab as TabType)} />
+            </div>
+          )}
+
+          {activeTab === 'pitchTemplates' && (
+            <div className="h-full">
+              <PitchTemplateLibrary />
             </div>
           )}
 

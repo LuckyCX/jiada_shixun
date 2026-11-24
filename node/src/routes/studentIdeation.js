@@ -99,6 +99,7 @@ async function teacherOwnsClass(pool, teacherId, classId) {
 }
 
 async function getConfirmedTeam(pool, studentId, classId) {
+  // 同一学生在同一班级若误入多个已确认团队，无稳定排序会落到空数据团队，造成「只有队长能看到」假象
   const { rows } = await pool.query(
     `SELECT t.id, t.name
      FROM teacher_personal_class_team_members m
@@ -106,10 +107,19 @@ async function getConfirmedTeam(pool, studentId, classId) {
      WHERE t.teacher_personal_class_id = $1
        AND m.student_id = $2
        AND t.grouping_status = 'confirmed'
-     LIMIT 1`,
+     ORDER BY
+       (SELECT COUNT(*)::int FROM teacher_personal_class_team_ideas i WHERE i.team_id = t.id) DESC,
+       (SELECT COUNT(*)::int FROM teacher_personal_class_team_discussions d WHERE d.team_id = t.id) DESC,
+       t.id ASC`,
     [classId, studentId]
   );
   if (!rows.length) return null;
+  if (rows.length > 1) {
+    logError(
+      `getConfirmedTeam ambiguous membership studentId=${studentId} classId=${classId} teamIds=${rows.map((r) => r.id).join(',')}`,
+      new Error('student_in_multiple_confirmed_teams')
+    );
+  }
   return { id: String(rows[0].id), name: rows[0].name };
 }
 

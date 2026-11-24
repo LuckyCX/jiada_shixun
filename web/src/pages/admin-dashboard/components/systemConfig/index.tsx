@@ -31,6 +31,7 @@ import { PASSWORD_POLICY_HINT, validatePasswordStrength } from '../../../../lib/
 import { notifySiteBrandUpdated, SITE_HERO_DEFAULTS } from '../../../../lib/publicSite';
 import { resizeImageFileTo128Png } from '../../../../lib/resizeLogoTo128';
 import { resizeImageFileForHeroBackground } from '../../../../lib/resizeHeroBackground';
+import PitchFileManager from './PitchFileManager';
 
 /** 设为 true 可恢复 RTC 配置 Tab（逻辑已保留：state / fillFromApi / saveRtc） */
 const SHOW_RTC_TAB = false;
@@ -50,7 +51,25 @@ type TabValue =
   | 'llm'
   | 'sub-admins'
   | 'password'
+  | 'resources'
   | (typeof SHOW_RTC_TAB extends true ? 'rtc' : never);
+
+/** 创业路演模板库索引摘要（管理端资源维护） */
+type PitchCatalogStatus = {
+  root?: string;
+  exists: boolean;
+  totalFiles: number;
+  categoryCount: number;
+  generatedAt: string | null;
+};
+
+/** 字节数格式化为可读大小 */
+function formatCacheBytes(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.min(units.length - 1, Math.floor(Math.log(n) / Math.log(1024)));
+  return `${(n / 1024 ** i).toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+}
 
 type SubAdminRow = {
   id: string;
@@ -327,6 +346,14 @@ export default function SystemConfigPanel() {
   /** 正在测试连通性的模型配置 id 或类型 key */
   const [llmTestingKey, setLlmTestingKey] = useState('');
 
+  /** 创业路演模板目录索引状态 */
+  const [pitchCatalog, setPitchCatalog] = useState<PitchCatalogStatus | null>(null);
+  const [pitchCatalogLoading, setPitchCatalogLoading] = useState(false);
+  const [previewCache, setPreviewCache] = useState<{ fileCount: number; totalBytes: number } | null>(null);
+  const [previewCacheLoading, setPreviewCacheLoading] = useState(false);
+  const [previewCacheClearing, setPreviewCacheClearing] = useState(false);
+  const [pitchRebuildLoading, setPitchRebuildLoading] = useState(false);
+
   const [pwdOld, setPwdOld] = useState('');
   const [pwdNew, setPwdNew] = useState('');
   const [pwdConfirm, setPwdConfirm] = useState('');
@@ -458,6 +485,96 @@ export default function SystemConfigPanel() {
   useEffect(() => {
     if (token && isSuperAdmin && activeTab === 'sub-admins') void loadSubAdmins();
   }, [token, isSuperAdmin, activeTab, loadSubAdmins]);
+
+  const loadPitchCatalog = useCallback(async () => {
+    if (!token || !isSuperAdmin) return;
+    setPitchCatalogLoading(true);
+    try {
+      const j = await apiFetch('/api/admin/pitch-templates/catalog-status', { token });
+      setPitchCatalog((j.data as PitchCatalogStatus) || null);
+    } catch (e) {
+      messageApi.error((e as Error).message || '读取模板目录状态失败');
+    } finally {
+      setPitchCatalogLoading(false);
+    }
+  }, [token, isSuperAdmin, messageApi]);
+
+  const loadPreviewCache = useCallback(async () => {
+    if (!token || !isSuperAdmin) return;
+    setPreviewCacheLoading(true);
+    try {
+      const j = await apiFetch('/api/admin/pitch-templates/preview-cache-status', { token });
+      setPreviewCache((j.data as { fileCount: number; totalBytes: number }) || null);
+    } catch (e) {
+      messageApi.error((e as Error).message || '读取预览缓存状态失败');
+    } finally {
+      setPreviewCacheLoading(false);
+    }
+  }, [token, isSuperAdmin, messageApi]);
+
+  useEffect(() => {
+    if (token && isSuperAdmin && activeTab === 'resources') {
+      void loadPitchCatalog();
+      void loadPreviewCache();
+    }
+  }, [token, isSuperAdmin, activeTab, loadPitchCatalog, loadPreviewCache]);
+
+  /** 超管手动重建创业路演模板目录（与部署脚本同一套扫描逻辑） */
+  const rebuildPitchCatalog = async () => {
+    if (!token) return;
+    setPitchRebuildLoading(true);
+    try {
+      const j = await apiFetch('/api/admin/pitch-templates/rebuild-catalog', {
+        token,
+        method: 'POST',
+        body: '{}',
+      });
+      const data = (j.data || {}) as PitchCatalogStatus & {
+        categoryCount?: number;
+        totalFiles?: number;
+        elapsedMs?: number;
+      };
+      setPitchCatalog({
+        exists: true,
+        root: data.root,
+        totalFiles: Number(data.totalFiles || 0),
+        categoryCount: Number(data.categoryCount || 0),
+        generatedAt: data.generatedAt || new Date().toISOString(),
+      });
+      const elapsed =
+        typeof data.elapsedMs === 'number' ? `，耗时 ${(data.elapsedMs / 1000).toFixed(1)}s` : '';
+      messageApi.success(
+        `目录已重建：${data.categoryCount ?? 0} 类 / ${data.totalFiles ?? 0} 文件${elapsed}`
+      );
+    } catch (e) {
+      messageApi.error((e as Error).message || '重建失败');
+    } finally {
+      setPitchRebuildLoading(false);
+    }
+  };
+
+  /** 清空预览转换缓存（Office → PDF 的中间产物，不影响源文件与索引） */
+  const clearPreviewCache = async () => {
+    if (!token) return;
+    setPreviewCacheClearing(true);
+    try {
+      const j = await apiFetch('/api/admin/pitch-templates/preview-cache-clear', {
+        token,
+        method: 'POST',
+        body: '{}',
+      });
+      const data = (j.data || {}) as { removedFiles?: number; freedBytes?: number };
+      messageApi.success(
+        j.message ||
+          `已清空缓存：${data.removedFiles ?? 0} 个 PDF，释放 ${formatCacheBytes(Number(data.freedBytes || 0))}`
+      );
+      await loadPreviewCache();
+    } catch (e) {
+      messageApi.error((e as Error).message || '清空缓存失败');
+    } finally {
+      setPreviewCacheClearing(false);
+    }
+  };
 
   const openCreateSubAdmin = () => {
     setEditingSubAdmin(null);
@@ -2048,6 +2165,59 @@ export default function SystemConfigPanel() {
         </div>
       ),
     },
+    {
+      key: 'resources',
+      label: '资源维护',
+      forceRender: true,
+      children: (
+        <div className="p-6 w-full max-w-[1200px] min-w-0">
+          {/* 紧凑状态条：索引 / 缓存一行展示，操作按钮右侧 */}
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-gray-100 bg-white px-3 py-2">
+            <div className="flex items-center gap-2 text-xs text-gray-600">
+              <Spin size="small" spinning={pitchCatalogLoading || previewCacheLoading} />
+              <span>
+                索引：
+                {pitchCatalog?.exists
+                  ? `${pitchCatalog.totalFiles} 文件 / ${pitchCatalog.categoryCount} 类`
+                  : '未生成'}
+                <span className="mx-2 text-gray-200">|</span>
+                预览缓存：{previewCache ? formatCacheBytes(previewCache.totalBytes) : '—'}
+              </span>
+            </div>
+            <Space size="small">
+              <Button
+                size="small"
+                type="primary"
+                loading={pitchRebuildLoading}
+                onClick={() => void rebuildPitchCatalog()}
+              >
+                重建目录
+              </Button>
+              <Button
+                size="small"
+                disabled={pitchCatalogLoading || pitchRebuildLoading}
+                onClick={() => void loadPitchCatalog()}
+              >
+                刷新
+              </Button>
+              <Popconfirm
+                title="清空所有预览 PDF 缓存？"
+                description="不影响源文件与索引；清空后首次预览会重新转换、稍慢。"
+                okText="清空"
+                cancelText="取消"
+                okButtonProps={{ danger: true }}
+                onConfirm={() => void clearPreviewCache()}
+              >
+                <Button size="small" danger loading={previewCacheClearing} disabled={previewCacheLoading}>
+                  清空缓存
+                </Button>
+              </Popconfirm>
+            </Space>
+          </div>
+          {isSuperAdmin ? <PitchFileManager onChanged={() => { void loadPitchCatalog(); void loadPreviewCache(); }} /> : null}
+        </div>
+      ),
+    },
     ...(SHOW_RTC_TAB
       ? [
           {
@@ -2074,11 +2244,14 @@ export default function SystemConfigPanel() {
       : []),
   ] satisfies NonNullable<TabsProps['items']>;
 
-  // 子管理员：仅站点品牌 + 修改自己的登录密码；「子管理员」页签仅超管可见
+  // 子管理员：仅站点品牌 + 修改自己的登录密码；「子管理员 / 资源维护」仅超管可见
   const isSubAdmin = parseJwtPayload(token)?.role === 'sub_admin';
   const visibleTabItems = isSubAdmin
     ? tabItems.filter((item) => item.key === 'site' || item.key === 'password')
-    : tabItems.filter((item) => item.key !== 'sub-admins' || isSuperAdmin);
+    : tabItems.filter(
+        (item) =>
+          (item.key !== 'sub-admins' && item.key !== 'resources') || isSuperAdmin
+      );
 
   const adminTheme = {
     token: {

@@ -2,3 +2,9 @@ node_modules
 out
 .env
 *.gz
+
+# 创业路演模板大文件不入库；保留说明与生成的目录索引
+resource/pitch-templates/**
+!resource/pitch-templates/README.md
+!resource/pitch-templates/catalog.json
+!resource/pitch-templates/catalog-*.json

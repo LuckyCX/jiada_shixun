@@ -27,6 +27,7 @@ import BusinessPlanDetailPage from './components/businessPlanReview/DetailPage';
 import BmcReview from './components/bmcReview';
 import ClassProjectOverview from '../class-project-overview/page';
 import TeacherGuide from '../teacher-guide/page';
+import PitchTemplateLibrary from '../pitch-templates/PitchTemplateLibrary';
 import CourseSettings from '../course-settings/page';
 import ClassDemoPage from './components/classDemo/ClassDemoPage';
 import EvaluationPanel from './components/EvaluationPanel';
@@ -63,6 +64,7 @@ type TabKey =
   | 'bmcReview'
   | 'classProjectOverview'
   | 'teacherGuide'
+  | 'pitchTemplates'
   | 'courseSettings'
   | 'classDemo';
 
@@ -114,6 +116,7 @@ const SIDEBAR_GROUPS_BASE: SidebarGroup[] = [
     items: [
       // { key: 'classProjectOverview', label: '班级项目总览', icon: 'ri-layout-grid-line', type: 'tab' },
       { key: 'teacherGuide', label: '教学指南', icon: 'ri-book-open-line', type: 'tab' },
+      { key: 'pitchTemplates', label: '创业路演模板库', icon: 'ri-slideshow-line', type: 'tab' },
       // { key: 'courseSettings', label: '课程设置', icon: 'ri-settings-3-line', type: 'tab' },
     ],
   },
@@ -150,6 +153,7 @@ const ALL_TAB_KEYS: TabKey[] = [
   'businessPlanReview',
   'classProjectOverview',
   'teacherGuide',
+  'pitchTemplates',
   'courseSettings',
   'classDemo',
 ];
@@ -736,6 +740,9 @@ export default function TeacherDashboard() {
       case 'teacherGuide':
         return <TeacherGuide />;
 
+      case 'pitchTemplates':
+        return <PitchTemplateLibrary />;
+
       case 'courseSettings':
         return <CourseSettings embedded={true} personalClass={selectedPersonalClass} />;
 
@@ -965,6 +972,7 @@ export default function TeacherDashboard() {
                 (businessPlanSubmissionId ? '查看提交正文与附件（只读）' : '审核商业计划书提交')}
               {activeTab === 'classProjectOverview' && '多维度查看全班项目进度'}
               {activeTab === 'teacherGuide' && '掌握监控、分析、引导、评价的完整教学流程'}
+              {activeTab === 'pitchTemplates' && '比赛路演 PPT / 商业计划书参考样板，可预览下载'}
               {activeTab === 'courseSettings' && '配置实训任务截止时间与评分标准'}
               {activeTab === 'evaluation' && '双维评价体系 · 项目完成 + 迭代增值'}
             </p>

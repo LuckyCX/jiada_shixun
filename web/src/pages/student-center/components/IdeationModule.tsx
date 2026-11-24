@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ElementType } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ElementType } from 'react';
 import * as AntIcons from '@ant-design/icons';
 import { Button, Form, Input, Modal, Select, message } from 'antd';
 import VersionControl, { Version } from '../../../components/feature/VersionControl';
@@ -315,37 +315,65 @@ export default function IdeationModule({
     onTaskComplete?.();
   }, [onTaskComplete, projectTopic?.id, projectTopic?.status]);
 
-  useEffect(() => {
-    if (!classId) {
-      setIdeas([]);
-      setMessages([]);
-      setTeamName('');
-      return;
-    }
-    let cancelled = false;
-    setWorkspaceLoading(true);
-    fetchStudentIdeationWorkspace(classId)
-      .then((res) => {
-        if (cancelled) return;
+  /** 拉取团队创意库 + 讨论；silent 用于轮询，避免整页闪「加载中」 */
+  const reloadWorkspace = useCallback(
+    async (opts?: { silent?: boolean; cancelled?: () => boolean }) => {
+      if (!classId) {
+        setIdeas([]);
+        setMessages([]);
+        setTeamName('');
+        return;
+      }
+      const silent = Boolean(opts?.silent);
+      const isCancelled = () => Boolean(opts?.cancelled?.());
+      if (!silent) setWorkspaceLoading(true);
+      try {
+        const res = await fetchStudentIdeationWorkspace(classId);
+        if (isCancelled()) return;
         setTeamName(res.team?.name || '');
         setIdeas(res.ideas || []);
         setMessages(res.discussions || []);
-      })
-      .catch((e) => {
-        if (!cancelled) {
-          setTeamName('');
-          setIdeas([]);
-          setMessages([]);
-          message.error(e instanceof Error ? e.message : '加载团队创意库失败');
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setWorkspaceLoading(false);
-      });
+      } catch (e) {
+        if (isCancelled() || silent) return;
+        setTeamName('');
+        setIdeas([]);
+        setMessages([]);
+        message.error(e instanceof Error ? e.message : '加载团队创意库失败');
+      } finally {
+        if (!silent && !isCancelled()) setWorkspaceLoading(false);
+      }
+    },
+    [classId]
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    void reloadWorkspace({ silent: false, cancelled: () => cancelled });
     return () => {
       cancelled = true;
     };
-  }, [classId]);
+  }, [reloadWorkspace]);
+
+  // 团队协作：创意库/讨论按 team 共享，但队员端不会自动收到他人写入；定时 + 回前台时静默刷新
+  useEffect(() => {
+    if (!classId) return;
+    const POLL_MS = 8000;
+    const silentReload = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      void reloadWorkspace({ silent: true });
+    };
+    const timer = window.setInterval(silentReload, POLL_MS);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') silentReload();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', silentReload);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', silentReload);
+    };
+  }, [classId, reloadWorkspace]);
 
   // 保存当前版本
   const handleSaveVersion = (summary: string) => {
@@ -757,9 +785,14 @@ export default function IdeationModule({
                   团队创意库
                   <span className="px-2 py-0.5 bg-teal-100 text-teal-700 text-xs font-semibold rounded-full">{ideas.length}</span>
                 </h3>
-                {/* <button className="px-3 py-1.5 bg-gray-100 text-gray-600 text-xs font-medium rounded-lg hover:bg-gray-200 transition-colors whitespace-nowrap cursor-pointer">
-                  <i className="ri-download-line mr-1"></i>导出报告
-                </button> */}
+                <button
+                  type="button"
+                  onClick={() => void reloadWorkspace({ silent: false })}
+                  className="px-3 py-1.5 bg-gray-100 text-gray-600 text-xs font-medium rounded-lg hover:bg-gray-200 transition-colors whitespace-nowrap cursor-pointer"
+                  title="刷新团队创意与讨论"
+                >
+                  <i className="ri-refresh-line mr-1"></i>刷新
+                </button>
               </div>
               <div className="space-y-4">
                 {workspaceLoading && (

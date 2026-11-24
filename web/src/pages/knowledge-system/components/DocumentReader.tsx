@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect } from 'react';
+import { useRef, useState, useEffect, useImperativeHandle, type Ref } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
@@ -6,6 +6,23 @@ import 'react-pdf/dist/Page/TextLayer.css';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
 pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+
+/** 外部集成模式（hideChrome）下，父组件通过 ref 调用的操作句柄 */
+export type DocumentReaderHandle = {
+  zoomIn: () => void;
+  zoomOut: () => void;
+  resetZoom: () => void;
+  prevPage: () => void;
+  nextPage: () => void;
+  goToPage: (page: number) => void;
+};
+
+/** 外部集成模式下上报给父组件的阅读状态 */
+export type DocumentReaderChromeState = {
+  page: number;
+  pageCount: number;
+  zoom: number;
+};
 
 interface DocumentReaderProps {
   title: string;
@@ -17,6 +34,16 @@ interface DocumentReaderProps {
   initialPage?: number;
   initialStudySeconds?: number;
   initialCompleted?: boolean;
+  /** true：高度由父容器撑满（h-full），去掉视口 calc 与最小高度，仅内部滚动 */
+  fillHeight?: boolean;
+  /** true：隐藏内部工具栏与底部翻页栏，由父组件把缩放/翻页集成到自己的标题栏（配合 ref + onChromeState） */
+  hideChrome?: boolean;
+  /** 初始缩放百分比（默认 100；hideChrome 集成模式可传 50 等让初始页面宽度占容器一半） */
+  initialZoom?: number;
+  /** hideChrome 模式下接收操作句柄（React 19 ref） */
+  ref?: Ref<DocumentReaderHandle>;
+  /** hideChrome 模式下页码/缩放状态变化时上报 */
+  onChromeState?: (state: DocumentReaderChromeState) => void;
   onProgress?: (percent: number) => void;
   onSaveProgress?: (percent: number, lastPosition: { page?: number; scrollTop?: number; studySeconds?: number }, completed: boolean) => void;
   onComplete?: () => void;
@@ -31,13 +58,18 @@ export default function DocumentReader({
   initialPage = 1,
   initialStudySeconds = 0,
   initialCompleted = false,
+  fillHeight = false,
+  hideChrome = false,
+  initialZoom,
+  ref,
+  onChromeState,
   onProgress,
   onSaveProgress,
   onComplete,
 }: DocumentReaderProps) {
   const [currentPage, setCurrentPage] = useState(initialPage);
   const [realPageCount, setRealPageCount] = useState(pageCount);
-  const [zoom, setZoom] = useState(100);
+  const [zoom, setZoom] = useState(initialZoom ?? 100);
   const [completed, setCompleted] = useState(initialCompleted);
   const contentRef = useRef<HTMLDivElement | null>(null);
   const panRef = useRef({
@@ -267,9 +299,34 @@ export default function DocumentReader({
   const isPdf = String(mimeType || '').toLowerCase() === 'application/pdf' || String(previewUrl || '').toLowerCase().includes('.pdf');
   const pageWidth = Math.max(320, Math.round(contentWidth * (zoom / 100)));
 
+  // 外部集成模式：暴露缩放/翻页操作，并上报当前状态
+  useImperativeHandle(
+    ref,
+    () => ({
+      zoomIn: () => setZoom((z) => Math.min(200, z + 10)),
+      zoomOut: () => setZoom((z) => Math.max(50, z - 10)),
+      resetZoom: () => setZoom(100),
+      prevPage: () => handlePageChange(currentPage - 1),
+      nextPage: () => handlePageChange(currentPage + 1),
+      goToPage: (p: number) => handlePageChange(p),
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [currentPage, realPageCount, pageCount, completed]
+  );
+
+  useEffect(() => {
+    onChromeState?.({ page: currentPage, pageCount: realPageCount || pageCount, zoom });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentPage, realPageCount, pageCount, zoom]);
+
   return (
-    <div className="bg-gray-100 rounded-2xl overflow-hidden flex flex-col h-[calc(100vh-190px)] min-h-[560px]">
-      {/* 文档工具栏 */}
+    <div
+      className={`bg-gray-100 rounded-2xl overflow-hidden flex flex-col ${
+        fillHeight ? 'h-full min-h-0' : 'h-[calc(100vh-190px)] min-h-[560px]'
+      }`}
+    >
+      {/* 文档工具栏（hideChrome 时由父组件集成到自己的标题栏） */}
+      {!hideChrome && (
       <div className="bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between">
         <div className="flex items-center space-x-3">
           <div className="w-8 h-8 flex items-center justify-center bg-red-100 rounded-lg">
@@ -313,6 +370,7 @@ export default function DocumentReader({
           </button> */}
         </div>
       </div>
+      )}
 
       {/* 文档内容区 */}
       <div
@@ -437,7 +495,8 @@ export default function DocumentReader({
         )}
       </div>
 
-      {/* 翻页控制栏 */}
+      {/* 翻页控制栏（hideChrome 时由父组件集成到自己的标题栏） */}
+      {!hideChrome && (
       <div className="bg-white border-t border-gray-200 px-4 py-3 flex items-center justify-between">
         <button
           onClick={() => handlePageChange(currentPage - 1)}
@@ -472,6 +531,7 @@ export default function DocumentReader({
           <i className="ri-arrow-right-line"></i>
         </button>
       </div>
+      )}
       
       {/* 继续阅读提示 */}
       {showContinueTip && currentPage > 1 && currentPage < totalPages && (

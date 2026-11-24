@@ -61,6 +61,8 @@ services:
       PG_POOL_MAX: ${PG_POOL_MAX:-30}
       LIBREOFFICE_BIN: ${LIBREOFFICE_BIN:-/usr/bin/soffice}
       PUBLIC_WEB_ORIGIN: ${PUBLIC_WEB_ORIGIN:-}
+      # 创业路演模板库：宿主机 ./resource 挂到 /app/resource
+      PITCH_TEMPLATES_ROOT: ${PITCH_TEMPLATES_ROOT:-/app/resource/pitch-templates}
     depends_on:
       postgres:
         condition: service_healthy
@@ -68,6 +70,8 @@ services:
         condition: service_healthy
     volumes:
       - node_uploads:/app/uploads
+      # 大文件模板目录（约数十 GB）挂宿主机，勿打进镜像
+      - ./resource:/app/resource
     expose:
       - "4000"
 

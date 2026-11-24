@@ -132,6 +132,18 @@ setup_env() {
   fi
   merge_env_from_example
   load_env_file .env
+  # REDIS_PASSWORD 为 compose 强制要求（services.redis 用 :?校验）。
+  # 缺失或仍为示例占位值时自动生成随机密码写回 .env，避免插值报错与弱凭据。
+  if [[ -z "${REDIS_PASSWORD:-}" || "${REDIS_PASSWORD}" == "change-me-on-server" ]]; then
+    REDIS_PASSWORD="$(head -c 256 /dev/urandom | LC_ALL=C tr -dc 'A-Za-z0-9' | head -c 24)"
+    if grep -q '^REDIS_PASSWORD=' .env 2>/dev/null; then
+      sed -i.bak 's|^REDIS_PASSWORD=.*|REDIS_PASSWORD='"${REDIS_PASSWORD}"'|' .env && rm -f .env.bak
+    else
+      echo "REDIS_PASSWORD=${REDIS_PASSWORD}" >> .env
+    fi
+    echo -e "${YELLOW}  REDIS_PASSWORD 缺失/为占位值，已生成随机密码写入 .env${NC}"
+  fi
+  export REDIS_PASSWORD
   GATEWAY_PORT="${GATEWAY_PORT:-18081}"
   POSTGRES_HOST_PORT="${POSTGRES_HOST_PORT:-15434}"
   NODE_IMAGE="${NODE_IMAGE:-docker.1ms.run/library/node:20-bookworm-slim}"
@@ -252,6 +264,26 @@ wait_healthy() {
   echo ""
   echo -e "${YELLOW}${service} 未在预期时间内变为 healthy，请查看: compose logs ${service}${NC}"
   return 1
+}
+
+# 部署后重建创业路演模板库索引（扫描挂载的 resource/pitch-templates）
+run_pitch_template_catalog() {
+  echo -e "${BLUE}重建创业路演模板目录索引...${NC}"
+  local pitch_dir="${ROOT_DIR}/resource/pitch-templates"
+  if [[ ! -d "$pitch_dir" ]]; then
+    mkdir -p "$pitch_dir"
+    echo -e "${YELLOW}已创建空目录 ${pitch_dir}（可稍后同步模板文件后，在管理端点「重建模板目录」）${NC}"
+  fi
+  # 在 node 容器内执行扫描，写入挂载卷上的 catalog*.json
+  if ! compose exec -T node node --input-type=module -e "
+import { rebuildPitchTemplateCatalog } from './src/lib/pitchTemplateCatalog.js';
+const r = rebuildPitchTemplateCatalog();
+console.log('pitch-catalog: categories=' + r.categoryCount + ' files=' + r.totalFiles + ' at=' + r.generatedAt);
+"; then
+    echo -e "${YELLOW}模板目录扫描失败（不影响主站；可稍后在「系统配置 → 资源维护」手动重建）${NC}"
+    return 0
+  fi
+  echo -e "${GREEN}模板目录索引已更新${NC}"
 }
 
 # 已有库增量 DDL：docs/sql/migrations/*.sql（按文件名排序，脚本需可重复执行）
@@ -386,6 +418,10 @@ deploy() {
   if wait_api; then
     curl -fsS "http://127.0.0.1:${GATEWAY_PORT}/api/health/ready" 2>/dev/null || true
     echo ""
+    # API 就绪后再扫模板库（node 容器内执行，失败不阻断部署）
+    run_pitch_template_catalog || true
+  else
+    echo -e "${YELLOW}API 未就绪，跳过模板目录扫描；可稍后管理端手动重建${NC}"
   fi
 
   local host_ip=""

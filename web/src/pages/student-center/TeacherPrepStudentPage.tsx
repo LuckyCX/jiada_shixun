@@ -9,7 +9,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button, message } from 'antd';
 import { useSiteBrand } from '../../lib/publicSite';
-import { clearPortalToken, getPortalToken, parseJwtPayload } from '../../lib/authApi';
+import { getPortalToken, parseJwtPayload } from '../../lib/authApi';
 import {
   clearActiveTeacherPrepSession,
   getActiveTeacherPrepSession,
@@ -52,7 +52,7 @@ export default function TeacherPrepStudentPage() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col">
+    <div className="h-screen overflow-hidden bg-slate-50 flex flex-col">
       <header className="bg-white border-b border-gray-100 shadow-sm px-4 md:px-6 py-3 flex items-center justify-between gap-3 flex-shrink-0">
         <div className="flex items-center gap-3 min-w-0">
           {logoUrl ? (
@@ -69,20 +69,10 @@ export default function TeacherPrepStudentPage() {
           <Button type="default" onClick={backToTeacher}>
             返回教师端
           </Button>
-          <Button
-            type="text"
-            danger
-            onClick={() => {
-              clearActiveTeacherPrepSession();
-              clearPortalToken('teacher');
-              window.location.replace('/');
-            }}
-          >
-            退出登录
-          </Button>
         </div>
       </header>
-      <main className="flex-1 min-h-0 overflow-auto px-3 pt-2 pb-3 md:px-4 md:pt-3 md:pb-4">
+      {/* 对齐 teacher-dashboard 主布局：header 固定，滚动全部发生在下方区域内部 */}
+      <main className="flex-1 min-h-0 overflow-hidden px-3 pt-2 pb-3 md:px-4 md:pt-3 md:pb-4">
         <ClassDemoPage
           classId={prepClassId}
           className={className}

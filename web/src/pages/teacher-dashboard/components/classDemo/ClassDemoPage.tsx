@@ -14,6 +14,7 @@ import BusinessPlanDetailPage from './planReview/DetailPage';
 import BmcReview from '../bmcReview';
 import { fetchTeacherBmcReviews, reviewTeacherBmc } from './demoBusinessApi';
 import { loadDemoState, type DemoStageKey } from './demoStore';
+import PitchTemplateLibrary from '../../../pitch-templates/PitchTemplateLibrary';
 
 function formatModuleTime(
   startDate?: string,
@@ -51,6 +52,7 @@ export default function ClassDemoPage({
   const learningMenus: { key: DemoStageKey; label: string; icon: string }[] = [
     { key: 'overview', label: '进度看板', icon: 'ri-dashboard-line' },
     { key: 'knowledge', label: '实践课程', icon: 'ri-book-2-line' },
+    { key: 'pitchTemplates', label: '创业路演模板库', icon: 'ri-slideshow-line' },
   ];
   const showTopicReview = stages.some((item) => item.key === 'ideation');
   const showBmcReview = stages.some((item) => item.key === 'business');
@@ -118,7 +120,7 @@ export default function ClassDemoPage({
 
   // 指向已略过模块或不可用审核入口时回退 overview
   useEffect(() => {
-    if (!stage || stage === 'archive' || stage === 'overview' || stage === 'knowledge') return;
+    if (!stage || stage === 'archive' || stage === 'overview' || stage === 'knowledge' || stage === 'pitchTemplates') return;
     if (stage === 'topicReview' && !showTopicReview) {
       onStageChange('overview');
       return;
@@ -154,8 +156,8 @@ export default function ClassDemoPage({
   }, [classId]);
 
   return (
-    <div className="flex gap-4 min-h-[70vh]">
-      <aside className="w-56 flex-shrink-0 bg-white rounded-2xl border border-gray-100 p-3">
+    <div className="flex gap-4 h-full min-h-0">
+      <aside className="w-56 flex-shrink-0 bg-white rounded-2xl border border-gray-100 p-3 overflow-y-auto">
         <div className="px-2 py-2 text-xs font-semibold text-gray-400">学习管理</div>
         {learningMenus.map((item) => (
           <button
@@ -219,11 +221,11 @@ export default function ClassDemoPage({
           </button>
         ))}
       </aside>
-      <div className="flex-1 min-w-0 space-y-4">
+      <div className="flex-1 min-w-0 space-y-4 overflow-y-auto overflow-x-hidden">
         {/* 与学生中心一致：模块自带卡片；对话/董事会忌再套一层大 padding 白底 */}
         <div
           className={
-            activeKey === 'ideation' || activeKey === 'business'
+            activeKey === 'ideation' || activeKey === 'business' || activeKey === 'pitchTemplates'
               ? 'min-w-0'
               : 'bg-white rounded-2xl border border-gray-100 shadow-sm p-4 md:p-5'
           }
@@ -232,6 +234,7 @@ export default function ClassDemoPage({
             <DemoOverview classId={classId} className={className} enabledModuleKeys={enabledModuleKeys} onOpenStage={onStageChange} />
           ) : null}
           {activeKey === 'knowledge' ? <DemoPracticeCourse classId={classId} enabledModuleKeys={enabledModuleKeys} /> : null}
+          {activeKey === 'pitchTemplates' ? <PitchTemplateLibrary /> : null}
           {activeKey === 'team' ? (
             <TeamFormationModule classId={classId} className={className} />
           ) : null}

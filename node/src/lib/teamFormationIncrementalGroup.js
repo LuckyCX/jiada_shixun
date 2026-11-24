@@ -1,5 +1,6 @@
 import { MAX_TEAM_SIZE, pickDefaultLeaderStudentId } from './teamFormationAiGroup.js';
 import { parseDimensionScores, computeComplementScore } from './teamFormationDimension.js';
+import { lockAndAssertStudentFreeInClass } from './teamFormationMembership.js';
 
 export async function refreshTeamComplementScore(pool, teamId) {
   const { rows: memCnt } = await pool.query(
@@ -120,11 +121,12 @@ export async function persistPlacements(pool, classId, placements, studentById) 
     for (const { studentId, teamId } of placements) {
       const st = studentById.get(String(studentId));
       if (!st) continue;
+      // 同班一人一队：已入队/单人公司则拒绝，避免并发重复分配
+      await lockAndAssertStudentFreeInClass(client, classId, studentId);
       await client.query(
         `INSERT INTO teacher_personal_class_team_members
            (team_id, student_id, ai_matched_role, dimension_profile)
-         VALUES ($1, $2, $3, $4::jsonb)
-         ON CONFLICT (team_id, student_id) DO NOTHING`,
+         VALUES ($1, $2, $3, $4::jsonb)`,
         [teamId, studentId, st.aiMatchedRole || null, JSON.stringify(st.profile || {})]
       );
       await client.query(

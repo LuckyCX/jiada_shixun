@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "root": "pitch-templates",
+  "generatedAt": "2026-11-24T09:46:30.495Z",
+  "sourceNote": "/Users/Zhuanz/Documents/kaifa/workspace/jiada_shixun/resource/pitch-templates",
+  "totalFiles": 7335,
+  "categories": [
+    {
+      "id": "01",
+      "name": "01 创新创业计划书(80个细分行业分类)",
+      "fileCount": 6631,
+      "catalog": "catalog-01.json"
+    },
+    {
+      "id": "02",
+      "name": "02 【266套】word+ppt配套",
+      "fileCount": 561,
+      "catalog": "catalog-02.json"
+    },
+    {
+      "id": "03",
+      "name": "03 word版商业策划（计划）书",
+      "fileCount": 143,
+      "catalog": "catalog-03.json"
+    }
+  ]
+}

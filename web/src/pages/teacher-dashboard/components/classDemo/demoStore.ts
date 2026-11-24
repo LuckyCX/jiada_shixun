@@ -6,6 +6,7 @@ export type DemoStageKey =
   | 'overview'
   | 'knowledge'
   | 'archive'
+  | 'pitchTemplates'
   | 'team'
   | 'ideation'
   | 'market'

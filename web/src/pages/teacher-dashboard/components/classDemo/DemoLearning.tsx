@@ -667,7 +667,7 @@ export function DemoPracticeCourse({
             <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 min-h-[360px]">
               <div className="text-sm font-bold text-gray-900 mb-3 flex items-center gap-2"><i className="ri-node-tree text-teal-600"></i>章节目录</div>
               {tree.length ? (
-                <Tree treeData={tree} selectedKeys={activeId ? [activeId] : []} defaultExpandAll onSelect={(keys) => setChapterId(String(keys[0] || ''))} />
+                <Tree treeData={tree} selectedKeys={activeId ? [activeId] : []} onSelect={(keys) => setChapterId(String(keys[0] || ''))} />
               ) : (
                 <div className="py-12 text-center text-sm text-gray-400">当前模块暂无关联章节</div>
               )}

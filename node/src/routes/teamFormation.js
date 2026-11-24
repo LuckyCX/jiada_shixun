@@ -38,6 +38,12 @@ import {
   persistPlacements,
   refreshTeamComplementScore,
 } from '../lib/teamFormationIncrementalGroup.js';
+import {
+  findStudentTeamIdInClass,
+  findStudentTeamInClass,
+  lockAndAssertStudentFreeInClass,
+  isOneTeamPerClassConflict,
+} from '../lib/teamFormationMembership.js';
 import { TASK_MODULE_TO_TRAINING_ID } from '../lib/personalClassTaskConstants.js';
 import { normalizeUploadFileName } from '../lib/uploadFileName.js';
 
@@ -144,6 +150,7 @@ function sendIntroVideoFile(res, storageKey) {
 }
 
 async function listPendingStudentsForClass(pool, classId) {
+  // 已入队/已建单人公司的学生不得再出现在待组队池（防脏数据被再次分配）
   const { rows } = await pool.query(
     `SELECT u.id, u.real_name AS name, u.student_no AS "studentNo", u.email, u.avatar_url,
             s.ai_matched_role AS "aiMatchedRole", s.ai_analysis_raw AS "aiAnalysisRaw",
@@ -153,6 +160,13 @@ async function listPendingStudentsForClass(pool, classId) {
      JOIN users u ON u.id = s.student_id
      WHERE s.teacher_personal_class_id = $1 AND s.status = 'pending_teacher'
        AND COALESCE(s.grouping_preference, 'pool') = 'pool'
+       AND NOT EXISTS (
+         SELECT 1
+         FROM teacher_personal_class_team_members m
+         JOIN teacher_personal_class_teams t ON t.id = m.team_id
+         WHERE t.teacher_personal_class_id = s.teacher_personal_class_id
+           AND m.student_id = s.student_id
+       )
      ORDER BY s.submitted_at ASC NULLS LAST, u.id ASC`,
     [classId]
   );
@@ -174,26 +188,19 @@ async function listPendingStudentsForClass(pool, classId) {
   });
 }
 
-/** 学生是否已在该班入队 */
-async function findStudentTeamIdInClass(pool, classId, studentId) {
-  const { rows } = await pool.query(
-    `SELECT t.id
-     FROM teacher_personal_class_team_members m
-     JOIN teacher_personal_class_teams t ON t.id = m.team_id
-     WHERE t.teacher_personal_class_id = $1 AND m.student_id = $2
-     LIMIT 1`,
-    [classId, studentId]
-  );
-  return rows[0]?.id != null ? String(rows[0].id) : null;
-}
-
 /**
- * 成立单人公司：即时创建 1 人 confirmed 队，不参与 AI 待组队池
+ * 成立单人公司：即时创建 1 人 confirmed 队，不参与 AI 待组队池。
+ * 同班已入队（含多人队）则拒绝；已是本人单人公司则幂等返回。
  */
 async function createSoloTeamForStudent(pool, classId, studentId) {
-  const existingTeamId = await findStudentTeamIdInClass(pool, classId, studentId);
-  if (existingTeamId) {
-    return { status: 'confirmed', teamId: existingTeamId, solo: true, alreadyExisted: true };
+  const existing = await findStudentTeamInClass(pool, classId, studentId);
+  if (existing) {
+    if (existing.isSolo) {
+      return { status: 'confirmed', teamId: existing.teamId, solo: true, alreadyExisted: true };
+    }
+    const err = new Error('你已加入团队，不能再成立单人公司');
+    err.code = 40019;
+    throw err;
   }
 
   const { rows: subRows } = await pool.query(
@@ -209,8 +216,15 @@ async function createSoloTeamForStudent(pool, classId, studentId) {
   }
   const sub = subRows[0];
   if (sub.status === 'confirmed' || sub.status === 'grouped') {
-    const tid = await findStudentTeamIdInClass(pool, classId, studentId);
-    return { status: sub.status, teamId: tid, solo: true, alreadyExisted: true };
+    const again = await findStudentTeamInClass(pool, classId, studentId);
+    if (again?.isSolo) {
+      return { status: sub.status, teamId: again.teamId, solo: true, alreadyExisted: true };
+    }
+    if (again) {
+      const err = new Error('你已加入团队，不能再成立单人公司');
+      err.code = 40019;
+      throw err;
+    }
   }
 
   const { rows: userRows } = await pool.query(
@@ -225,6 +239,7 @@ async function createSoloTeamForStudent(pool, classId, studentId) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    await lockAndAssertStudentFreeInClass(client, classId, studentId);
     const { rows: sortRows } = await client.query(
       `SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_sort
        FROM teacher_personal_class_teams WHERE teacher_personal_class_id = $1`,
@@ -300,6 +315,7 @@ async function persistAiTeamsToDb(pool, classId, pending, aiTeams) {
       for (const sid of t.memberIds) {
         const st = pendingMap.get(sid);
         if (!st) continue;
+        await lockAndAssertStudentFreeInClass(client, classId, sid);
         await client.query(
           `INSERT INTO teacher_personal_class_team_members
              (team_id, student_id, ai_matched_role, dimension_profile)
@@ -351,6 +367,7 @@ async function persistNewAiTeamsOnly(pool, classId, pending, aiTeams, existingTe
       for (const sid of t.memberIds) {
         const st = pendingMap.get(sid);
         if (!st) continue;
+        await lockAndAssertStudentFreeInClass(client, classId, sid);
         await client.query(
           `INSERT INTO teacher_personal_class_team_members
              (team_id, student_id, ai_matched_role, dimension_profile)
@@ -1402,16 +1419,49 @@ router.post('/student/team-formation/submit', requireAuth(), requireStudent(), a
     }
     const status = rows[0].status;
     if (status === 'confirmed' || status === 'grouped') {
-      const teamId = await findStudentTeamIdInClass(pool, classId, sid);
-      return ok(req, res, { status, teamId, solo: groupingPreference === 'solo' });
+      const team = await findStudentTeamInClass(pool, classId, sid);
+      return ok(req, res, {
+        status,
+        teamId: team?.teamId ?? null,
+        solo: Boolean(team?.isSolo),
+        groupingPreference: team?.isSolo ? 'solo' : 'pool',
+      });
     }
     if (status === 'pending_teacher' && groupingPreference === 'pool') {
+      const existing = await findStudentTeamInClass(pool, classId, sid);
+      if (existing) {
+        return bad(
+          req,
+          res,
+          400,
+          40019,
+          existing.isSolo
+            ? '你已成立单人公司，不能再进入组队池'
+            : '你已加入团队，不能再进入组队池'
+        );
+      }
       return ok(req, res, { status: 'pending_teacher', groupingPreference: 'pool' });
     }
 
     if (groupingPreference === 'solo') {
       const soloResult = await createSoloTeamForStudent(pool, classId, sid);
       return ok(req, res, { ...soloResult, groupingPreference: 'solo' });
+    }
+
+    // 进入组队池前再次确认：已有队伍则禁止
+    {
+      const existing = await findStudentTeamInClass(pool, classId, sid);
+      if (existing) {
+        return bad(
+          req,
+          res,
+          400,
+          40019,
+          existing.isSolo
+            ? '你已成立单人公司，不能再进入组队池'
+            : '你已加入团队，不能再进入组队池'
+        );
+      }
     }
 
     await pool.query(
@@ -1427,6 +1477,9 @@ router.post('/student/team-formation/submit', requireAuth(), requireStudent(), a
   } catch (e) {
     logError(`POST submit traceId=${req.traceId}`, e);
     if (e.code === 40010) return bad(req, res, 400, 40010, e.message);
+    if (isOneTeamPerClassConflict(e)) {
+      return bad(req, res, 400, 40019, e.message || '同班只能归属一支队伍或单人公司');
+    }
     return bad(req, res, 500, 50000, e.message);
   }
 });
@@ -1630,11 +1683,15 @@ router.post(
       res.end();
     } catch (e) {
       logError(`POST ai-group traceId=${req.traceId}`, e);
+      const conflictMsg = isOneTeamPerClassConflict(e)
+        ? e.message || '存在学生已入队或已成立单人公司，请刷新后重试'
+        : friendlyLlmErrorMessage(e);
       if (res.headersSent) {
-        sseWrite(res, 'error', { message: friendlyLlmErrorMessage(e) });
+        sseWrite(res, 'error', { message: conflictMsg });
         res.end();
         return;
       }
+      if (isOneTeamPerClassConflict(e)) return bad(req, res, 400, 40019, conflictMsg);
       return bad(req, res, 500, 50000, e.message);
     }
   }
@@ -1672,6 +1729,9 @@ router.post(
       return ok(req, res, await teacherGroupingPayload(pool, classId));
     } catch (e) {
       logError(`POST ai-group/confirm-random traceId=${req.traceId}`, e);
+      if (isOneTeamPerClassConflict(e)) {
+        return bad(req, res, 400, 40019, e.message || '存在学生已有队伍归属');
+      }
       return bad(req, res, 500, 50000, e.message);
     }
   }
@@ -1806,8 +1866,17 @@ router.post(
       if (!(await ownsPersonalClass(pool, tid, classId))) {
         return bad(req, res, 404, 40402, '班级不存在或无权操作');
       }
-      if (await findStudentTeamIdInClass(pool, classId, studentId)) {
-        return bad(req, res, 400, 40016, '该学生已在队伍中');
+      {
+        const existing = await findStudentTeamInClass(pool, classId, studentId);
+        if (existing) {
+          return bad(
+            req,
+            res,
+            400,
+            40019,
+            existing.isSolo ? '该学生已成立单人公司，不能再入队' : '该学生已在队伍中'
+          );
+        }
       }
       const { rows: sub } = await pool.query(
         `SELECT ai_matched_role AS "aiMatchedRole", ai_analysis_raw AS "aiAnalysisRaw", status,
@@ -1831,6 +1900,7 @@ router.post(
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
+        await lockAndAssertStudentFreeInClass(client, classId, studentId);
         const { rows: sortRows } = await client.query(
           `SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_sort
            FROM teacher_personal_class_teams WHERE teacher_personal_class_id = $1`,
@@ -1869,6 +1939,9 @@ router.post(
       return ok(req, res, await teacherGroupingPayload(pool, classId));
     } catch (e) {
       logError(`POST create team traceId=${req.traceId}`, e);
+      if (isOneTeamPerClassConflict(e)) {
+        return bad(req, res, 400, 40019, e.message || '该学生已有队伍归属');
+      }
       return bad(req, res, 500, 50000, e.message);
     }
   }
@@ -1906,6 +1979,16 @@ router.post(
       if (cnt[0].c >= MAX_TEAM_SIZE) {
         return bad(req, res, 400, 40015, `每组最多 ${MAX_TEAM_SIZE} 人`);
       }
+      const existing = await findStudentTeamInClass(pool, classId, studentId);
+      if (existing) {
+        return bad(
+          req,
+          res,
+          400,
+          40019,
+          existing.isSolo ? '该学生已成立单人公司，不能再入队' : '该学生已在其他队伍中'
+        );
+      }
       const { rows: sub } = await pool.query(
         `SELECT ai_matched_role AS "aiMatchedRole", ai_analysis_raw AS "aiAnalysisRaw", status
          FROM student_team_formation_submissions
@@ -1916,27 +1999,40 @@ router.post(
         return bad(req, res, 400, 40016, '该学生不在待组队池');
       }
       const profile = profileFromAnalysisRaw(sub[0].aiAnalysisRaw);
-      await pool.query(
-        `INSERT INTO teacher_personal_class_team_members
-           (team_id, student_id, ai_matched_role, dimension_profile)
-         VALUES ($1, $2, $3, $4::jsonb)
-         ON CONFLICT (team_id, student_id) DO NOTHING`,
-        [teamId, studentId, sub[0].aiMatchedRole, JSON.stringify(profile)]
-      );
-      await pool.query(
-        `UPDATE student_team_formation_submissions SET status = 'confirmed', updated_at = now()
-         WHERE teacher_personal_class_id = $1 AND student_id = $2`,
-        [classId, studentId]
-      );
-      await pool.query(
-        `UPDATE teacher_personal_class_teams SET grouping_status = 'confirmed', updated_at = now()
-         WHERE id = $1 AND grouping_status = 'draft'`,
-        [teamId]
-      );
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await lockAndAssertStudentFreeInClass(client, classId, studentId);
+        await client.query(
+          `INSERT INTO teacher_personal_class_team_members
+             (team_id, student_id, ai_matched_role, dimension_profile)
+           VALUES ($1, $2, $3, $4::jsonb)`,
+          [teamId, studentId, sub[0].aiMatchedRole, JSON.stringify(profile)]
+        );
+        await client.query(
+          `UPDATE student_team_formation_submissions SET status = 'confirmed', updated_at = now()
+           WHERE teacher_personal_class_id = $1 AND student_id = $2`,
+          [classId, studentId]
+        );
+        await client.query(
+          `UPDATE teacher_personal_class_teams SET grouping_status = 'confirmed', updated_at = now()
+           WHERE id = $1 AND grouping_status = 'draft'`,
+          [teamId]
+        );
+        await client.query('COMMIT');
+      } catch (e) {
+        await client.query('ROLLBACK');
+        throw e;
+      } finally {
+        client.release();
+      }
       await refreshTeamComplementScore(pool, teamId);
       return ok(req, res, await teacherGroupingPayload(pool, classId));
     } catch (e) {
       logError(`POST team member traceId=${req.traceId}`, e);
+      if (isOneTeamPerClassConflict(e)) {
+        return bad(req, res, 400, 40019, e.message || '该学生已有队伍归属');
+      }
       return bad(req, res, 500, 50000, e.message);
     }
   }
