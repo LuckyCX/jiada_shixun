@@ -23,6 +23,8 @@ export type PitchFileItem = {
   name: string;
   relPath: string;
   ext: string;
+  /** 文件类型分组 key（word/ppt/excel/pdf/image/video/audio/archive/text/other） */
+  type?: string;
   size: number;
   sizeText: string;
   previewable: boolean;
@@ -76,6 +78,19 @@ export function fetchPitchCategory(catId: string) {
   return apiGet<PitchCategoryDetail>(`/api/pitch-templates/catalog/${encodeURIComponent(catId)}`);
 }
 
+export type PitchAllTree = {
+  name: string;
+  totalFiles: number;
+  /** 全库文件类型统计（管理端生成 catalog.json 时分析好） */
+  typeCounts: Record<string, number>;
+  tree: PitchDirNode;
+};
+
+/** 全目录树（用于全目录搜索与展开定位） */
+export function fetchPitchAllTree() {
+  return apiGet<PitchAllTree>('/api/pitch-templates/tree');
+}
+
 /** 预览 / 下载 URL（带 token，便于 iframe） */
 export function pitchFileUrl(mode: 'preview' | 'download', relPath: string) {
   const auth = pickToken();
@@ -84,23 +99,41 @@ export function pitchFileUrl(mode: 'preview' | 'download', relPath: string) {
   return `/api/pitch-templates/${mode}?${q.toString()}`;
 }
 
-export async function downloadPitchFile(relPath: string, fileName: string) {
-  const auth = pickToken();
-  if (!auth) throw new Error('未登录');
-  const url = pitchFileUrl('download', relPath);
-  const r = await fetch(url, { headers: { Authorization: `Bearer ${auth.token}` } });
-  if (!r.ok) {
-    const json = await r.json().catch(() => null);
-    throw new Error(json?.message || '下载失败');
-  }
-  const blob = await r.blob();
+export async function fetchSignedDownloadUrl(relPath: string, attachment = true) {
+  const q = new URLSearchParams({ path: relPath, mode: attachment ? 'attachment' : 'inline' });
+  return apiGet<{ url: string; key: string; expiresAt: number }>(
+    `/api/pitch-templates/file-url?${q.toString()}`
+  );
+}
+
+/** 下载：获取 OSS 签名 URL 后触发浏览器下载（不占服务器带宽） */
+export async function downloadPitchFile(relPath: string, _fileName?: string) {
+  const { url } = await fetchSignedDownloadUrl(relPath, true);
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = fileName || 'download';
+  a.href = url;
+  a.rel = 'noopener';
   document.body.appendChild(a);
   a.click();
   a.remove();
-  URL.revokeObjectURL(a.href);
+}
+
+/** 同源拉取文件原始字节（经后端代理转发 OSS，无跨域问题），供 Excel 解析等前端渲染使用 */
+export async function fetchFileBlob(relPath: string): Promise<ArrayBuffer> {
+  const auth = pickToken();
+  if (!auth) throw new Error('未登录');
+  const q = new URLSearchParams({ path: relPath });
+  const r = await fetch(`/api/pitch-templates/preview?${q.toString()}`, {
+    headers: { Authorization: `Bearer ${auth.token}` },
+  });
+  if (!r.ok) {
+    let msg = `请求失败 (${r.status})`;
+    try {
+      const j = await r.json();
+      if (j?.message) msg = j.message;
+    } catch { /* 非 JSON 响应 */ }
+    throw new Error(msg);
+  }
+  return r.arrayBuffer();
 }
 
 /** 批量顺序下载：逐个触发浏览器下载，间隔 400ms 防止被拦截；失败记录并继续 */
@@ -123,4 +156,37 @@ export async function downloadPitchFilesBatch(
   }
   onProgress?.(files.length, files.length, '');
   return { ok, failed };
+}
+
+// ---------- 管理端：OSS 签名 PUT 直传 ----------
+
+export type SignedUpload = {
+  url: string;
+  key: string;
+  objectRel: string;
+  finalName: string;
+  contentType: string;
+  expiresAt: number;
+};
+
+/** 浏览器 XHR PUT 直传 OSS（带进度回调），服务器不经手字节流 */
+export function uploadFileToOss(
+  file: File,
+  signed: Pick<SignedUpload, 'url' | 'contentType'>,
+  onProgress?: (percent: number) => void
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', signed.url);
+    xhr.setRequestHeader('Content-Type', signed.contentType || 'application/octet-stream');
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100));
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) resolve();
+      else reject(new Error(`OSS 返回状态码 ${xhr.status}，直传失败`));
+    };
+    xhr.onerror = () => reject(new Error('网络错误，直传失败（请检查 OSS 桶 CORS 是否允许 PUT）'));
+    xhr.send(file);
+  });
 }

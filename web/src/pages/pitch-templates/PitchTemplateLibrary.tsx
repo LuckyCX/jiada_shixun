@@ -2,7 +2,8 @@
  * 创业路演模板库：分类检索 + 目录树 + 文件列表（多选下载）+ 精简预览（无进度/笔记）
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { message } from 'antd';
+import { message, Pagination } from 'antd';
+import * as XLSX from 'xlsx';
 import DocumentReader, {
   type DocumentReaderChromeState,
   type DocumentReaderHandle,
@@ -10,11 +11,9 @@ import DocumentReader, {
 import {
   downloadPitchFile,
   downloadPitchFilesBatch,
-  fetchPitchCatalogIndex,
-  fetchPitchCategory,
+  fetchPitchAllTree,
+  fetchFileBlob,
   pitchFileUrl,
-  type PitchCatalogIndex,
-  type PitchCategoryDetail,
   type PitchDirNode,
   type PitchFileItem,
 } from '../../lib/pitchTemplatesApi';
@@ -50,18 +49,52 @@ function collectFiles(node: PitchDirNode, acc: PitchFileItem[] = []): PitchFileI
   return acc;
 }
 
+/** 文件类型分组 key（供快捷筛选 tag 使用） */
+function typeTagOf(f: PitchFileItem): string {
+  const ext = f.ext || '';
+  if (f.kind === 'image') return 'image';
+  if (f.kind === 'video') return 'video';
+  if (f.kind === 'audio') return 'audio';
+  if (f.kind === 'archive') return 'archive';
+  if (f.kind === 'pdf') return 'pdf';
+  if (f.kind === 'office') {
+    if (ext.startsWith('ppt')) return 'ppt';
+    if (ext.startsWith('xls')) return 'excel';
+    return 'word';
+  }
+  if (f.kind === 'text') return 'text';
+  return 'other';
+}
+
+const TYPE_TAG_LABEL: Record<string, { label: string; icon: string }> = {
+  word: { label: 'Word', icon: 'ri-file-word-2-line' },
+  ppt: { label: 'PPT', icon: 'ri-slideshow-2-line' },
+  excel: { label: 'Excel', icon: 'ri-file-excel-2-line' },
+  pdf: { label: 'PDF', icon: 'ri-file-pdf-2-line' },
+  image: { label: '图片', icon: 'ri-image-line' },
+  video: { label: '视频', icon: 'ri-video-line' },
+  audio: { label: '音频', icon: 'ri-music-2-line' },
+  archive: { label: '压缩包', icon: 'ri-file-zip-line' },
+  text: { label: '文本', icon: 'ri-file-text-line' },
+  other: { label: '其他', icon: 'ri-file-text-line' },
+};
+
 function DirTree({
   node,
   depth,
   activePath,
+  expanded,
+  onToggle,
   onSelect,
 }: {
   node: PitchDirNode;
   depth: number;
   activePath: string;
+  expanded: Set<string>;
+  onToggle: (path: string) => void;
   onSelect: (path: string) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const open = expanded.has(node.relPath);
   const hasChildren = (node.children || []).length > 0;
   const active = activePath === node.relPath;
   const indent = 6 + depth * 16;
@@ -81,7 +114,7 @@ function DirTree({
           type="button"
           onClick={() => {
             onSelect(node.relPath);
-            if (hasChildren) setOpen((v) => !v);
+            if (hasChildren) onToggle(node.relPath);
           }}
           className={`relative w-full flex items-center gap-1.5 pr-2 py-1.5 rounded-lg text-left text-sm cursor-pointer ${
             active ? 'bg-teal-50 text-teal-800 font-medium' : 'text-gray-700 hover:bg-gray-50'
@@ -108,8 +141,163 @@ function DirTree({
       </div>
       {open &&
         (node.children || []).map((c) => (
-          <DirTree key={c.id} node={c} depth={depth + 1} activePath={activePath} onSelect={onSelect} />
+          <DirTree
+            key={c.id}
+            node={c}
+            depth={depth + 1}
+            activePath={activePath}
+            expanded={expanded}
+            onToggle={onToggle}
+            onSelect={onSelect}
+          />
         ))}
+    </div>
+  );
+}
+
+const EXCEL_MAX_ROWS = 2000;
+
+/** Excel 预览：SheetJS 解析原始文件，渲染真实表格样式（多 Sheet 切换） */
+function ExcelViewer({ relPath }: { relPath: string }) {
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [sheetNames, setSheetNames] = useState<string[]>([]);
+  const [activeSheet, setActiveSheet] = useState('');
+  const [matrix, setMatrix] = useState<string[][]>([]);
+  const [truncated, setTruncated] = useState(false);
+  const wbRef = useRef<XLSX.WorkBook | null>(null);
+
+  // 加载原始文件并解析工作簿
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError('');
+    setSheetNames([]);
+    setActiveSheet('');
+    setMatrix([]);
+    wbRef.current = null;
+    (async () => {
+      try {
+        const buf = await fetchFileBlob(relPath);
+        const wb = XLSX.read(buf, { type: 'array' });
+        if (cancelled) return;
+        wbRef.current = wb;
+        setSheetNames(wb.SheetNames);
+        setActiveSheet(wb.SheetNames[0] || '');
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : '表格解析失败，请下载后查看');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [relPath]);
+
+  // 切换 Sheet 时提取单元格矩阵
+  useEffect(() => {
+    if (!wbRef.current || !activeSheet) {
+      setMatrix([]);
+      return;
+    }
+    const ws = wbRef.current.Sheets[activeSheet];
+    if (!ws) {
+      setMatrix([]);
+      return;
+    }
+    const rows = XLSX.utils.sheet_to_json<string[]>(ws, {
+      header: 1,
+      blankrows: false,
+      defval: '',
+      raw: false,
+    }) as string[][];
+    const capped = rows.slice(0, EXCEL_MAX_ROWS);
+    setMatrix(capped);
+    setTruncated(rows.length > EXCEL_MAX_ROWS);
+  }, [activeSheet]);
+
+  if (loading) {
+    return (
+      <div className="h-full flex flex-col items-center justify-center gap-3 text-teal-600">
+        <i className="ri-loader-4-line text-3xl animate-spin" />
+        <p className="text-sm text-gray-500">正在解析表格…</p>
+      </div>
+    );
+  }
+  if (error || !matrix.length) {
+    return (
+      <div className="h-full flex flex-col items-center justify-center text-gray-500 gap-3 py-16">
+        <i className="ri-file-excel-2-line text-4xl text-gray-300" />
+        <p className="text-sm">{error || '该表格暂无可显示内容，请下载后查看'}</p>
+      </div>
+    );
+  }
+  const colCount = Math.max(...matrix.map((r) => r.length), 1);
+
+  return (
+    <div className="flex flex-col h-full min-h-0">
+      {/* Sheet 切换栏 */}
+      {sheetNames.length > 1 && (
+        <div className="flex items-center gap-1.5 px-3 py-2 border-b border-gray-100 bg-white overflow-x-auto shrink-0">
+          {sheetNames.map((name) => (
+            <button
+              key={name}
+              type="button"
+              onClick={() => setActiveSheet(name)}
+              className={`px-3 py-1 rounded-lg text-xs font-medium whitespace-nowrap cursor-pointer transition-colors ${
+                activeSheet === name
+                  ? 'bg-emerald-600 text-white'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              {name}
+            </button>
+          ))}
+        </div>
+      )}
+      {truncated && (
+        <div className="px-3 py-1.5 text-xs text-amber-600 bg-amber-50 border-b border-amber-100 shrink-0">
+          内容较多，仅显示前 {EXCEL_MAX_ROWS} 行，完整内容请下载后查看
+        </div>
+      )}
+      {/* 表格主体：真实表格样式，表头吸顶，行列可滚动 */}
+      <div className="flex-1 min-h-0 overflow-auto bg-white">
+        <table className="border-collapse text-[13px] min-w-full">
+          <thead>
+            <tr>
+              <th className="sticky top-0 left-0 z-20 bg-slate-100 border border-slate-200 px-2 py-1.5 text-gray-400 font-normal w-10 text-center">
+                #
+              </th>
+              {Array.from({ length: colCount }, (_, i) => (
+                <th
+                  key={i}
+                  className="sticky top-0 z-10 bg-slate-100 border border-slate-200 px-3 py-1.5 text-left font-semibold text-gray-700 whitespace-nowrap"
+                >
+                  {XLSX.utils.encode_col(i)}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {matrix.map((row, ri) => (
+              <tr key={ri} className={ri % 2 === 1 ? 'bg-slate-50/60' : ''}>
+                <td className="sticky left-0 z-10 bg-slate-50 border border-slate-200 px-2 py-1 text-gray-400 text-xs text-center tabular-nums">
+                  {ri + 1}
+                </td>
+                {Array.from({ length: colCount }, (_, ci) => (
+                  <td
+                    key={ci}
+                    className="border border-slate-200 px-3 py-1 text-gray-800 whitespace-nowrap max-w-[360px] overflow-hidden text-ellipsis"
+                  >
+                    {row[ci] ?? ''}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -121,7 +309,8 @@ function PreviewPane({ file, onBack }: { file: PitchFileItem; onBack: () => void
   const docRef = useRef<DocumentReaderHandle>(null);
   const [chrome, setChrome] = useState<DocumentReaderChromeState>({ page: 1, pageCount: 1, zoom: 100 });
   const [jumpPage, setJumpPage] = useState('');
-  const isDocPreview = file.kind === 'pdf' || file.kind === 'office';
+  const isExcel = file.kind === 'office' && file.ext.startsWith('xls');
+  const isDocPreview = (file.kind === 'pdf' || file.kind === 'office') && !isExcel;
   const docProgress =
     isDocPreview && chrome.pageCount > 0 ? Math.round((chrome.page / chrome.pageCount) * 100) : 0;
 
@@ -326,6 +515,10 @@ function PreviewPane({ file, onBack }: { file: PitchFileItem; onBack: () => void
           <pre className="whitespace-pre-wrap text-sm text-gray-800 bg-white border border-gray-100 rounded-xl p-4 min-h-[40vh]">
             {textError || textContent || '加载中…'}
           </pre>
+        ) : isExcel ? (
+          <div className="h-full overflow-hidden">
+            <ExcelViewer relPath={file.relPath} />
+          </div>
         ) : file.kind === 'pdf' || file.kind === 'office' ? (
           <DocumentReader
             key={file.id}
@@ -358,80 +551,182 @@ function PreviewPane({ file, onBack }: { file: PitchFileItem; onBack: () => void
   );
 }
 
+
+/**
+ * 总分类筛选：按文件类型过滤左侧目录树（仅保留含该类型资源的目录分支）与右侧资源列表
+ */
+function filterTreeByType(node: PitchDirNode, type: string): PitchDirNode | null {
+  const files = (node.files || []).filter((f) => (f.type || typeTagOf(f)) === type);
+  const children = (node.children || [])
+    .map((c) => filterTreeByType(c, type))
+    .filter((c): c is PitchDirNode => c !== null);
+  if (!files.length && !children.length) return null;
+  return {
+    ...node,
+    files,
+    children,
+    fileCount: files.length + children.reduce((s, c) => s + c.fileCount, 0),
+  };
+}
+
 export default function PitchTemplateLibrary() {
-  const [index, setIndex] = useState<PitchCatalogIndex | null>(null);
-  const [loadingIndex, setLoadingIndex] = useState(true);
-  const [catId, setCatId] = useState<string>('');
-  const [detail, setDetail] = useState<PitchCategoryDetail | null>(null);
-  const [loadingCat, setLoadingCat] = useState(false);
-  const [dirPath, setDirPath] = useState('');
+  const [allTree, setAllTree] = useState<PitchDirNode | null>(null);
+  const [typeCounts, setTypeCounts] = useState<Record<string, number>>({});
+  const [loadingTree, setLoadingTree] = useState(true);
+  /** 树高亮节点（搜索定位/点击目录时更新） */
+  const [highlightPath, setHighlightPath] = useState('');
+  /** 右侧列表数据源目录；空 = 全库模式（显示所选类型的全部资源） */
+  const [browseDir, setBrowseDir] = useState('');
+  // 搜索：searchTerm 为输入框实时值，keyword 为提交后生效的关键词
+  const [searchTerm, setSearchTerm] = useState('');
   const [keyword, setKeyword] = useState('');
+  const [typeFilter, setTypeFilter] = useState<string>('all');
+  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
   const [previewFile, setPreviewFile] = useState<PitchFileItem | null>(null);
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   const [batchDownloading, setBatchDownloading] = useState(false);
 
+  /** 默认展开：根目录 + 全部一级目录（分类一开始即展示，展开形式） */
+  const defaultExpanded = useCallback(
+    (tree: PitchDirNode) => new Set([tree.relPath, ...(tree.children || []).map((c) => c.relPath)]),
+    []
+  );
+  const defaultDirPath = useCallback(
+    (tree: PitchDirNode) => tree.children?.[0]?.relPath || tree.relPath,
+    []
+  );
+
   useEffect(() => {
     let cancelled = false;
-    setLoadingIndex(true);
-    fetchPitchCatalogIndex()
+    setLoadingTree(true);
+    fetchPitchAllTree()
       .then((data) => {
-        if (cancelled) return;
-        setIndex(data);
-        if (data.categories?.[0]) setCatId(data.categories[0].id);
+        if (cancelled || !data?.tree) return;
+        setAllTree(data.tree);
+        setTypeCounts(data.typeCounts || {});
+        setExpandedPaths(defaultExpanded(data.tree));
+        setBrowseDir(defaultDirPath(data.tree));
+        setHighlightPath(defaultDirPath(data.tree));
       })
       .catch((e) => {
         if (!cancelled) message.error(e instanceof Error ? e.message : '加载目录失败');
       })
       .finally(() => {
-        if (!cancelled) setLoadingIndex(false);
+        if (!cancelled) setLoadingTree(false);
       });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [defaultExpanded, defaultDirPath]);
 
-  useEffect(() => {
-    if (!catId) {
-      setDetail(null);
-      return;
-    }
-    let cancelled = false;
-    setLoadingCat(true);
-    setPreviewFile(null);
-    fetchPitchCategory(catId)
-      .then((data) => {
-        if (cancelled) return;
-        setDetail(data);
-        setDirPath(data.tree?.relPath || '');
-      })
-      .catch((e) => {
-        if (!cancelled) message.error(e instanceof Error ? e.message : '加载分类失败');
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingCat(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [catId]);
-
-  const currentNode = useMemo(() => {
-    if (!detail?.tree) return null;
-    return findNodeByPath(detail.tree, dirPath) || detail.tree;
-  }, [detail, dirPath]);
-
+  // 全目录搜索（跨所有一级目录）
   const searchHits = useMemo(() => {
     const q = keyword.trim().toLowerCase();
-    if (!q || !detail?.tree) return null;
-    return collectFiles(detail.tree).filter((f) => f.name.toLowerCase().includes(q));
-  }, [keyword, detail]);
+    if (!q || !allTree) return null;
+    return collectFiles(allTree).filter((f) => f.name.toLowerCase().includes(q));
+  }, [keyword, allTree]);
 
-  const listFiles = searchHits || currentNode?.files || [];
+  const typeMatch = useCallback(
+    (f: PitchFileItem) => typeFilter === 'all' || (f.type || typeTagOf(f)) === typeFilter,
+    [typeFilter]
+  );
 
-  // 列表变化（切目录/切分类/搜索）时清空多选
+  // 右侧列表：搜索结果 ∩ 类型 > 目录模式 > 全库模式（所选类型全部资源）
+  const baseList = useMemo(() => {
+    if (!allTree) return [];
+    if (searchHits) return searchHits.filter(typeMatch);
+    if (browseDir) {
+      const node = findNodeByPath(allTree, browseDir);
+      return (node?.files || []).filter(typeMatch);
+    }
+    return collectFiles(allTree).filter(typeMatch);
+  }, [allTree, searchHits, browseDir, typeMatch]);
+
+  const listFiles = baseList;
+  /** 分页：类型 tag 命中数千文件时全量渲染会卡死浏览器，每页固定条数 */
+  const PAGE_SIZE = 50;
+  const [page, setPage] = useState(1);
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const pageCount = Math.max(1, Math.ceil(listFiles.length / PAGE_SIZE));
+  const safePage = Math.min(page, pageCount);
+  const pagedFiles = useMemo(
+    () => listFiles.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE),
+    [listFiles, safePage]
+  );
+  /** 全库模式（搜索或未选目录）下显示完整路径 */
+  const showFullPath = !!searchHits || !browseDir;
+
+  // 类型筛选下的左侧目录树：只保留含该类型资源的目录分支
+  const displayTree = useMemo(() => {
+    if (!allTree) return null;
+    if (typeFilter === 'all') return allTree;
+    return filterTreeByType(allTree, typeFilter);
+  }, [allTree, typeFilter]);
+
+  /** 点击类型 tag：过滤树 + 自动展开一级目录 + 列表切到全库该类型资源 */
+  const selectType = useCallback(
+    (k: string) => {
+      setTypeFilter(k);
+      setSelectedKeys(new Set());
+      if (k === 'all') {
+        if (allTree) {
+          setExpandedPaths(defaultExpanded(allTree));
+          const def = defaultDirPath(allTree);
+          setBrowseDir(def);
+          setHighlightPath(def);
+        }
+        return;
+      }
+      if (allTree) {
+        const filtered = filterTreeByType(allTree, k);
+        setExpandedPaths(filtered ? defaultExpanded(filtered) : new Set());
+      }
+      setBrowseDir('');
+      setHighlightPath('');
+    },
+    [allTree, defaultExpanded, defaultDirPath]
+  );
+
+  /** 展开并高亮定位到文件所在目录（不改变右侧列表数据源）；须包含根路径否则整树会收起 */
+  const locateToFileDir = useCallback((relPath: string) => {
+    const parts = relPath.split('/');
+    const ancestors: string[] = [];
+    for (let i = 1; i < parts.length; i++) ancestors.push(parts.slice(0, i).join('/'));
+    setExpandedPaths(new Set(['', ...ancestors]));
+    setHighlightPath(ancestors[ancestors.length - 1] || '');
+  }, []);
+
+  const toggleExpand = useCallback((p: string) => {
+    setExpandedPaths((prev) => {
+      const next = new Set(prev);
+      if (next.has(p)) next.delete(p);
+      else next.add(p);
+      return next;
+    });
+  }, []);
+
+  /** 提交搜索：全目录匹配，自动展开定位到第一个结果所在目录 */
+  const commitSearch = useCallback(() => {
+    const q = searchTerm.trim();
+    setKeyword(q);
+    if (!q) return;
+    if (!allTree) {
+      message.warning('目录数据尚未加载完成，请稍后再试');
+      return;
+    }
+    const hits = collectFiles(allTree).filter((f) => f.name.toLowerCase().includes(q.toLowerCase()));
+    if (hits.length) {
+      locateToFileDir(hits[0].relPath);
+    } else {
+      message.info('全部目录中未找到匹配的文件');
+    }
+  }, [searchTerm, allTree, locateToFileDir]);
+
+  // 列表变化（切目录/切类型/搜索）时清空多选并回到第一页
   useEffect(() => {
     setSelectedKeys(new Set());
-  }, [dirPath, catId, keyword]);
+    setPage(1);
+  }, [browseDir, keyword, typeFilter]);
 
   const allSelected = listFiles.length > 0 && listFiles.every((f) => selectedKeys.has(f.relPath));
   const selectedFiles = useMemo(
@@ -502,71 +797,140 @@ export default function PitchTemplateLibrary() {
     );
   }
 
+  const browseNode = browseDir && allTree ? findNodeByPath(allTree, browseDir) : null;
+
   return (
     <div className="space-y-4">
       <div>
         <h2 className="text-2xl font-bold text-gray-900 mb-1">创业路演模板库</h2>
         <p className="text-sm text-gray-500">
-          比赛路演 PPT / 商业计划书参考样板，支持检索、预览与下载
-          {index ? ` · 共 ${index.totalFiles} 个文件` : ''}
+          {allTree ? `  共 ${typeCounts && Object.keys(typeCounts).length ? Object.values(typeCounts).reduce((a, b) => a + b, 0) : allTree.fileCount} 个文件` : ''}
         </p>
       </div>
 
-      <div className="flex flex-col gap-3 md:flex-row md:items-center">
+      {/* 搜索栏 + 确定按钮（全目录搜索） */}
+      <div className="flex items-center gap-2">
         <div className="relative flex-1">
           <i className="ri-search-line absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
           <input
-            value={keyword}
-            onChange={(e) => setKeyword(e.target.value)}
-            placeholder="快捷搜索当前分类下的文件名…"
+            value={searchTerm}
+            onChange={(e) => {
+              setSearchTerm(e.target.value);
+              if (!e.target.value && keyword) setKeyword('');
+            }}
+            onKeyDown={(e) => e.key === 'Enter' && commitSearch()}
+            placeholder="搜索全部目录中的文件名，回车或点击确定…"
             className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500/30 focus:border-teal-500"
           />
+          {keyword && (
+            <button
+              type="button"
+              onClick={() => {
+                setSearchTerm('');
+                setKeyword('');
+                if (allTree) {
+                  setExpandedPaths(defaultExpanded(allTree));
+                  const def = defaultDirPath(allTree);
+                  setBrowseDir(def);
+                  setHighlightPath(def);
+                }
+              }}
+              title="清除搜索"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 cursor-pointer"
+            >
+              <i className="ri-close-circle-fill" />
+            </button>
+          )}
         </div>
+        <button
+          type="button"
+          onClick={commitSearch}
+          className="h-[42px] px-5 rounded-xl text-sm font-medium text-white bg-gradient-to-r from-teal-500 to-cyan-600 shadow-sm hover:shadow cursor-pointer shrink-0"
+        >
+          确定
+        </button>
       </div>
 
-      <div className="flex flex-wrap gap-2">
-        {(index?.categories || []).map((c) => (
+      {/* 总分类功能区：全库文件类型统计（目录索引生成时分析），进页面即可见；点击过滤目录与资源 */}
+      {!loadingTree && allTree && (
+        <div className="flex flex-wrap gap-2">
           <button
-            key={c.id}
             type="button"
-            onClick={() => {
-              setKeyword('');
-              setCatId(c.id);
-            }}
+            onClick={() => selectType('all')}
             className={`px-3 py-1.5 rounded-full text-xs font-medium cursor-pointer whitespace-nowrap transition-all ${
-              catId === c.id
+              typeFilter === 'all'
                 ? 'bg-gradient-to-r from-teal-500 to-cyan-600 text-white shadow'
                 : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
             }`}
           >
-            {c.name}
-            <span className="ml-1 opacity-70">({c.fileCount})</span>
+            全部
+            <span className="ml-1 opacity-70">
+              ({Object.values(typeCounts).reduce((a, b) => a + b, 0) || allTree.fileCount})
+            </span>
           </button>
-        ))}
-      </div>
+          {Object.entries(typeCounts)
+            .sort((a, b) => b[1] - a[1])
+            .map(([k, count]) => {
+              const meta = TYPE_TAG_LABEL[k] || TYPE_TAG_LABEL.other;
+              return (
+                <button
+                  key={k}
+                  type="button"
+                  onClick={() => selectType(k)}
+                  className={`px-3 py-1.5 rounded-full text-xs font-medium cursor-pointer whitespace-nowrap transition-all inline-flex items-center gap-1 ${
+                    typeFilter === k
+                      ? 'bg-gradient-to-r from-teal-500 to-cyan-600 text-white shadow'
+                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  }`}
+                >
+                  <i className={`${meta.icon} text-[13px]`} />
+                  {meta.label}
+                  <span className="opacity-70">({count})</span>
+                </button>
+              );
+            })}
+        </div>
+      )}
 
-      {loadingIndex || loadingCat ? (
-        <div className="py-16 text-center text-sm text-gray-400">加载中…</div>
-      ) : !index?.categories?.length ? (
+      {loadingTree ? (
+        <div className="flex flex-col items-center justify-center gap-3 py-20 text-teal-600">
+          <i className="ri-loader-4-line text-3xl animate-spin" />
+          <p className="text-sm text-gray-500">正在加载资源目录…</p>
+        </div>
+      ) : !allTree ? (
+        <div className="py-16 text-center text-sm text-gray-500">暂无模板</div>
+      ) : !displayTree ? (
         <div className="py-16 text-center text-sm text-gray-500">
-          暂无模板。请将文件放到项目 <code className="text-teal-700">resource/pitch-templates/</code> 后执行扫描脚本。
+          该分类下暂无资源，请选择其他分类
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-12 gap-4 min-h-[55vh]">
           <aside className="md:col-span-4 lg:col-span-3 bg-white rounded-2xl border border-gray-100 p-3 overflow-y-auto max-h-[70vh]">
-            <div className="text-xs font-semibold text-gray-400 px-2 py-1 mb-1">目录</div>
-            {detail?.tree ? (
-              <DirTree node={detail.tree} depth={0} activePath={dirPath} onSelect={setDirPath} />
-            ) : (
-              <p className="text-xs text-gray-400 px-2">无目录</p>
-            )}
+            <div className="text-xs font-semibold text-gray-400 px-2 py-1 mb-1">
+              {typeFilter === 'all' ? '资源目录' : `${TYPE_TAG_LABEL[typeFilter]?.label || typeFilter} · 相关目录`}
+            </div>
+            <DirTree
+              node={displayTree}
+              depth={0}
+              activePath={highlightPath}
+              expanded={expandedPaths}
+              onToggle={toggleExpand}
+              onSelect={(p) => {
+                setBrowseDir(p);
+                setHighlightPath(p);
+              }}
+            />
           </aside>
 
           <section className="md:col-span-8 lg:col-span-9 bg-white rounded-2xl border border-gray-100 overflow-hidden flex flex-col max-h-[70vh]">
             <div className="px-4 py-3 border-b border-gray-100 flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2 min-w-0">
                 <div className="text-sm font-medium text-gray-800 truncate">
-                  {searchHits ? `搜索「${keyword.trim()}」` : currentNode?.name || '文件'}
+                  {searchHits
+                    ? `全目录搜索「${keyword.trim()}」`
+                    : browseNode
+                      ? browseNode.name
+                      : `${TYPE_TAG_LABEL[typeFilter]?.label || '全部'} · 全部目录`}
                 </div>
                 <div className="text-xs text-gray-400 shrink-0">{listFiles.length} 个文件</div>
               </div>
@@ -596,11 +960,17 @@ export default function PitchTemplateLibrary() {
                 </button>
               </div>
             </div>
-            <div className="flex-1 overflow-y-auto divide-y divide-gray-50">
+            <div ref={listRef} className="flex-1 overflow-y-auto divide-y divide-gray-50">
               {!listFiles.length ? (
-                <div className="py-16 text-center text-sm text-gray-400">当前目录暂无文件</div>
+                <div className="py-16 text-center text-sm text-gray-400">
+                  {searchHits
+                    ? '未找到匹配的文件'
+                    : browseDir
+                      ? '当前目录暂无文件'
+                      : '该分类下暂无资源'}
+                </div>
               ) : (
-                listFiles.map((f) => {
+                pagedFiles.map((f) => {
                   const checked = selectedKeys.has(f.relPath);
                   return (
                     <div
@@ -642,15 +1012,48 @@ export default function PitchTemplateLibrary() {
                         <div className="text-xs text-gray-400 truncate">
                           {f.sizeText}
                           {!f.previewable ? ' · 仅下载' : ''}
-                          {searchHits ? ` · ${f.relPath}` : ''}
+                          {showFullPath ? ` · ${f.relPath}` : ''}
                         </div>
                       </div>
+                      {showFullPath && (
+                        <button
+                          type="button"
+                          title="在左侧目录中定位此文件所在目录"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            locateToFileDir(f.relPath);
+                          }}
+                          className="w-7 h-7 rounded-lg flex items-center justify-center text-gray-400 hover:text-teal-600 hover:bg-teal-50 cursor-pointer shrink-0"
+                        >
+                          <i className="ri-focus-3-line text-base" />
+                        </button>
+                      )}
                       <i className="ri-arrow-right-s-line text-gray-300" />
                     </div>
                   );
                 })
               )}
             </div>
+            {/* 分页栏：超过一页时展示 */}
+            {listFiles.length > PAGE_SIZE && (
+              <div className="border-t border-gray-100 px-4 py-2 flex items-center justify-between gap-3 bg-white shrink-0">
+                <span className="text-xs text-gray-500 shrink-0">
+                  共 {listFiles.length} 个文件 · 第 {safePage}/{pageCount} 页
+                </span>
+                <Pagination
+                  size="small"
+                  current={safePage}
+                  pageSize={PAGE_SIZE}
+                  total={listFiles.length}
+                  showSizeChanger={false}
+                  showQuickJumper={pageCount > 10}
+                  onChange={(p) => {
+                    setPage(p);
+                    listRef.current?.scrollTo({ top: 0 });
+                  }}
+                />
+              </div>
+            )}
           </section>
         </div>
       )}

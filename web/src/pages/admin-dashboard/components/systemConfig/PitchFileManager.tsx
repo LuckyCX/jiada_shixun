@@ -13,10 +13,10 @@ import {
   type TableColumnsType,
   type TreeDataNode,
 } from 'antd';
-import { getPortalToken, portalAuthenticatedFetch, refreshPortalAccessToken } from '../../../../lib/authApi';
-import { downloadPitchFilesBatch } from '../../../../lib/pitchTemplatesApi';
+import { portalAuthenticatedFetch, refreshPortalAccessToken } from '../../../../lib/authApi';
+import { downloadPitchFilesBatch, uploadFileToOss } from '../../../../lib/pitchTemplatesApi';
 
-/** 后端 walkDir 返回的文件节点 */
+/** OSS 目录树返回的文件节点 */
 type PitchFileNode = {
   id: string;
   name: string;
@@ -26,7 +26,7 @@ type PitchFileNode = {
   sizeText?: string;
 };
 
-/** 后端 walkDir 返回的目录节点（relPath='' 表示根目录） */
+/** OSS 目录树返回的目录节点（relPath='' 表示根目录） */
 type PitchTreeNode = {
   id: string;
   name: string;
@@ -36,9 +36,13 @@ type PitchTreeNode = {
   fileCount?: number;
 };
 
-type UploadResult = {
-  saved?: string[];
-  skipped?: { name: string; reason: string }[];
+type SignedUpload = {
+  url: string;
+  key: string;
+  objectRel: string;
+  finalName: string;
+  contentType: string;
+  expiresAt: number;
 };
 
 async function adminJson<T>(path: string, init?: RequestInit): Promise<T> {
@@ -46,30 +50,25 @@ async function adminJson<T>(path: string, init?: RequestInit): Promise<T> {
   return data as T;
 }
 
-/** multipart 上传不能用 portalAuthenticatedFetch（其强制 JSON Content-Type），走原生 fetch 并带一次 token 刷新重试 */
-async function adminUpload(path: string, form: FormData): Promise<UploadResult> {
-  const runOnce = async (token: string) => {
-    const r = await fetch(path, {
-      method: 'POST',
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-      body: form,
-    });
-    const j = (await r.json().catch(() => ({ code: -1, message: '无效响应' }))) as {
-      code?: number;
-      message?: string;
-      data?: UploadResult;
-    };
-    return { r, j };
+/** 申请签名 PUT URL（带一次 token 刷新重试） */
+async function requestUploadUrl(path: string, name: string, contentType: string): Promise<SignedUpload> {
+  const runOnce = async () => {
+    try {
+      const data = await adminJson<SignedUpload>('/api/admin/pitch-templates/upload-url', {
+        method: 'POST',
+        body: JSON.stringify({ path, name, contentType }),
+      });
+      return { ok: true as const, data };
+    } catch (e) {
+      return { ok: false as const, error: e as Error };
+    }
   };
-
-  let { r, j } = await runOnce(getPortalToken('admin') || '');
-  if ((r.status === 401 || j.code === 401 || j.code === 40101) && (await refreshPortalAccessToken('admin'))) {
-    ({ r, j } = await runOnce(getPortalToken('admin') || ''));
+  let res = await runOnce();
+  if (!res.ok && /token|登录|401/i.test(res.error.message) && (await refreshPortalAccessToken('admin'))) {
+    res = await runOnce();
   }
-  if (!r.ok || j.code !== 0) {
-    throw new Error(typeof j.message === 'string' ? j.message : `上传失败（HTTP ${r.status}）`);
-  }
-  return j.data || {};
+  if (!res.ok) throw res.error;
+  return res.data;
 }
 
 /** 在树中按 relPath 找节点 */
@@ -132,6 +131,7 @@ export default function PitchFileManager({ onChanged }: Props) {
   const [mutating, setMutating] = useState(false);
   const [selectedDir, setSelectedDir] = useState('');
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<{ name: string; percent: number }[]>([]);
   const [mkdirOpen, setMkdirOpen] = useState(false);
   const [mkdirParent, setMkdirParent] = useState('');
   const [mkdirName, setMkdirName] = useState('');
@@ -293,29 +293,48 @@ export default function PitchFileManager({ onChanged }: Props) {
     });
   };
 
+  /** OSS 签名 PUT 直传：申请签名 → 浏览器 XHR PUT 到 OSS → 完成回调刷新目录 */
   const handleUploadFiles = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const list = Array.from(e.target.files || []);
     e.target.value = '';
     if (!list.length) return;
-    const form = new FormData();
-    form.append('path', selectedDir);
-    for (const f of list) form.append('files', f);
     setUploading(true);
+    setUploadProgress(list.map((f) => ({ name: f.name, percent: 0 })));
+    let ok = 0;
+    const failed: { name: string; reason: string }[] = [];
     try {
-      const data = await adminUpload('/api/admin/pitch-templates/upload', form);
-      const saved = data.saved || [];
-      const skipped = data.skipped || [];
-      const extra = skipped.length
-        ? `，跳过 ${skipped.length} 个（${skipped
+      for (let i = 0; i < list.length; i++) {
+        const f = list[i];
+        try {
+          const signed = await requestUploadUrl(selectedDir, f.name, f.type || '');
+          await uploadFileToOss(f, signed, (percent) => {
+            setUploadProgress((prev) => prev.map((p, idx) => (idx === i ? { ...p, percent } : p)));
+          });
+          await adminJson('/api/admin/pitch-templates/upload-complete', {
+            method: 'POST',
+            body: JSON.stringify({ path: signed.objectRel }),
+          });
+          ok += 1;
+        } catch (err) {
+          failed.push({ name: f.name, reason: (err as Error).message || '上传失败' });
+        }
+        setUploadProgress((prev) => prev.map((p, idx) => (idx === i ? { ...p, percent: 100 } : p)));
+      }
+      const failText = failed.length
+        ? `，失败 ${failed.length} 个（${failed
             .slice(0, 2)
             .map((s) => s.name)
-            .join('、')}${skipped.length > 2 ? ' 等' : ''}）`
+            .join('、')}${failed.length > 2 ? ' 等' : ''}）`
         : '';
-      afterChange(`已上传 ${saved.length} 个文件到「${selectedDirLabel}」${extra}`);
-    } catch (err) {
-      messageApi.error((err as Error).message || '上传失败');
+      if (ok > 0) {
+        afterChange(`已上传 ${ok} 个文件到「${selectedDirLabel}」${failText}`);
+      } else if (failed.length) {
+        messageApi.error(failed[0].reason || '上传失败');
+        void loadTree();
+      }
     } finally {
       setUploading(false);
+      setTimeout(() => setUploadProgress([]), 1200);
     }
   };
 
@@ -416,6 +435,22 @@ export default function PitchFileManager({ onChanged }: Props) {
               </Button>
             </Space>
           </div>
+          {uploadProgress.length > 0 && (
+            <div className="mb-2 shrink-0 rounded-md border border-gray-100 bg-gray-50 px-3 py-2 space-y-1">
+              {uploadProgress.map((p) => (
+                <div key={p.name} className="flex items-center gap-2 text-xs">
+                  <span className="w-48 truncate text-gray-600" title={p.name}>{p.name}</span>
+                  <div className="flex-1 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-gradient-to-r from-teal-500 to-cyan-500 transition-all"
+                      style={{ width: `${p.percent}%` }}
+                    />
+                  </div>
+                  <span className="text-gray-400 tabular-nums w-8 text-right">{p.percent}%</span>
+                </div>
+              ))}
+            </div>
+          )}
           <div className="flex-1 min-h-0 overflow-auto">
             <Table<PitchFileNode>
               rowKey="relPath"

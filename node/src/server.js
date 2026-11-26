@@ -39,7 +39,6 @@ import aiTutorRoutes from './routes/aiTutor.js';
 import teacherClassDemoRoutes from './routes/teacherClassDemo.js';
 import adminTeachingMonitorRoutes from './routes/adminTeachingMonitor.js';
 import pitchTemplatesRoutes from './routes/pitchTemplates.js';
-import { resolvePitchTemplatesRoot } from './lib/pitchTemplateCatalog.js';
 import { startCourseSettingReminderJob } from './jobs/courseSettingReminderJob.js';
 import { httpMethodOverride } from './middleware/httpMethodOverride.js';
 import { securityHardening } from './middleware/securityHardening.js';
@@ -48,8 +47,6 @@ const app = express();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const AVATAR_UPLOAD_ROOT = path.join(__dirname, '../uploads/avatars');
 const CLASS_DEMO_UPLOAD_ROOT = path.join(__dirname, '../uploads/class-demo');
-// 本地 monorepo 与 Docker（挂载 ./resource → /app/resource）共用解析逻辑
-const PITCH_TEMPLATE_ROOT = resolvePitchTemplatesRoot();
 
 app.disable('x-powered-by');
 app.use(securityHardening());
@@ -64,8 +61,7 @@ app.use(express.json({ limit: '2mb' }));
 app.use(httpMethodOverride);
 app.use('/uploads/avatars', express.static(AVATAR_UPLOAD_ROOT));
 app.use('/uploads/class-demo', express.static(CLASS_DEMO_UPLOAD_ROOT));
-// 创业路演模板原文件（下载/预览仍走鉴权 API；静态挂载便于运维核对）
-app.use('/resource/pitch-templates', express.static(PITCH_TEMPLATE_ROOT));
+// 创业路演模板库已迁移到阿里云 OSS（见 src/routes/pitchTemplates.js 与 src/lib/ossResource.js）
 
 app.use((req, res, next) => {
   req.traceId = randomUUID();

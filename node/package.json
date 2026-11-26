@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@alicloud/dysmsapi20170525": "^4.5.1",
+    "ali-oss": "^6.23.0",
     "bcryptjs": "^3.0.2",
     "cors": "^2.8.5",
     "express": "^4.21.2",

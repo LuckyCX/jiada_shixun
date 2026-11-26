@@ -266,26 +266,6 @@ wait_healthy() {
   return 1
 }
 
-# 部署后重建创业路演模板库索引（扫描挂载的 resource/pitch-templates）
-run_pitch_template_catalog() {
-  echo -e "${BLUE}重建创业路演模板目录索引...${NC}"
-  local pitch_dir="${ROOT_DIR}/resource/pitch-templates"
-  if [[ ! -d "$pitch_dir" ]]; then
-    mkdir -p "$pitch_dir"
-    echo -e "${YELLOW}已创建空目录 ${pitch_dir}（可稍后同步模板文件后，在管理端点「重建模板目录」）${NC}"
-  fi
-  # 在 node 容器内执行扫描，写入挂载卷上的 catalog*.json
-  if ! compose exec -T node node --input-type=module -e "
-import { rebuildPitchTemplateCatalog } from './src/lib/pitchTemplateCatalog.js';
-const r = rebuildPitchTemplateCatalog();
-console.log('pitch-catalog: categories=' + r.categoryCount + ' files=' + r.totalFiles + ' at=' + r.generatedAt);
-"; then
-    echo -e "${YELLOW}模板目录扫描失败（不影响主站；可稍后在「系统配置 → 资源维护」手动重建）${NC}"
-    return 0
-  fi
-  echo -e "${GREEN}模板目录索引已更新${NC}"
-}
-
 # 已有库增量 DDL：docs/sql/migrations/*.sql（按文件名排序，脚本需可重复执行）
 run_sql_migrations() {
   local mig_dir="${ROOT_DIR}/docs/sql/migrations"
@@ -418,10 +398,8 @@ deploy() {
   if wait_api; then
     curl -fsS "http://127.0.0.1:${GATEWAY_PORT}/api/health/ready" 2>/dev/null || true
     echo ""
-    # API 就绪后再扫模板库（node 容器内执行，失败不阻断部署）
-    run_pitch_template_catalog || true
   else
-    echo -e "${YELLOW}API 未就绪，跳过模板目录扫描；可稍后管理端手动重建${NC}"
+    echo -e "${YELLOW}API 未就绪，请查看容器日志排查${NC}"
   fi
 
   local host_ip=""

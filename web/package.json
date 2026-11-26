@@ -31,7 +31,8 @@
     "recharts": "3.2.0",
     "remixicon": "^4.9.1",
     "tdesign-icons-react": "^0.6.4",
-    "tdesign-react": "^1.16.9"
+    "tdesign-react": "^1.16.9",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@eslint/js": "^9.30.1",
